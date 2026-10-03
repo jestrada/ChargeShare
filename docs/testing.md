@@ -7,7 +7,7 @@ Offline session pricing adds 15 acceptance tests in
 `crates/chargeshare-core/tests/offline_pricing.rs` and five unit tests for money
 and tariff primitives. The existing 17 acceptance tests and two energy tests are
 unchanged. The [pricing contract](pricing.md) describes the implemented scope.
-The preview adds four Rust route/fixture tests, for 43 workspace tests total.
+The preview adds twelve Rust route/fixture/rate-table tests, for 51 workspace tests total.
 Its React frontend has a TypeScript/production-build check and local browser
 verification described in [local preview](local-preview.md).
 
@@ -261,6 +261,65 @@ hides the rays and removes the inset glow while retaining the Charging label.
 Decorative layers ignore pointer events. Browser errors were empty, and the staged
 diff/path review and security scan passed. No dependency, API or Rust change was
 needed for this visual refinement.
+
+## Dated sample rates and reimbursement verification
+
+Local verification on 2026-10-03 for PR #3:
+
+- Rust formatting, Clippy with warnings denied and the complete offline wrapper
+  passed: 51 tests, zero failed/ignored/filtered. The core source is unchanged.
+- New cases cover inclusive/exclusive version dates, gaps without fallback,
+  ambiguous versions, preserved decimal precision, unchanged evidence repricing,
+  derived date labels, winter selection and held reimbursement.
+- Strict OpenSpec validation passed four artifacts. Security guard fixtures and
+  the frontend TypeScript/production build passed.
+- Desktop 1280x1000 and mobile 375x812 screenshots were inspected. The sample
+  reimbursement appears first, batteries are compact on mobile, and session
+  details retain version IDs and four-decimal rate displays.
+- Joseph's September month subtotal is $21.18 for 72 kWh regardless of the
+  selected vehicle. October's unverified winter estimate is $21.02 for the same
+  synthetic session shape. The September boundary row shows measured 4 kWh
+  off-peak and 6 kWh partial-peak, priced at $3.98.
+- Settings selector keyboard navigation loaded the missing-reading scenario.
+  Evan's held session shows both periods and an unresolved split with no invented
+  allocation; his month shows $9.99 for 36 priced kWh. Joseph's top amount stays
+  $21.18. Scenario controls are absent from the main dashboard.
+- Mobile Settings, winter and held-session screenshots have no horizontal
+  overflow. Sample update times and charging energy are explicitly labeled.
+  Screenshots remain local under ignored `target/preview-pr3/`.
+
+These figures verify sample calculations only. The winter estimate is not an
+account-specific quote; the adapter does not implement UTC or daylight saving.
+Hosted checks must be verified on the exact pushed commit independently.
+
+### Dated-rate requirement coverage
+
+The PR #3 completeness pass specifies existing behavior without changing source,
+fixtures or dependencies. Each requirement has one implementation task. The
+following checks supplement the preceding verification records:
+
+| Requirement / scenarios | Evidence |
+| --- | --- |
+| Dated rate table: inclusive/exclusive dates and overlapping versions | Preview `date_boundaries_select_only_the_covering_version` includes duplicate covering versions and requires an error. |
+| Dated rate table: uncovered dates and hours | Preview `winter_boundaries_and_gap_never_reuse_a_neighbor`, `unchanged_evidence_can_be_repriced_or_held_without_rate_fallback`, and core `absent_rates_and_gaps_never_fall_back_to_a_nearby_rate` verify no adjacent fallback and explicit holds. |
+| Dated rate table: precision, public windows and replay | Preview `sample_windows_keep_all_decimal_places` and `unchanged_evidence_can_be_repriced_or_held_without_rate_fallback`; core `boundary_readings_preserve_energy_and_explain_each_rate_and_version`. |
+| Bounded sample totals and rate outlook | Preview `week_and_month_use_core_quotes_and_exclude_prior_month`, `missing_reading_is_excluded_from_both_periods_and_replay_restores_totals`, `labels_follow_fixture_clock_boundaries_and_preserve_rate_precision`, and `sample_rate_lookup_switches_at_boundary_and_handles_midnight`. Prior motion checks above still apply. |
+| Expanded provenance and four-decimal display | Desktop browser expanded Joseph's September 11 session: `ev2a-summer-2026`, 4 kWh at $0.2774/kWh, 6 kWh at $0.4784/kWh, $3.98 total. Exact arithmetic is separately covered by the Rust tests. |
+| Accessible menus and local preferences | Cleared only the owned test browser's preference key and reloaded: Joseph selected. Set Evan through Settings using keyboard selection and reloaded: Evan selected. Ordinary Both cars tab selection left the stored Evan default intact. |
+| Sample controls in Settings | No scenario selector on the closed main page. Loaded missing readings from Settings: unresolved split appeared. Reload restored complete September while preserving Evan's default. Prior selector dismissal, storage fallback and tooltip checks above still apply. |
+| Sample reimbursement | Preview `winter_preview_uses_its_own_version_and_labels`, `tou_splits_use_measured_lines_and_do_not_invent_missing_allocations`, and `missing_coverage_retains_sessions_and_holds_reimbursement`. Browser Joseph/Evan/Both cars views retained Joseph's $21.18. Card and session footer disclosed fixed-charge/credit exclusions. |
+| All-held reimbursement and unavailable outlook | Browser-only synthetic response override with four held Joseph sessions and zero priced energy showed "Needs review", "4 sessions excluded. This amount is incomplete.", and both prices as "Rate unavailable". |
+| Sample vehicle context | Desktop 1280x1000 and mobile 375x812: both last-updated lines marked `(sample)`; charging vehicle alone showed `6 kWh added so far (sample)`. Mobile money card preceded 138px/163px vehicle cards with no horizontal overflow. |
+| Session time-of-use context | Preview `tou_splits_use_measured_lines_and_do_not_invent_missing_allocations`; browser complete September 11 showed 4/6 kWh split, missing-reading row showed both periods and "Split unresolved" without an allocation, absent coverage showed "Rate unavailable" and "Needs review". |
+
+The all-held browser override checks rendering only; the existing Rust
+missing-coverage test separately verifies construction of held results. The
+override and temporary preferences were removed afterward. Desktop, mobile and
+all-held mobile screenshots were visually inspected; no browser errors occurred.
+Evidence is local under ignored `target/preview-pr3/round3-*.png`. These are manual
+browser checks, not an automated screenshot regression suite. Full local checks
+passed again: 51 Rust tests, formatting, Clippy, strict OpenSpec validation,
+security guards and the TypeScript/production build.
 
 ## Future receiver integration: separate spec
 

@@ -1,7 +1,5 @@
-import { useEffect, useState, type FormEvent } from "react"
+import { useEffect, useState } from "react"
 import { ChevronDownIcon } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { HelpTooltip } from "@/components/help-tooltip"
@@ -9,14 +7,8 @@ import { PreviewSettings } from "@/components/preview-settings"
 import { isVehicleView, readPreferences, savePreferences, vehicleOptions, type Preferences } from "./preferences"
 import type { DemoSnapshot, Scenario } from "./demo"
 
-const scenarioOptions = [
-  { value: "complete", label: "Complete readings" },
-  { value: "missing", label: "Missing reading" },
-] as const
-
 export function App() {
   const [scenario, setScenario] = useState<Scenario>("complete")
-  const [selectedScenario, setSelectedScenario] = useState<Scenario>("complete")
   const [reload, setReload] = useState(0)
   const [preferences, setPreferences] = useState(readPreferences)
   const [storageAvailable, setStorageAvailable] = useState(true)
@@ -33,7 +25,7 @@ export function App() {
         const response = await fetch(`/api/demo?scenario=${scenario}`, { signal: controller.signal })
         if (!response.ok) throw new Error("Demo unavailable")
         const data: DemoSnapshot = await response.json()
-        if (!data.periods || !data.rates?.current || !data.rates.next || !data.totals?.week || !data.totals.month) {
+        if (!data.periods || !data.rates || !data.reimbursement || !data.totals?.week || !data.totals.month) {
           throw new Error("Preview API needs to be restarted")
         }
         if (!controller.signal.aborted) setSnapshot(data)
@@ -45,9 +37,8 @@ export function App() {
     return () => controller.abort()
   }, [scenario, reload])
 
-  function loadScenario(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setScenario(selectedScenario)
+  function loadScenario(value: Scenario) {
+    setScenario(value)
     setReload((value) => value + 1)
   }
 
@@ -71,11 +62,18 @@ export function App() {
           <h1>ChargeShare</h1>
           <div className="page-actions">
             <p className="muted">Demo data · Vehicles not connected</p>
-            <PreviewSettings preferences={preferences} onChange={updatePreferences} storageAvailable={storageAvailable} />
+            <PreviewSettings preferences={preferences} onChange={updatePreferences} storageAvailable={storageAvailable} scenario={scenario} onLoadScenario={loadScenario} loading={!snapshot && !error} />
           </div>
         </div>
         {snapshot && totals ? (
           <>
+            <section className="glass reimbursement-panel" aria-labelledby="reimbursement-heading">
+              <div><h2 id="reimbursement-heading">Joseph owes Evan this month</h2><p className="muted">Sample calculation · {snapshot.periods.month}</p></div>
+              <p className="reimbursement-amount">{snapshot.reimbursement.held > 0 && snapshot.reimbursement.priced_energy === "0" ? "Needs review" : snapshot.reimbursement.priced_subtotal}</p>
+              <p className="muted">Energy only. Fixed charges and credits not included.</p>
+              <p className="muted">{snapshot.reimbursement.priced_energy} kWh priced · {snapshot.rates.label}</p>
+              {snapshot.reimbursement.held > 0 && <p className="needs-review" role="status">{snapshot.reimbursement.held} {snapshot.reimbursement.held === 1 ? "session excluded" : "sessions excluded"}. This amount is incomplete.</p>}
+            </section>
             <section className="vehicle-grid" aria-label="Demo vehicle batteries">
               {snapshot.vehicles.map((vehicle) => (
                 <article key={vehicle.id} className={`glass vehicle-panel ${vehicle.state === "Charging" ? "is-charging" : ""}`}>
@@ -94,18 +92,20 @@ export function App() {
                     )}
                   </div>
                   <div className="battery-scale" aria-hidden="true"><span>0%</span><span>100%</span></div>
+                  <div className="vehicle-context muted"><p>Last updated: {vehicle.last_updated} (sample)</p>{vehicle.added_kwh !== null && <p>{vehicle.added_kwh} kWh added so far (sample)</p>}</div>
                 </article>
               ))}
             </section>
             <section className="glass rate-panel" aria-labelledby="rate-heading">
               <div className="rate-heading">
-                <div className="heading-with-help"><h2 id="rate-heading">Electricity rate</h2><HelpTooltip label="About sample rates">Fictional prices follow the sample clock. Your utility tariff is not connected.</HelpTooltip></div>
+                <div className="heading-with-help"><h2 id="rate-heading">Electricity rate</h2><HelpTooltip label="About sample rates">Public sample rates follow the sample clock. Displayed rates round to four decimals; calculations keep all ten. Your utility account is not connected.</HelpTooltip></div>
                 <p className="muted">Sample clock · {snapshot.periods.as_of}</p>
               </div>
               <dl className="rate-grid">
-                <div><dt>Current price</dt><dd>{snapshot.rates.current.price}<span> / kWh</span></dd><p className="muted">Until {snapshot.rates.current.until}</p></div>
-                <div><dt>Next window</dt><dd>{snapshot.rates.next.price}<span> / kWh</span></dd><p className="muted">{snapshot.rates.next.starts} to {snapshot.rates.next.ends}</p></div>
+                <div><dt>Current price</dt>{snapshot.rates.current ? <><dd>{snapshot.rates.current.price}<span> / kWh</span></dd><p className="muted">Until {snapshot.rates.current.until}</p></> : <p className="needs-review">Rate unavailable</p>}</div>
+                <div><dt>Next window</dt>{snapshot.rates.next ? <><dd>{snapshot.rates.next.price}<span> / kWh</span></dd><p className="muted">{snapshot.rates.next.starts} to {snapshot.rates.next.ends}</p></> : <p className="needs-review">Rate unavailable</p>}</div>
               </dl>
+              <p className="rate-source muted">{snapshot.rates.label}</p>
             </section>
             <section className="glass ledger-panel" aria-labelledby="cost-heading">
               <div className="section-heading">
@@ -123,20 +123,21 @@ export function App() {
                         <div><dt>This month</dt><dd>{totals.month.priced_subtotal}{" "}<span>{totals.month.priced_energy} kWh</span></dd><p className="muted">{snapshot.periods.month} · Month to date</p></div>
                       </dl>
                       {totals.month.held > 0 && <p className="review-note" role="status">{totals.month.held} {totals.month.held === 1 ? "session needs" : "sessions need"} review. Only priced sessions are included in these totals.</p>}
-                      <div className="session-heading"><h3>Sessions</h3><p className="muted">September · Sample period</p></div>
+                      <div className="session-heading"><h3>Sessions</h3><p className="muted">{snapshot.periods.name} · Sample period</p></div>
                       <div className="session-columns muted" aria-hidden="true"><span>Session</span><span>Duration</span><span>Energy</span><span>Cost</span></div>
                       <div className="session-list">
                         {sessions.map((session) => (
                           <details key={`${snapshot.scenario}-${session.id}`} className="session">
                             <summary>
                               <span className="session-date">{session.date}<span className="muted">{session.vehicle}</span></span>
-                              <span className="session-time muted">{session.time}</span>
+                              <span className="session-time muted"><span>{session.time}</span><span className="session-periods">{session.periods.length > 0 ? session.periods.map((period) => `${period.energy === null ? "" : `${period.energy} kWh `}${period.label.toLowerCase()}`).join(" · ") : "Rate unavailable"}{session.cost === null && session.periods.length > 1 ? " · Split unresolved" : ""}</span></span>
                               <span className="session-energy">{session.energy} kWh</span>
                               <span className={`session-cost ${session.cost === null ? "needs-review" : ""}`}>{session.cost ?? "Needs review"}</span>
                               <ChevronDownIcon className="session-caret" aria-hidden="true" />
                             </summary>
                             <div className="session-detail">
                               <p className="muted">Shared charger · AC energy</p>
+                              {session.lines.length > 0 && <p className="rate-provenance muted">Rate version: {[...new Set(session.lines.map((line) => line.version))].join(", ")}</p>}
                               {session.reason ? <p>{session.reason}</p> : (
                                 <Table>
                                   <TableHeader><TableRow><TableHead>Energy</TableHead><TableHead>Sample rate</TableHead><TableHead className="text-right">Cost</TableHead></TableRow></TableHeader>
@@ -151,7 +152,7 @@ export function App() {
                           </details>
                         ))}
                       </div>
-                      <p className="ledger-note muted">Sample rates, not your utility tariff. Costs include priced sessions only.</p>
+                      <p className="ledger-note muted">Sample sessions priced at EV2-A variable rates. Excludes fixed charges and credits.</p>
                     </>}
                   </TabsContent>
                 ))}
@@ -160,22 +161,9 @@ export function App() {
           </>
         ) : (
           <section className="glass loading-panel" aria-live="polite">
-            {error ? <><h2>Sample data is unavailable</h2><p>Check that the local preview server is running, then load the scenario again.</p></> : <p>Loading sample data…</p>}
+            {error ? <><h2>Sample data is unavailable</h2><p>Check that the local preview server is running, then load the scenario again in Settings.</p></> : <p>Loading sample data…</p>}
           </section>
         )}
-        <section className="sample-controls" aria-labelledby="sample-heading">
-          <div><h2 id="sample-heading">Sample data</h2><p className="muted" aria-live="polite">{snapshot ? snapshot.scenario === "complete" ? "Showing complete readings." : "Showing one missing rate-change reading for Evan." : "Local preview"}</p></div>
-          <form onSubmit={loadScenario}>
-            <label className="sr-only" htmlFor="scenario">Sample scenario</label>
-            <Select items={scenarioOptions} value={selectedScenario} onValueChange={(value) => { if (value === "complete" || value === "missing") setSelectedScenario(value) }}>
-              <SelectTrigger id="scenario"><SelectValue /></SelectTrigger>
-              <SelectContent align="end" alignItemWithTrigger={false} sideOffset={8}>
-                <SelectGroup>{scenarioOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectGroup>
-              </SelectContent>
-            </Select>
-            <Button className="control" type="submit" disabled={!snapshot && !error}>Load scenario</Button>
-          </form>
-        </section>
       </main>
     </div>
   )

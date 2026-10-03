@@ -9,11 +9,13 @@ separate observed AC energy and conservative shared-charger eligibility,
 deterministic replay and explicit uncertainty. Nothing is connected to Tesla.
 Owner/vehicle scope checks are not authentication or approved cross-owner sharing;
 physical measurement accuracy is unvalidated. The additive offline pricing milestone
-quotes eligible counter intervals using fictional versioned rates, with explicit
+quotes eligible counter intervals using exact versioned rates, with explicit
 holds and exact priced subtotals. Real utility calendars, bills, monthly statements,
 live collection, receiver integration, persistence and deployment remain future work.
 A localhost React/shadcn dashboard presents fictional battery readings and real
-core-calculated sample costs through a loopback Rust API.
+core-calculated sample costs through a loopback Rust API. Its committed dated table
+contains a September public tariff sample and a separately labeled winter estimate.
+No account-specific tariff or real charging evidence is loaded.
 
 The guides in `docs/` are:
 
@@ -30,9 +32,10 @@ The guides in `docs/` are:
 [Spec 1](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md)
 was implemented, verified and archived on 2026-10-03. Its seven accepted
 requirements are the [vehicle-ledger contract](openspec/specs/vehicle-ledger/spec.md).
-The active changes are
-[offline session pricing](openspec/changes/offline-session-pricing/proposal.md)
-and the [local dashboard](openspec/changes/local-dashboard-preview/proposal.md).
+The merged pricing and dashboard changes are archived; their canonical contracts
+are [session pricing](openspec/specs/session-pricing/spec.md) and
+[local dashboard](openspec/specs/local-dashboard/spec.md). The completed follow-up is archived as
+[dated sample rates](openspec/changes/archive/2026-10-03-dated-rate-profiles/proposal.md).
 The archived planning artifacts retain their original review context. The earlier
 broad single-vehicle change was deleted, not marked complete.
 

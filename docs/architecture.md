@@ -70,7 +70,8 @@ it does not select or authorize an integration.
 The allowlist box is a required ingress policy, not an implemented extra service.
 A future integration must enforce it before any receiver sink, payload log or
 broker persistence. Spec 1 bypasses all live transport, database and website
-components: it exercises Rust domain behavior using fictional inputs only.
+components: it exercises Rust domain behavior using synthetic vehicle evidence.
+The local preview also includes explicitly labeled public sample rates.
 Neither a cloud nor home host is selected; a future receiver needs suitable
 public reachability and security. The website must use authenticated application
 access, never direct public database access; owner visibility remains a review
@@ -82,7 +83,8 @@ fixtures; its session quotes use the core. It adds no production sharing policy.
 
 ## Implemented offline ledger
 
-All public examples and tests are fictional. Callers must keep real vehicle data
+Vehicle examples and tests are synthetic; the preview also has a public sample
+rate table. Callers must keep real vehicle data
 out of this milestone.
 
 ### Core module ownership

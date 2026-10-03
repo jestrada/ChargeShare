@@ -28,12 +28,18 @@ is required for the documented preview; deployment needs a separate design.
 
 | Scenario | Vehicle | Week cost / energy | Month cost / energy | Sessions needing review |
 | --- | --- | --- | --- | --- |
-| Complete | Both | $20.40 / 90 kWh | $26.00 / 118 kWh | 0 |
-| Complete | Joseph | $11.60 / 52 kWh | $15.60 / 72 kWh | 0 |
-| Complete | Evan | $8.80 / 38 kWh | $10.40 / 46 kWh | 0 |
-| Missing reading | Both | $17.20 / 80 kWh | $22.80 / 108 kWh | 1 |
-| Missing reading | Evan | $5.60 / 28 kWh | $7.20 / 36 kWh | 1 |
+| Complete | Both | $27.38 / 90 kWh | $35.14 / 118 kWh | 0 |
+| Complete | Joseph | $15.63 / 52 kWh | $21.18 / 72 kWh | 0 |
+| Complete | Evan | $11.75 / 38 kWh | $13.97 / 46 kWh | 0 |
+| Missing reading | Both | $23.40 / 80 kWh | $31.16 / 108 kWh | 1 |
+| Missing reading | Evan | $7.77 / 28 kWh | $9.99 / 36 kWh | 1 |
 
+The top card shows Joseph’s eligible sample month subtotal payable to Evan
+($21.18 in September; $21.02 in October), independent of the session filter.
+It is a sample calculation, not an invoice or payment status. Holds stay excluded
+and counted; if no consumption can be priced, it says Needs review.
+
+A fresh browser defaults to Joseph; existing saved view preferences are respected.
 Use the three vehicle buttons under Charging costs to scope costs and sessions.
 The selected button is white; arrow keys also change the view. Session duration
 and start/stop times are visible in every row, for example `2hr (1:00am - 3:00am)`.
@@ -41,9 +47,9 @@ These are elapsed session times from the hourly fixtures, not active-charging
 duration or live timestamps. Desktop shows aligned session, duration, energy and
 cost columns; mobile keeps compact rows. Open the down caret or any part of a row
 to inspect its rates or review reason. The caret points up while open.
-Choose a sample scenario and press **Load scenario**
+In **Settings**, choose a sample scenario and press **Load scenario**
 to rebuild it. Switching back restores the original fixture. The missing sample
-belongs to Evan's 10 kWh session; its whole $3.20 quote is withheld, while the
+belongs to Evan's 10 kWh session; its whole $3.98 quote is withheld, while the
 observed 10 kWh remains visible. No partial cost is presented as complete.
 
 The frozen sample clock is September 13, 2026 at 2 pm. The week covers September
@@ -53,15 +59,41 @@ only the month total; prior-month sessions affect neither total or the visible
 list. This demo includes only closed sessions fully inside each period. It does
 not implement real billing-cycle or cross-period allocation.
 
-The two-rate example is 4 kWh at $0.20 plus 6 kWh at $0.40, producing $3.20.
-These are fictional rates, not a utility tariff. The current rate is $0.20 until
-3 pm, followed by $0.40 until midnight. Both the outlook and quotes use the same
-synthetic schedule. Displayed dates map to synthetic hourly ticks in that schedule.
-The demo does not resolve time zones, DST, seasons or real tariff dates.
+## Dated public sample rates
 
-Battery readings are static fixtures, not core telemetry. **Charging** is a demo
-status and does not imply an active real charging session. No time-to-full,
-real-time freshness or charging controls are claimed.
+The default uses the September historical public EV2-A sample, replacing the
+fictional 0.20/0.40 prices. Settings also offers an October winter-estimate sample
+with the same synthetic session shape and an October 13, 2026 sample clock.
+
+| Version | Effective from (inclusive) | Until (exclusive) | Off-peak | Partial-peak | Peak |
+| --- | --- | --- | --- | --- | --- |
+| `ev2a-summer-2026` | 2026-09-01 | 2026-10-01 | 0.2773931020 | 0.4783693788 | 0.5866379696 |
+| `ev2a-winter-2026-est` | 2026-10-01 | 2027-06-01 | 0.2779120234 | 0.4465438926 | 0.4624755018 |
+
+All amounts are USD/kWh decimal strings. Daily windows are off-peak 00:00–15:00,
+partial-peak 15:00–16:00 and 21:00–24:00, and peak 16:00–21:00. The winter end
+bounds the estimate to the stated October–May season; it is not a guarantee that
+rates stay unchanged throughout that season. The UI labels it **Winter estimate,
+unverified**. These user-supplied public sample rates are not derived from private
+bill contents and are not represented as the current tariff for any account.
+
+Each expanded priced session identifies its rate version. Inline period labels
+show measured splits: September 11 has 4 kWh off-peak plus 6 kWh partial-peak,
+with exact cost 3.9797886808 USD ($3.98 displayed). A missing boundary reading
+shows both periods but no made-up energy split. Rate displays round to four
+places ($0.2774); the unchanged core uses all ten decimal places. Totals sum
+exact quotes before rounding once, not the rounded displayed rates or line costs.
+
+Both the outlook and quotes use the same schedule. Missing coverage stays held;
+the outlook displays Rate unavailable and never skips a gap to borrow a later
+price. The fixture associates its month/day with synthetic hourly ticks explicitly.
+It does not implement UTC, time zones, DST or Tesla timestamp conversion.
+
+Battery readings, “last updated” values and the charging car’s 6 kWh added are
+static labeled fixtures, not telemetry. The active fixture is not a billable
+closed session and contributes nothing to reimbursement. Refreshing the page does
+not change its sample update time or imply fresh data. Vehicle cards are compact
+on mobile and follow the reimbursement card.
 
 ## UI and boundaries
 
@@ -80,8 +112,8 @@ retains the text status. Controls remain at least 40px high, and reduced
 transparency has a CSS fallback. Assets and fonts are local.
 
 Rate and cost help buttons show explanatory tooltips on hover, focus or tap.
-Settings contains only a default vehicle view and charging animation preference.
-Those preferences save automatically in versioned browser storage. Ordinary
+Settings contains sample scenarios, a default vehicle view and charging animation preference.
+Only the display preferences save automatically in versioned browser storage. Ordinary
 vehicle filtering does not rewrite the saved default. Invalid or blocked storage
 falls back to safe defaults or in-memory changes; failed saves are shown in Settings.
 The operating system's reduced-motion preference always overrides animation.
