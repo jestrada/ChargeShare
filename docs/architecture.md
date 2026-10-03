@@ -2,10 +2,13 @@
 
 ChargeShare currently implements an in-memory, synthetic multi-vehicle Rust
 ledger in [chargeshare-core](../crates/chargeshare-core/src/lib.rs). Spec 1 was
-approved and implemented on 2026-10-02. There is no executable application,
-live receiver, account integration, database, UI or runtime dependency.
+approved and implemented on 2026-10-02. The core has no runtime dependencies.
+The additive localhost preview is a separate Rust API and React/shadcn UI;
+there is no production application, live receiver, account integration or database.
 Owner/vehicle scope checks are domain invariants, not authentication or approved
-cross-owner sharing. Nothing calculates money owed or certifies a meter.
+cross-owner sharing. The additive [offline pricing contract](pricing.md) calculates
+synthetic priced subtotals from versioned rate windows; it does not calculate a
+real bill, issue money owed, or certify a meter.
 
 The [archived OpenSpec change](../openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md)
 retains its original review context. The accepted requirements are now in the
@@ -14,8 +17,8 @@ below describes implemented behavior; later integrations require separately revi
 
 ## Architecture at a glance
 
-The solid path is the **implemented offline Spec 1 exercise**. All other
-components remain proposed and unimplemented; dashed paths are future integrations requiring
+The solid path is the **implemented synthetic ledger, pricing and local preview**.
+Dashed paths are future integrations requiring
 separately reviewed specs and explicit approval.
 
 ```mermaid
@@ -24,7 +27,11 @@ flowchart TD
     rust["Rust ChargeShare logic: separate vehicle sessions and AC energy"]
     result["Spec 1: per-vehicle test results and eligible kWh"]
     fixtures --> rust
-    rust --> result
+  rust --> result
+  result --> pricing["Offline pricing: exact quotes or explicit holds"]
+  rates["Fictional versioned rate windows"] --> pricing
+  pricing --> preview["Loopback Rust demo API"]
+  preview --> browser["Local React/shadcn dashboard"]
 
     subgraph future_ingress["Future live ingestion - not approved or implemented"]
         car_a["Tesla vehicle A"]
@@ -68,6 +75,10 @@ Neither a cloud nor home host is selected; a future receiver needs suitable
 public reachability and security. The website must use authenticated application
 access, never direct public database access; owner visibility remains a review
 question rather than approved cross-owner sharing.
+
+The [local preview](local-preview.md) uses pinned tiny_http/serde_json outside
+the domain and Vite's loopback API proxy. Its battery widgets are presentation
+fixtures; its session quotes use the core. It adds no production sharing policy.
 
 ## Implemented offline ledger
 
@@ -189,6 +200,12 @@ before reimbursement. A parser or simulated receiver test cannot establish
 physical accuracy. See the [manual validation gate](testing.md#manual-real-car-validation-gate).
 
 ## Future integrations
+
+The original Spec 1 integration discussion below remains future work. Offline
+session pricing is now implemented separately: `money` depends on `energy`,
+`tariff` on `money`, and `pricing` on these types and reconstructed session
+evidence. Ledger orchestrates the additive scoped query. The core still has no
+runtime dependencies. Real tariff calendars and invoices are not implemented.
 
 Everything in this section is proposed, unimplemented and outside Spec 1.
 It records requirements for later review, not permission to build or connect them.

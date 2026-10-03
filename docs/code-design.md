@@ -25,11 +25,13 @@ instructions to leave the repository or start additional work.
 - If this guidance conflicts with the approved contract or another mandatory
   requirement, surface the conflict and ask for a decision rather than guessing.
 
-Today's implemented boundary is the synthetic, in-memory offline Rust ledger.
+Today's implemented boundary is the synthetic, in-memory offline Rust ledger,
+exact offline pricing and a separate localhost demo API/frontend.
 [Its domain contract](architecture.md#implemented-offline-ledger) and
 [acceptance suite](../crates/chargeshare-core/tests/offline_spec1.rs) define current
-behavior. Receiver integration, persistence, authentication, tariffs, statements
-and UI are future work requiring separately reviewed specs.
+behavior. See [pricing](pricing.md) and [local preview](local-preview.md) for the
+additive contracts. Receiver integration, persistence, authentication, real
+utility calendars, statements and a production UI remain future work.
 
 ## 2. Make the code express its intent without comments
 
@@ -75,7 +77,7 @@ items, and `pub(crate)` limits visibility to the current crate.
 
 The user-approved behavior-preserving refactor on 2026-10-02 applies the
 following split under `crates/chargeshare-core/src/`. This is the current file
-tree; it adds no feature, runtime dependency or infrastructure layer. See the
+tree at that refactor; the later pricing modules are listed below. See the
 [architecture decision](architecture.md#core-module-ownership) for its contract
 and trade-off.
 
@@ -88,6 +90,9 @@ and trade-off.
 | `session.rs` | `Session`, quality/exclusion reasons, charger classification, evidence label and pure connection reconstruction |
 | `ledger.rs` | `Ledger`, scoped registration/ingestion/reviews/reads, `Summary` and `SessionReasons` |
 | `error.rs` | Safe `LedgerError` variants and error formatting |
+| `money.rs` | Exact USD rate/cost types and final subtotal rounding |
+| `tariff.rs` | Validated immutable synthetic rate windows and schedules |
+| `pricing.rs` | Eligible interval pricing, quote lines and explicit whole-session holds |
 
 The crate-root API remains available to callers, including integration tests
 that import `chargeshare_core::*`. `Energy` retains its private representation;

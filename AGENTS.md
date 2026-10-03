@@ -1,6 +1,6 @@
 # ChargeShare contributor guidance
 
-This is a public repository with an offline synthetic Rust ledger. Read README.md, SECURITY.md and the applicable OpenSpec contract and change before editing.
+This is a public repository with an offline synthetic Rust ledger and pricing. Read README.md, SECURITY.md and the applicable OpenSpec contract and change before editing.
 
 ## Overall code design goal
 
@@ -10,7 +10,7 @@ Do not add comments to authored code, including Rust doc comments. Make intent c
 
 ## Working rules
 
-- Write application source in Rust. Node.js/npm is for OpenSpec and repository development tooling only.
+- Keep domain logic and backend source in Rust. The user-authorized localhost preview uses React/TypeScript and shadcn in `apps/web`; Node.js/npm runs its build/dev tooling and OpenSpec. Keep money calculations in the Rust core.
 - Read [docs/code-design.md](docs/code-design.md) before code or architecture changes. Keep `lib.rs` a small public facade, use cohesive modules and inward domain dependencies, and follow the guide's required decision/review workflow within the approved OpenSpec scope.
 - Keep changes inside this repository. Do not import private repositories, personal correspondence or live vehicle data.
 - Use synthetic examples only. Never commit secrets, real VINs, home locations, bills, receipts, account identifiers or contact details.

@@ -46,7 +46,7 @@ jobs:
           OPENSPEC_TELEMETRY: '0'
 
   rust:
-    name: Offline Spec 1 Rust checks
+    name: Offline Rust checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -71,3 +71,19 @@ jobs:
             target/spec1-test-results/workspace-tests.txt
           retention-days: 7
           if-no-files-found: error
+
+  web:
+    name: Local dashboard build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm --prefix apps/web ci
+      - run: npm run preview:build

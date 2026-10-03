@@ -4,10 +4,12 @@ use crate::energy::Energy;
 use crate::error::LedgerError;
 use crate::event::Event;
 use crate::identity::{ConnectionId, OwnerId, SessionId, VehicleId};
+use crate::pricing::{PricingError, PricingSummary, summarize_pricing};
 use crate::session::{
     ChargerClassification, ConnectionEvidence, EVIDENCE_LABEL, ExclusionReason, QualityFlag,
-    Session, reconstruct_session,
+    ReconstructedSession, Session, reconstruct_session,
 };
+use crate::tariff::RateSchedule;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionReasons {
@@ -76,6 +78,24 @@ impl Ledger {
     }
 
     pub fn sessions(&self, scope: &VehicleId) -> Result<Vec<Session>, LedgerError> {
+        Ok(self
+            .reconstruct(scope)?
+            .into_iter()
+            .map(|result| result.session)
+            .collect())
+    }
+
+    pub fn pricing(
+        &self,
+        scope: &VehicleId,
+        rates: &RateSchedule,
+    ) -> Result<PricingSummary, PricingError> {
+        let owner = self.owner(scope).map_err(PricingError::Ledger)?.clone();
+        let sessions = self.reconstruct(scope).map_err(PricingError::Ledger)?;
+        summarize_pricing(scope.clone(), owner, sessions, rates)
+    }
+
+    fn reconstruct(&self, scope: &VehicleId) -> Result<Vec<ReconstructedSession>, LedgerError> {
         let owner = self.owner(scope)?;
         let mut connections: BTreeMap<ConnectionId, Vec<ConnectionEvidence<'_>>> = BTreeMap::new();
         if let Some(positions) = self.events.get(scope) {

@@ -59,12 +59,23 @@ pub(crate) struct ConnectionEvidence<'a> {
     pub(crate) is_conflicting: bool,
 }
 
+pub(crate) struct CounterSegment {
+    pub(crate) start_time: i64,
+    pub(crate) end_time: i64,
+    pub(crate) energy: Energy,
+}
+
+pub(crate) struct ReconstructedSession {
+    pub(crate) session: Session,
+    pub(crate) segments: Vec<CounterSegment>,
+}
+
 pub(crate) fn reconstruct_session(
     id: SessionId,
     owner: OwnerId,
     evidence: &[ConnectionEvidence<'_>],
     classification: ChargerClassification,
-) -> Result<Session, LedgerError> {
+) -> Result<ReconstructedSession, LedgerError> {
     let mut session = Session {
         evidence_label: EVIDENCE_LABEL,
         id,
@@ -91,7 +102,8 @@ pub(crate) fn reconstruct_session(
     }
     let mut has_baseline = false;
     let mut has_terminal_sample = false;
-    let mut previous_counter: Option<Energy> = None;
+    let mut previous_counter: Option<(Energy, i64)> = None;
+    let mut segments = Vec::new();
     for (index, entry) in evidence.iter().enumerate() {
         let event = entry.event;
         match event.charge_type {
@@ -146,20 +158,27 @@ pub(crate) fn reconstruct_session(
             }
             Some(CounterReading::Valid(current)) => {
                 if event.charge_type == ChargeType::Ac {
-                    if let Some(prior) = previous_counter {
+                    if let Some((prior, start_time)) = previous_counter {
                         match current.checked_delta_from(prior) {
                             Some(delta) => {
                                 session.observed_ac = session
                                     .observed_ac
                                     .checked_add(delta)
                                     .map_err(|_| LedgerError::EnergyOverflow)?;
+                                if delta != Energy::ZERO {
+                                    segments.push(CounterSegment {
+                                        start_time,
+                                        end_time: event.time,
+                                        energy: delta,
+                                    });
+                                }
                             }
                             None => {
                                 session.quality_flags.insert(QualityFlag::CounterRollback);
                             }
                         }
                     }
-                    previous_counter = Some(current);
+                    previous_counter = Some((current, event.time));
                 } else {
                     previous_counter = None;
                 }
@@ -189,5 +208,5 @@ pub(crate) fn reconstruct_session(
             .quality_flags
             .insert(QualityFlag::MissingTerminalSample);
     }
-    Ok(session)
+    Ok(ReconstructedSession { session, segments })
 }

@@ -3,14 +3,23 @@
 Spec 1 has been approved for implementation and now has an offline Rust suite.
 Receiver integration still needs its own later reviewed spec.
 
+Offline session pricing adds 15 acceptance tests in
+`crates/chargeshare-core/tests/offline_pricing.rs` and five unit tests for money
+and tariff primitives. The existing 17 acceptance tests and two energy tests are
+unchanged. The [pricing contract](pricing.md) describes the implemented scope.
+The preview adds four Rust route/fixture tests, for 43 workspace tests total.
+Its React frontend has a TypeScript/production-build check and local browser
+verification described in [local preview](local-preview.md).
+
 ## What runs today
 
 [Repository checks](../.github/workflows/security.yml) runs strict OpenSpec
-validation, security guard tests/history scans, Rust formatting, clippy and the
+validation, security guard tests/history scans, the frontend build, Rust formatting, clippy and the
 complete `cargo test --workspace --locked` on every push and pull request. The
 pinned Rust 1.99.0 toolchain and Cargo.lock are used on clean hosted runners.
 The wrapper `bash scripts/testing/offline-suite.sh` preserves Cargo's exit status,
-fails on absent/ignored/filtered acceptance tests or fewer than 17 scenarios and produces a safe synthetic
+fails on absent/ignored/filtered acceptance tests, fewer than 17 ledger scenarios
+or fewer than 15 pricing scenarios, and produces a safe synthetic
 summary plus test log. The allowlisted artifact has seven-day retention and is
 uploaded on success or failure. No `continue-on-error`, credentials or network
 calls are used in the domain suite. Dependency/tool downloads are setup only.
@@ -136,6 +145,122 @@ Independent read-only review approved the corrected core and CI wrapper; eight
 isolated guard smoke cases verified propagation of exit 101 and rejection of
 missing, zero, reduced, ignored or filtered acceptance suites. There are no
 outstanding review blockers. Review does not replace the hosted final-SHA check.
+
+## Offline pricing and local preview verification
+
+The pricing suite covers flat and boundary pricing, whole-session holds, absent
+rates/gaps, zero energy/free rates, same-tick energy, subcent aggregate rounding,
+eligibility and identity isolation, duplicates/reordering, pauses, rate revisions,
+late readings and overflow. Real calendar/DST expansion and monthly statement
+revisions still need separate tests when those features exist. Test logs remain
+under the existing `target/spec1-test-results/` artifact path for compatibility.
+
+Local verification on 2026-10-02 for the additive pricing/preview changes:
+
+- Rust formatting, Clippy with warnings denied and the complete wrapper passed:
+  42 tests, zero failed/ignored/filtered, including all 17 original scenarios.
+- Strict OpenSpec validation passed all three active changes. Security guard
+  fixtures passed. The frontend TypeScript/production build passed and its npm
+  audit reported zero known vulnerabilities at verification time.
+- Chrome through agent-browser loaded the local Vite page and Rust API. Desktop
+  1440x1080 and mobile 390x844 screenshots were visually inspected in light/dark
+  themes. A full-page background seam and disclosure focus spacing were corrected.
+- Vehicle filtering returned Car B's $8.80/38 kWh; complete boundary details showed
+  4 kWh at $0.20 and 6 kWh at $0.40. Missing evidence returned $5.60/28 kWh for
+  Car B and $17.20/80 kWh combined, with an explicit held-session explanation.
+  Restoring complete evidence returned $20.40/90 kWh with six sessions.
+- Keyboard Enter opened a native disclosure. The narrow layout had no horizontal
+  overflow, including open details; buttons/selects were 40px high and session
+  controls were at least 72px. Browser error output was empty; console output
+  contained only Vite connection and React development-tool information.
+- Synthetic screenshots are retained locally under ignored
+  `target/preview-verification/`; they are not public source artifacts.
+- Exact staged paths and implementation changes were reviewed. Staged and
+  complete-history Gitleaks scans passed with no findings. Both listeners were
+  confirmed on IPv4 loopback, and browser resource origins were local only.
+
+These additive changes are local on a separate branch. Historical hosted checks
+above verify their recorded commits only. No new hosted result, deployment,
+live-car test or accuracy certification is claimed.
+
+### Dark dashboard refinement verification
+
+The later 2026-10-02 refinement replaces the initial light/dark view with a
+dark-only Geist view and adds bounded weekly/monthly totals and a sample rate
+outlook. The fixtures now share a synthetic hourly clock. Display aliases are
+Joseph's Model Y Quicksilver and Evan's Model Y Black, requested by the user;
+all energy, costs, battery readings and states remain fictional.
+
+- Rust formatting, Clippy with warnings denied and the complete wrapper passed:
+  43 tests, zero failed/ignored/filtered, including the 17 original scenarios.
+- The preview checks earlier-month inclusion, prior-month exclusion, per-vehicle
+  totals, missing evidence in both periods, replay restoration and rate lookup
+  before/at the afternoon boundary and midnight. Empty periods return zero.
+- The frontend TypeScript/production build passed. Strict OpenSpec and security
+  guard checks passed.
+- Desktop 1440x1700 and mobile 390x844 screenshots were inspected. Geist resolves
+  locally, headings use weight 400, the background remains near-black even with
+  a light system preference, and there is no theme switch or wordmark bar.
+- The browser verified Evan's complete week $8.80/38 kWh and month $10.40/46 kWh;
+  missing evidence changes these to $5.60/28 kWh and $7.20/36 kWh. Restoring both
+  cars returns $20.40/90 kWh and $26.00/118 kWh with eight month-to-date sessions.
+- The displayed current/next prices match the API's sample clock and schedule.
+  Keyboard Enter opens a session, including the 4 kWh/6 kWh rate split. Mobile
+  has no horizontal overflow with details open; controls meet the 40px minimum.
+- Both the green status pulse and battery reflection animate in Chrome. Reduced
+  motion yields zero animations while preserving the Charging text and fill.
+  Browser errors are empty; console output contains only development information.
+- The changed source and staged paths were reviewed; staged and complete-history
+  Gitleaks scans passed. Both preview listeners remain on IPv4 loopback and all
+  browser resources come from the local origin.
+
+The current preview remains local. Real tariff calendars, live vehicle status,
+authentication, backend storage and deployment are still outside this implementation.
+
+### Menus, preferences and session layout verification
+
+The subsequent 2026-10-02 UI pass sets the title to ChargeShare, adds three
+separate vehicle tab buttons with a white selected state, replaces remaining
+native menus with shadcn selects, and adds explanatory tooltips and a small
+settings dialog. Session duration/start/stop labels come from the Rust preview's
+existing hourly boundaries. Desktop aligns four labeled columns; mobile keeps
+two-line rows. Native session disclosures use a rotating down caret.
+
+- The TypeScript/production build, Rust formatting, Clippy with warnings denied,
+  and all 43 workspace tests passed after the preview time-label change.
+- Keyboard arrows change the selected vehicle and both totals in one associated
+  tab panel. Complete and missing-reading scenarios retain their expected scoped
+  totals; held sessions still show their time range and explanation.
+- Select keyboard navigation and Escape, dialog focus trapping/return, and
+  tooltip focus/touch access were verified. A CDP touch event opened the rate
+  tooltip, and its trigger references the displayed description.
+- Settings persist the default vehicle and animation choice after reload.
+  Ordinary tab changes leave the saved default intact. Corrupt or invalid stored
+  values fall back safely; a blocked write shows a save failure while retaining
+  the in-memory setting. Both the saved motion toggle and OS reduced motion stop
+  the charging pulse/reflection without hiding the charging state.
+- Desktop 1440x1700 and mobile 390x844 and 320x844 screenshots were inspected.
+  Matching grid tracks align desktop labels and rows. Vehicle buttons remain
+  at least 40px tall and the narrow layout has no horizontal overflow. Opening
+  a row retains the cost breakdown. The final browser session reported no errors.
+- Strict OpenSpec validation and security guard tests passed. The final staged
+  paths/diff were reviewed, and staged plus complete-history scans found no leaks.
+
+Display preferences are the only browser-persisted values. They are not user
+accounts, backend session storage, Google login or Tesla authorization.
+
+### Ambient charging effect verification
+
+The active card now has a softly breathing green border and three CSS light rays.
+The production build and strict OpenSpec validation passed. Desktop 1440x1080 and
+mobile 390x844 screenshots were inspected; text remains readable with no horizontal
+overflow. The unplugged card renders no rays. Browser sampling confirmed changing
+halo opacity and ray transforms. Turning animation off stops both new effects;
+OS reduced motion stops all charging animations. Emulated reduced transparency
+hides the rays and removes the inset glow while retaining the Charging label.
+Decorative layers ignore pointer events. Browser errors were empty, and the staged
+diff/path review and security scan passed. No dependency, API or Rust change was
+needed for this visual refinement.
 
 ## Future receiver integration: separate spec
 

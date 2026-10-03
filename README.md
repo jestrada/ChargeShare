@@ -8,10 +8,14 @@ Spec 1 implements an offline, in-memory synthetic multi-vehicle ledger with
 separate observed AC energy and conservative shared-charger eligibility,
 deterministic replay and explicit uncertainty. Nothing is connected to Tesla.
 Owner/vehicle scope checks are not authentication or approved cross-owner sharing;
-physical measurement accuracy is unvalidated. Prices, bills, statements, live
-collection, receiver integration, persistence, UI and deployment are outside scope.
+physical measurement accuracy is unvalidated. The additive offline pricing milestone
+quotes eligible counter intervals using fictional versioned rates, with explicit
+holds and exact priced subtotals. Real utility calendars, bills, monthly statements,
+live collection, receiver integration, persistence and deployment remain future work.
+A localhost React/shadcn dashboard presents fictional battery readings and real
+core-calculated sample costs through a loopback Rust API.
 
-The three guides in `docs/` are:
+The guides in `docs/` are:
 
 - [Architecture and domain contract](docs/architecture.md): implemented behavior,
   system diagram, measurement limits and proposed integration boundaries
@@ -19,19 +23,35 @@ The three guides in `docs/` are:
   cohesive modules, inward dependencies and the decision/review workflow
 - [Testing](docs/testing.md): commands, scenario coverage, verification evidence
   and later receiver/real-car validation gates
+- [Offline pricing](docs/pricing.md): exact amounts, rate windows, scoped quotes
+  and the runnable fictional example
+- [Local preview](docs/local-preview.md): launch, interactions and demo limits
 
 [Spec 1](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md)
 was implemented, verified and archived on 2026-10-03. Its seven accepted
 requirements are the [vehicle-ledger contract](openspec/specs/vehicle-ledger/spec.md).
-No changes are currently active. The archived planning artifacts retain their
-original review context. The earlier broad single-vehicle change was deleted,
-not marked complete.
+The active changes are
+[offline session pricing](openspec/changes/offline-session-pricing/proposal.md)
+and the [local dashboard](openspec/changes/local-dashboard-preview/proposal.md).
+The archived planning artifacts retain their original review context. The earlier
+broad single-vehicle change was deleted, not marked complete.
 
 ## Develop
 
 The Cargo workspace starts at `crates/chargeshare-core/`. There is no executable
-application or Tesla integration to launch. Rust is the application language;
-Node.js/npm is development tooling only.
+production application or Tesla integration to launch. A fictional pricing example
+runs with `cargo run --example offline_pricing --locked`. The core and preview API
+are Rust; the user-authorized frontend uses React/TypeScript in `apps/web`.
+
+To open the synthetic dashboard locally:
+
+```sh
+npm --prefix apps/web ci
+npm run preview:dev
+```
+
+Visit **http://127.0.0.1:5173**. Stop both preview processes with Ctrl-C.
+See [local preview](docs/local-preview.md) for prerequisites and boundaries.
 
 Prerequisites: Rust 1.99.0 through rustup with rustfmt/Clippy, a C linker, Node.js
 24 or newer, npm, Git, Bash, curl, tar and SHA-256 tooling. The toolchain is pinned
@@ -63,12 +83,13 @@ copying it neither creates credentials nor authorizes live operation.
 
 ## Change and publication workflow
 
-1. Read [AGENTS.md](AGENTS.md), the three guides, the
-   [main contract](openspec/specs/vehicle-ledger/spec.md) and archived Spec 1's
-   [proposal](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md),
+1. Read [AGENTS.md](AGENTS.md), the guides and the relevant change's artifacts.
+   The accepted [main contract](openspec/specs/vehicle-ledger/spec.md) and archived
+   Spec 1's [proposal](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md),
    [design](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/design.md),
    [scenarios](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/specs/vehicle-ledger/spec.md)
-   and [tasks](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/tasks.md).
+   and [tasks](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/tasks.md)
+   retain the original review context.
 2. Use the generated OpenSpec skills under `.agents/skills/` to propose/refine
    requirements and scenarios. Obtain explicit implementation approval for new
    behavior; later capabilities need separately reviewed specs.
@@ -99,3 +120,9 @@ its executable is not committed. Its pinned version, official source and digests
 are in [the installer](scripts/security/install-gitleaks.sh). No private project
 code, personal correspondence, live vehicle payloads or proprietary integration
 implementation was copied into this repository.
+
+The shadcn CLI 4.21.1 generated the Base UI `base-nova` button, select, tabs,
+tooltip, dialog, switch and table sources and utility/config scaffolding in `apps/web`. Their
+[upstream MIT notice](docs/licenses/shadcn-ui-MIT.txt) is retained. The CLI is not
+a runtime dependency. Component dependencies and tooling are pinned in the
+frontend package and lockfile; fonts are bundled locally.

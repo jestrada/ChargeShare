@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/chargeshare-core"]
+members = ["crates/chargeshare-core", "crates/chargeshare-preview"]
 resolver = "3"
 
 [workspace.package]
