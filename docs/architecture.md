@@ -63,7 +63,7 @@ flowchart TD
 The Go receiver is a separate process, not Go code embedded in Rust. Its proposed
 handoff to Rust is decoded JSON through a supported dispatcher/broker, not a
 stock Tesla HTTP webhook. Tesla documents decoded dispatcher output and options
-such as Kafka; the broker and durability approach remain undecided. This
+such as Kafka; the production broker and durability approach remain undecided. This
 background comes from Tesla's Fleet Telemetry receiver configuration guidance;
 it does not select or authorize an integration.
 
@@ -80,6 +80,62 @@ question rather than approved cross-owner sharing.
 The [local preview](local-preview.md) uses pinned tiny_http/serde_json outside
 the domain and Vite's loopback API proxy. Its battery widgets are presentation
 fixtures; its session quotes use the core. It adds no production sharing policy.
+
+## Proposed local end-to-end flow
+
+This is the proposed next integration path, not the implemented path above or a
+completed OpenSpec change. It uses synthetic data on our local machine; it does
+not connect a real car, Tesla account or hosted service. Cloudflare and production
+hosting are deferred.
+
+![Proposed local ChargeShare flow, showing upstream software, ChargeShare-owned integration and three proposed spec boundaries](images/local-flow-ownership.png)
+
+The intended path is a synthetic Tesla test client, adapted by us, through the
+upstream Tesla Fleet Telemetry receiver and Apache Kafka, then our Rust normalizer,
+SQLite, our existing Rust ledger/pricing core, and a persisted API/dashboard.
+The normalizer maps transport evidence into the domain contract; the core keeps
+its inward, infrastructure-independent dependencies. SQLite is storage used by
+our application, not a dependency to import into the pure domain core.
+
+### Software ownership and local operation
+
+- **Tesla upstream:** Fleet Telemetry receiver and the original synthetic test
+  client. We would configure/run the receiver and adapt/run the client locally;
+  this is not a Tesla-hosted receiver service.
+- **Apache Kafka:** third-party broker software that we would run locally. We own
+  its configuration and integration, not Kafka itself. No managed Kafka service,
+  cloud deployment or hosting purchase is selected.
+- **SQLite:** third-party embedded database software. We would own its schema,
+  migrations, persistence adapter and local database file lifecycle.
+- **ChargeShare:** our Rust normalizer, persistence/replay orchestration, existing
+  Rust ledger/pricing rules, and API/dashboard integration. Existing frontend
+  libraries remain third-party dependencies. The persisted read path is future
+  work; today's API/dashboard still reads synthetic in-memory fixtures.
+
+### Proposed spec boundaries
+
+The three boundaries in the diagram are suggested review/acceptance milestones,
+not one spec per box and not three specs already written or implemented. The
+existing canonical contracts cover the [ledger](../openspec/specs/vehicle-ledger/spec.md),
+[pricing](../openspec/specs/session-pricing/spec.md), and
+[local dashboard](../openspec/specs/local-dashboard/spec.md).
+New integration contracts need separate proposals, scenarios and approval before
+implementation. No upstream receiver or broker rewrite is proposed.
+
+1. **Receiver test harness:** configure the local upstream test client,
+   receiver and broker; prove the supported transport and decoded message handoff
+   with repository-safe synthetic fixtures, including rejection and failure cases.
+2. **Durable ingestion:** define our Rust mapping, identity
+   allowlist, retained evidence, durable offsets, duplicate/late/conflicting data,
+   transactional persistence and restart-safe replay into the existing core.
+3. **Persisted charging results:** replace the current fixture-backed read path with
+   scoped persisted results; preserve core-calculated costs, visible uncertainty,
+   missing-data behavior and local-only access. Production authentication and
+   cross-owner sharing remain separately reviewed work.
+
+The live-ingress allowlist and privacy requirements below still apply before any
+future real data reaches receiver sinks, logs or broker persistence. Local
+synthetic tests do not establish those production controls or physical accuracy.
 
 ## Implemented offline ledger
 
@@ -232,7 +288,8 @@ termination at the official Go receiver; a generic TLS-terminating reverse proxy
 must not remove authentication guarantees. A static website cannot receive this
 stream. The only proposed public surfaces are the required listener and public-key
 discovery path. Never expose the database, raw files, command proxy or debug endpoints.
-Neither cloud nor home hosting, nor a dispatcher/broker, has been selected.
+Neither cloud nor home production hosting, nor a production dispatcher/broker,
+has been selected. The proposed local synthetic path above uses Kafka for testing.
 
 ### Language and records
 
