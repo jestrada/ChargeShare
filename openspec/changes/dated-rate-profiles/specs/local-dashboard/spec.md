@@ -42,8 +42,17 @@ rate version. The default SHALL use the September sample public tariff.
 
 #### Scenario: Rate provenance and precision
 - **WHEN** a priced session is expanded
-- **THEN** its rate version is visible and the off-peak rate displays as $0.2774 per kWh
+- **THEN** its rate version IDs are visible and each cost line shows energy, a four-decimal USD/kWh rate and cost
+- **AND** the September off-peak rate displays as $0.2774 per kWh
 - **AND** the quote still uses the exact 0.2773931020 rate
+
+#### Scenario: Fixture-derived labels
+- **WHEN** the fixture clock or period boundaries change
+- **THEN** week, month and sample-clock labels follow those values rather than retaining September's hardcoded dates
+
+#### Scenario: Unavailable rate outlook
+- **WHEN** the sample clock has no active rate or immediately adjacent next window
+- **THEN** the corresponding price says "Rate unavailable" without filling the gap from a nearby window
 
 ### Requirement: Accessible menus and local preferences
 The preview SHALL show Both cars, Joseph and Evan as three separate tab buttons
@@ -76,25 +85,65 @@ browser; a fresh browser SHALL default to Joseph.
 - **WHEN** reduced motion is requested by the operating system or animation is disabled
 - **THEN** the charging label and battery fill remain visible without charging animation
 
+#### Scenario: Initial vehicle view
+- **WHEN** a browser has no saved default
+- **THEN** Joseph's tab, period totals and sessions are selected on load
+- **WHEN** a valid default vehicle preference has already been saved
+- **THEN** that preference determines the initial view instead
+
+#### Scenario: Sample controls in Settings
+- **WHEN** the dashboard is displayed with Settings closed
+- **THEN** the sample scenario selector and Load scenario action are absent from the main page
+- **WHEN** Settings is opened and a scenario is selected and loaded
+- **THEN** the dashboard uses that sample without changing saved display preferences
+- **AND** a page reload returns to the default September complete sample
+
 ## ADDED Requirements
 
-### Requirement: Sample reimbursement and vehicle context
+### Requirement: Sample reimbursement
 The dashboard SHALL place Joseph’s eligible month subtotal payable to Evan first,
-independent of the vehicle filter, with a sample label and visible held count.
-Vehicle cards SHALL be compact on mobile and show labeled sample freshness and,
-for the charging vehicle, sample kWh added. Session rows SHALL show TOU periods
-and measured energy splits when available. Winter results SHALL say “Winter
-estimate, unverified”.
+independent of the vehicle filter, with a sample label. It SHALL state that the
+amount is energy only and excludes fixed charges and credits. Held sessions SHALL
+be excluded and counted when present; an all-held amount SHALL say "Needs review".
+Winter results SHALL say “Winter estimate, unverified”.
 
 #### Scenario: Reimbursement and uncertainty
 - **WHEN** a sample is loaded or the vehicle filter changes
 - **THEN** the top amount remains Joseph’s priced month subtotal, with any held sessions excluded and disclosed
 - **AND** the September complete fixture shows $21.18 and never implies a payment was made
 
+#### Scenario: Energy-only amount
+- **WHEN** a sample reimbursement is shown
+- **THEN** the card states "Energy only. Fixed charges and credits not included."
+- **AND** the session footer also discloses those exclusions
+
+#### Scenario: All reimbursement sessions held
+- **WHEN** Joseph has held sessions and no priced energy in the sample month
+- **THEN** the card shows "Needs review" instead of a zero owed amount
+- **AND** it shows the excluded-session count and says the amount is incomplete
+
+#### Scenario: October sample
+- **WHEN** the October estimate scenario is selected in Settings
+- **THEN** the same synthetic session shape is priced using the winter version and displays “Winter estimate, unverified”
+
+### Requirement: Sample vehicle context
+Vehicle cards SHALL be compact on mobile and show a last-updated fixture time.
+The charging vehicle SHALL also show fixture kWh added so far. Both lines SHALL
+be explicitly labeled sample values and SHALL not imply live telemetry.
+
 #### Scenario: Sample context on mobile
 - **WHEN** viewed at 375px width
 - **THEN** the reimbursement appears before the compact vehicle cards, which retain sample update times and charging energy
-- **AND** sample scenario controls are in Settings
+
+#### Scenario: Fixture freshness and charging energy
+- **WHEN** sample vehicle cards are shown
+- **THEN** each last-updated line is marked "(sample)"
+- **AND** the charging vehicle shows "6 kWh added so far (sample)" while the unplugged vehicle has no added-energy line
+
+### Requirement: Session time-of-use context
+Session rows SHALL show their TOU periods inline and measured energy splits when
+available. Unresolved splits SHALL identify the periods without inventing energy
+allocations; absent coverage SHALL say "Rate unavailable".
 
 #### Scenario: TOU split
 - **WHEN** the September 11 complete session is listed
@@ -102,6 +151,6 @@ estimate, unverified”.
 - **WHEN** its rate-boundary reading is missing
 - **THEN** it shows both periods with an unresolved split, without inventing energy allocations
 
-#### Scenario: October sample
-- **WHEN** the October estimate scenario is selected in Settings
-- **THEN** the same synthetic session shape is priced using the winter version and displays “Winter estimate, unverified”
+#### Scenario: No covered period
+- **WHEN** a session has no applicable rate windows
+- **THEN** its row says "Rate unavailable" and the cost remains "Needs review"

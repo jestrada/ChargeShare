@@ -35,8 +35,12 @@ seasonal/current tariffs and connector/hosting choices remain separate work.
 
 The reimbursement card uses Joseph’s exact eligible month subtotal, independent
 of the selected vehicle filter. Held sessions remain excluded and counted; no
-payment state is implied. Freshness and charging-added energy are labeled fixtures,
+payment state is implied. The card and session footer disclose energy-only totals
+excluding fixed charges and credits; all-held reimbursement says “Needs review”.
+Freshness and charging-added energy are labeled fixtures,
 not telemetry. TOU labels come from the selected daily windows; unresolved splits
 list periods without inventing energy allocations. Saved view preferences remain
 respected; a fresh browser defaults to Joseph. Scenario controls use the existing
 Settings dialog, with September complete/missing and October estimate fixtures.
+Scenario selection is not persisted. Requirement-level verification is recorded
+in `tasks.md` and `docs/testing.md`; this completeness pass changes no app behavior.

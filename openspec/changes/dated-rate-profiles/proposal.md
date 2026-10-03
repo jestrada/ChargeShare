@@ -18,7 +18,8 @@ The user approved the rate table and dashboard improvements together in PR #3.
 
 ### Modified Capabilities
 - `session-pricing`: dated versions independent of charging evidence.
-- `local-dashboard`: sample tariff, version provenance and derived period labels.
+- `local-dashboard`: sample tariff/provenance, derived labels, reimbursement,
+  compact sample vehicle context, inline TOU periods and Settings/default-view behavior.
 
 ## Impact
 
