@@ -34,8 +34,8 @@ was implemented, verified and archived on 2026-10-03. Its seven accepted
 requirements are the [vehicle-ledger contract](openspec/specs/vehicle-ledger/spec.md).
 The merged pricing and dashboard changes are archived; their canonical contracts
 are [session pricing](openspec/specs/session-pricing/spec.md) and
-[local dashboard](openspec/specs/local-dashboard/spec.md). The current follow-up is
-[dated sample rates](openspec/changes/dated-rate-profiles/proposal.md).
+[local dashboard](openspec/specs/local-dashboard/spec.md). The completed follow-up is archived as
+[dated sample rates](openspec/changes/archive/2026-10-03-dated-rate-profiles/proposal.md).
 The archived planning artifacts retain their original review context. The earlier
 broad single-vehicle change was deleted, not marked complete.
 
