@@ -8,7 +8,7 @@ export type VehicleView = typeof vehicleOptions[number]["value"]
 export type Preferences = { defaultVehicle: VehicleView; animateCharging: boolean }
 
 const storageKey = "chargeshare.preview.preferences.v1"
-const defaults: Preferences = { defaultVehicle: "all", animateCharging: true }
+const defaults: Preferences = { defaultVehicle: "vehicle-a", animateCharging: true }
 
 export function isVehicleView(value: unknown): value is VehicleView {
   return vehicleOptions.some((option) => option.value === value)

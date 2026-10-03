@@ -7,15 +7,16 @@ fn route(method: &Method, url: &str) -> (u16, Value) {
     if method != &Method::Get {
         return (405, json!({ "error": "Only GET is supported." }));
     }
-    let missing = match url {
-        "/api/demo" | "/api/demo?scenario=complete" => false,
-        "/api/demo?scenario=missing" => true,
+    let scenario = match url {
+        "/api/demo" | "/api/demo?scenario=complete" => demo::Scenario::Complete,
+        "/api/demo?scenario=missing" => demo::Scenario::Missing,
+        "/api/demo?scenario=winter" => demo::Scenario::Winter,
         value if value.starts_with("/api/demo?") => {
             return (400, json!({ "error": "Unknown demo scenario." }));
         }
         _ => return (404, json!({ "error": "Not found." })),
     };
-    match demo::snapshot(missing) {
+    match demo::snapshot(scenario) {
         Ok(data) => (200, data),
         Err(_) => (500, json!({ "error": "The demo could not be calculated." })),
     }
@@ -50,6 +51,7 @@ mod tests {
     fn routes_are_get_only_and_unknown_input_is_not_reflected() {
         assert_eq!(route(&Method::Get, "/api/demo").0, 200);
         assert_eq!(route(&Method::Get, "/api/demo?scenario=missing").0, 200);
+        assert_eq!(route(&Method::Get, "/api/demo?scenario=winter").0, 200);
         assert_eq!(route(&Method::Post, "/api/demo").0, 405);
         assert_eq!(route(&Method::Get, "/private").0, 404);
         for url in [

@@ -2,7 +2,7 @@
 
 This milestone uses fictional charging evidence and fictional, already resolved
 rate windows. It does not connect to Tesla or certify physical energy accuracy.
-The [pricing change](../openspec/changes/offline-session-pricing/proposal.md)
+The [pricing change](../openspec/changes/archive/2026-10-02-offline-session-pricing/proposal.md)
 records scope; its task list distinguishes implemented work from pending work.
 
 ## Exact amounts
@@ -99,3 +99,13 @@ Vehicle A has 4 kWh at a fictional 0.20 USD/kWh and 6 kWh at 0.40 USD/kWh:
 10 kWh and 3.20 USD are priced. Vehicle B has the same total energy without
 the boundary reading: the example displays its explicit hold and no priced
 amount. All dates, times, identities, readings and rates are fictional.
+
+## Dated preview rates
+
+The core contract above is unchanged. The preview adapter in
+`crates/chargeshare-preview/src/rates.rs` keeps date-bounded versions separate
+from evidence and constructs the same `RateWindow` / `RateSchedule` inputs.
+See [the preview rate table](local-preview.md#dated-public-sample-rates). Repricing
+never rewrites events. Missing coverage emits no windows and positive consumption
+remains held; no earlier/later version supplies a fallback. The adapter consumes
+explicit fixture dates and synthetic day-start ticks, not UTC events.

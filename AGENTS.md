@@ -13,7 +13,7 @@ Do not add comments to authored code, including Rust doc comments. Make intent c
 - Keep domain logic and backend source in Rust. The user-authorized localhost preview uses React/TypeScript and shadcn in `apps/web`; Node.js/npm runs its build/dev tooling and OpenSpec. Keep money calculations in the Rust core.
 - Read [docs/code-design.md](docs/code-design.md) before code or architecture changes. Keep `lib.rs` a small public facade, use cohesive modules and inward domain dependencies, and follow the guide's required decision/review workflow within the approved OpenSpec scope.
 - Keep changes inside this repository. Do not import private repositories, personal correspondence or live vehicle data.
-- Use synthetic examples only. Never commit secrets, real VINs, home locations, bills, receipts, account identifiers or contact details.
+- Use synthetic vehicle examples and the explicitly labeled public sample tariff only. Never commit secrets, real VINs, home locations, bills, receipts, account identifiers or contact details.
 - Do not register a Tesla app, pair keys, authorize OAuth, deploy, incur costs, or add vehicle-control features without a separate explicit request.
 - Preserve the distinction between proposed behavior and implemented functionality. Keep unimplemented OpenSpec tasks unchecked.
 - Use the generated OpenSpec skills under .agents/skills. Start with a proposal and scenarios, then implement an approved change.

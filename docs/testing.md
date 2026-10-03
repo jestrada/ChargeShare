@@ -7,7 +7,7 @@ Offline session pricing adds 15 acceptance tests in
 `crates/chargeshare-core/tests/offline_pricing.rs` and five unit tests for money
 and tariff primitives. The existing 17 acceptance tests and two energy tests are
 unchanged. The [pricing contract](pricing.md) describes the implemented scope.
-The preview adds four Rust route/fixture tests, for 43 workspace tests total.
+The preview adds twelve Rust route/fixture/rate-table tests, for 51 workspace tests total.
 Its React frontend has a TypeScript/production-build check and local browser
 verification described in [local preview](local-preview.md).
 
@@ -261,6 +261,36 @@ hides the rays and removes the inset glow while retaining the Charging label.
 Decorative layers ignore pointer events. Browser errors were empty, and the staged
 diff/path review and security scan passed. No dependency, API or Rust change was
 needed for this visual refinement.
+
+## Dated sample rates and reimbursement verification
+
+Local verification on 2026-10-03 for PR #3:
+
+- Rust formatting, Clippy with warnings denied and the complete offline wrapper
+  passed: 51 tests, zero failed/ignored/filtered. The core source is unchanged.
+- New cases cover inclusive/exclusive version dates, gaps without fallback,
+  ambiguous versions, preserved decimal precision, unchanged evidence repricing,
+  derived date labels, winter selection and held reimbursement.
+- Strict OpenSpec validation passed four artifacts. Security guard fixtures and
+  the frontend TypeScript/production build passed.
+- Desktop 1280x1000 and mobile 375x812 screenshots were inspected. The sample
+  reimbursement appears first, batteries are compact on mobile, and session
+  details retain version IDs and four-decimal rate displays.
+- Joseph's September month subtotal is $21.18 for 72 kWh regardless of the
+  selected vehicle. October's unverified winter estimate is $21.02 for the same
+  synthetic session shape. The September boundary row shows measured 4 kWh
+  off-peak and 6 kWh partial-peak, priced at $3.98.
+- Settings selector keyboard navigation loaded the missing-reading scenario.
+  Evan's held session shows both periods and an unresolved split with no invented
+  allocation; his month shows $9.99 for 36 priced kWh. Joseph's top amount stays
+  $21.18. Scenario controls are absent from the main dashboard.
+- Mobile Settings, winter and held-session screenshots have no horizontal
+  overflow. Sample update times and charging energy are explicitly labeled.
+  Screenshots remain local under ignored `target/preview-pr3/`.
+
+These figures verify sample calculations only. The winter estimate is not an
+account-specific quote; the adapter does not implement UTC or daylight saving.
+Hosted checks must be verified on the exact pushed commit independently.
 
 ## Future receiver integration: separate spec
 
