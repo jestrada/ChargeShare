@@ -2,8 +2,8 @@
 
 Implementation approved and applied on 2026-10-02. The original planning/review
 context below is retained as history; current behavior is documented in
-[the offline domain contract](../../../docs/architecture.md#implemented-offline-ledger). Completion is
-tracked by the checked tasks and [verification](../../../docs/testing.md#spec-1-verification).
+[the offline domain contract](../../../../docs/architecture.md#implemented-offline-ledger). Completion is
+tracked by the checked tasks and [verification](../../../../docs/testing.md#spec-1-verification).
 
 **Status: draft for review; no application behavior is implemented by this PR.**
 Review this spec first. Implementation starts only after review and a separate,

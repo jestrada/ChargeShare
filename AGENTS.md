@@ -1,6 +1,6 @@
 # ChargeShare contributor guidance
 
-This is a public repository with an offline synthetic Rust ledger. Read README.md, SECURITY.md and the active OpenSpec change before editing.
+This is a public repository with an offline synthetic Rust ledger. Read README.md, SECURITY.md and the applicable OpenSpec contract and change before editing.
 
 ## Overall code design goal
 

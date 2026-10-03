@@ -2,13 +2,13 @@
 
 Implementation approved and applied on 2026-10-02. The original planning/review
 context below is retained as history; current behavior is documented in
-[the offline domain contract](../../../docs/architecture.md#implemented-offline-ledger). Completion is
-tracked by the checked tasks and [verification](../../../docs/testing.md#spec-1-verification).
+[the offline domain contract](../../../../docs/architecture.md#implemented-offline-ledger). Completion is
+tracked by the checked tasks and [verification](../../../../docs/testing.md#spec-1-verification).
 
 Proposed implementation checklist only. All work is unimplemented and gated on
 review followed by a separate explicit implementation request. Completing the
 planning artifacts or merging this spec PR does not authorize implementation.
-There are no live setup tasks in this milestone. See the [testing plan](../../../docs/testing.md)
+There are no live setup tasks in this milestone. See the [testing plan](../../../../docs/testing.md)
 for the current CI boundary, future receiver integration checklist and manual live gate.
 
 ## 1. Scoped offline inputs
@@ -35,7 +35,7 @@ for the current CI boundary, future receiver integration checklist and manual li
 
 ## Later test stages, outside Spec 1
 
-The [future integration checklist](../../../docs/testing.md#future-receiver-integration-separate-spec)
+The [future integration checklist](../../../../docs/testing.md#future-receiver-integration-separate-spec)
 requires fake-vehicle → real Go receiver → selected dispatcher → Rust tests in
 GitHub Actions. It must become part of a separately reviewed integration spec;
 these are not additional Spec 1 implementation tasks. Broker selection is deferred.

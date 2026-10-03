@@ -56,7 +56,10 @@ for publication safeguards. Verification evidence is retained below.
 Implementation approved and applied on 2026-10-02. Only synthetic offline Rust
 behavior is delivered; physical accuracy, user authorization, persistence, actual
 Go receiver integration and live-car validation remain outside this milestone.
-The historical review/planning context is retained in the active OpenSpec change.
+The historical review/planning context is retained in the
+[archived OpenSpec change](../openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md).
+Its seven accepted requirements are synced to the
+[main vehicle-ledger spec](../openspec/specs/vehicle-ledger/spec.md).
 
 ### Local checks
 

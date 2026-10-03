@@ -5,7 +5,7 @@
   "description": "A spec-driven Tesla AC charging reimbursement proof of concept",
   "scripts": {
     "spec:validate": "OPENSPEC_TELEMETRY=0 openspec validate --all --strict --no-interactive",
-    "spec:status": "OPENSPEC_TELEMETRY=0 openspec status --change offline-multi-vehicle-ledger",
+    "spec:status": "OPENSPEC_TELEMETRY=0 openspec list --all",
     "spec:list": "OPENSPEC_TELEMETRY=0 openspec list",
     "security:install": "bash scripts/security/install-hooks.sh",
     "security:scan": "bash scripts/security/scan.sh history",

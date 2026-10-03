@@ -7,9 +7,10 @@ live receiver, account integration, database, UI or runtime dependency.
 Owner/vehicle scope checks are domain invariants, not authentication or approved
 cross-owner sharing. Nothing calculates money owed or certifies a meter.
 
-The [active OpenSpec change](../openspec/changes/offline-multi-vehicle-ledger/proposal.md)
-retains its original review context. The contract below describes implemented
-behavior; later integrations require separately reviewed specs and explicit approval.
+The [archived OpenSpec change](../openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md)
+retains its original review context. The accepted requirements are now in the
+[main vehicle-ledger spec](../openspec/specs/vehicle-ledger/spec.md). The contract
+below describes implemented behavior; later integrations require separately reviewed specs and explicit approval.
 
 ## Architecture at a glance
 

@@ -20,10 +20,12 @@ The three guides in `docs/` are:
 - [Testing](docs/testing.md): commands, scenario coverage, verification evidence
   and later receiver/real-car validation gates
 
-Only [Spec 1](openspec/changes/offline-multi-vehicle-ledger/proposal.md) is active.
-The earlier broad single-vehicle change was deleted, not marked complete. Active
-planning artifacts retain their original review context. `openspec/specs/` is
-intentionally empty until the approved change is implemented, verified and archived.
+[Spec 1](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md)
+was implemented, verified and archived on 2026-10-03. Its seven accepted
+requirements are the [vehicle-ledger contract](openspec/specs/vehicle-ledger/spec.md).
+No changes are currently active. The archived planning artifacts retain their
+original review context. The earlier broad single-vehicle change was deleted,
+not marked complete.
 
 ## Develop
 
@@ -61,11 +63,12 @@ copying it neither creates credentials nor authorizes live operation.
 
 ## Change and publication workflow
 
-1. Read [AGENTS.md](AGENTS.md), the three guides and the active change's
-   [proposal](openspec/changes/offline-multi-vehicle-ledger/proposal.md),
-   [design](openspec/changes/offline-multi-vehicle-ledger/design.md),
-   [scenarios](openspec/changes/offline-multi-vehicle-ledger/specs/vehicle-ledger/spec.md)
-   and [tasks](openspec/changes/offline-multi-vehicle-ledger/tasks.md).
+1. Read [AGENTS.md](AGENTS.md), the three guides, the
+   [main contract](openspec/specs/vehicle-ledger/spec.md) and archived Spec 1's
+   [proposal](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md),
+   [design](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/design.md),
+   [scenarios](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/specs/vehicle-ledger/spec.md)
+   and [tasks](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/tasks.md).
 2. Use the generated OpenSpec skills under `.agents/skills/` to propose/refine
    requirements and scenarios. Obtain explicit implementation approval for new
    behavior; later capabilities need separately reviewed specs.

@@ -2,8 +2,8 @@
 
 Implementation approved and applied on 2026-10-02. The original planning/review
 context below is retained as history; current behavior is documented in
-[the offline domain contract](../../../docs/architecture.md#implemented-offline-ledger). Completion is
-tracked by the checked tasks and [verification](../../../docs/testing.md#spec-1-verification).
+[the offline domain contract](../../../../docs/architecture.md#implemented-offline-ledger). Completion is
+tracked by the checked tasks and [verification](../../../../docs/testing.md#spec-1-verification).
 
 ## Context
 
@@ -62,7 +62,7 @@ association supports future design; it is not proof of permission to view data.
 
 ## Test execution plan
 
-[Testing plan](../../../docs/testing.md) defines the sequence: Spec 1 synthetic Rust
+[Testing plan](../../../../docs/testing.md) defines the sequence: Spec 1 synthetic Rust
 fixtures in GitHub Actions first, a separately reviewed containerized receiver
 integration suite later, then separately approved manual real-car validation.
 No integration implementation, production credential, vehicle access or workflow
