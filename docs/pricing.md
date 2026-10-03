@@ -109,3 +109,4 @@ See [the preview rate table](local-preview.md#dated-public-sample-rates). Repric
 never rewrites events. Missing coverage emits no windows and positive consumption
 remains held; no earlier/later version supplies a fallback. The adapter consumes
 explicit fixture dates and synthetic day-start ticks, not UTC events.
+The unverified winter version will be replaced once an October bill is reconciled.

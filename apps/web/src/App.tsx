@@ -70,6 +70,7 @@ export function App() {
             <section className="glass reimbursement-panel" aria-labelledby="reimbursement-heading">
               <div><h2 id="reimbursement-heading">Joseph owes Evan this month</h2><p className="muted">Sample calculation · {snapshot.periods.month}</p></div>
               <p className="reimbursement-amount">{snapshot.reimbursement.held > 0 && snapshot.reimbursement.priced_energy === "0" ? "Needs review" : snapshot.reimbursement.priced_subtotal}</p>
+              <p className="muted">Energy only. Fixed charges and credits not included.</p>
               <p className="muted">{snapshot.reimbursement.priced_energy} kWh priced · {snapshot.rates.label}</p>
               {snapshot.reimbursement.held > 0 && <p className="needs-review" role="status">{snapshot.reimbursement.held} {snapshot.reimbursement.held === 1 ? "session excluded" : "sessions excluded"}. This amount is incomplete.</p>}
             </section>
@@ -151,7 +152,7 @@ export function App() {
                           </details>
                         ))}
                       </div>
-                      <p className="ledger-note muted">Sample rates, not your utility tariff. Costs include priced sessions only.</p>
+                      <p className="ledger-note muted">Sample sessions priced at EV2-A variable rates. Excludes fixed charges and credits.</p>
                     </>}
                   </TabsContent>
                 ))}
