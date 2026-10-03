@@ -5,6 +5,11 @@ context: |
   Implemented milestones are offline synthetic session/energy isolation and exact
   synthetic pricing, plus a loopback Rust API with a React/shadcn demo dashboard.
   Review one spec at a time; implementation requires a later explicit request.
+  Archive completed changes before merging their PR, after review, implementation
+  and verification. Sync accepted delta requirements into openspec/specs, then move
+  the completed change into openspec/changes/archive with its dated archive name.
+  Commit the canonical-spec updates and archive move on the same PR before merge.
+  Keep incomplete or unreviewed changes active and report any pre-merge blockers.
   This is a public repository: use synthetic examples, never real VINs, locations,
   personal correspondence, receipts, credentials, tokens or private raw data.
   Proposed runtime: official Tesla receiver, Rust processor, SQLite, private view and CSV.
@@ -19,3 +24,12 @@ rules:
     - Include observable failure, missing-data, privacy and deterministic replay scenarios.
   tasks:
     - Keep implementation and externally authorized live setup tasks distinct and unchecked until done.
+
+operations:
+  archive:
+    guidance:
+      - Archive only the reviewed, implemented and verified change selected for the PR; do not bulk-archive unrelated work.
+      - Sync accepted delta requirements to canonical specs and verify the sync before moving the change. Keep openspec/specs as the current contract; it is not the archive.
+      - Preserve all change artifacts and metadata under the dated openspec/changes/archive directory; do not discard them as cleanup.
+      - Include the canonical-spec updates and archive move in the same PR before merge, then rerun strict spec validation and publication safeguards and verify the final remote commit and hosted checks.
+      - Report incomplete review, implementation, verification or sync as a blocker. This guidance does not authorize merging, deployment or unrelated changes.

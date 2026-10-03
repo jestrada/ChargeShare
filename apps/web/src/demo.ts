@@ -1,4 +1,4 @@
-export type Scenario = "complete" | "missing"
+export type Scenario = "complete" | "missing" | "winter"
 
 export type CostLine = {
   energy: string
@@ -17,6 +17,7 @@ export type Session = {
   cost: string | null
   reason: string | null
   lines: CostLine[]
+  periods: { label: string; energy: string | null }[]
 }
 
 export type Totals = {
@@ -34,15 +35,19 @@ export type Vehicle = PeriodTotals & {
   battery: number
   state: string
   sessions: Session[]
+  last_updated: string
+  added_kwh: string | null
 }
 
 export type DemoSnapshot = {
   scenario: Scenario
   vehicles: Vehicle[]
   totals: PeriodTotals
-  periods: { week: string; month: string; as_of: string }
+  reimbursement: Totals
+  periods: { week: string; month: string; as_of: string; name: string }
   rates: {
-    current: { price: string; until: string }
-    next: { price: string; starts: string; ends: string }
+    label: string
+    current: { price: string; until: string } | null
+    next: { price: string; starts: string; ends: string } | null
   }
 }

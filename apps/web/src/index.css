@@ -168,9 +168,6 @@
 [data-slot="table-head"] { font-weight: 400; }
 [data-slot="table-cell"], [data-slot="table-head"] { padding: 8px; }
 .ledger-note { margin-top: 16px; max-width: 80ch; }
-.sample-controls { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 8px 0; }
-.sample-controls h2 { margin-bottom: 4px; }
-.sample-controls form { display: flex; align-items: center; gap: 8px; }
 .loading-panel { padding: 32px; min-height: 256px; display: grid; align-content: center; gap: 16px; }
 .skip-link { position: absolute; top: 8px; left: 8px; transform: translateY(-200%); padding: 8px 16px; background: var(--background); z-index: 10; }
 .skip-link:focus { transform: none; }
@@ -191,8 +188,6 @@
   .session-columns { display: none; }
   .session summary { grid-template-columns: minmax(0, 1fr) auto 16px; grid-template-areas: "date cost expand" "time energy expand"; gap: 4px 8px; }
   .session-date { gap: 8px; }
-  .sample-controls { align-items: flex-start; flex-direction: column; gap: 16px; }
-  .sample-controls form { width: 100%; flex-wrap: wrap; }
 }
 
 @media (prefers-reduced-transparency: reduce) {
@@ -204,4 +199,34 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
   .charge-reflection { display: none; }
+}
+
+.reimbursement-panel { padding: 24px 32px; display: grid; grid-template-columns: 1fr auto; gap: 8px 24px; align-items: center; }
+.reimbursement-panel h2 { font-size: 24px; letter-spacing: -0.04em; }
+.reimbursement-panel > .muted, .reimbursement-panel > .needs-review { grid-column: 1 / -1; }
+.reimbursement-amount { font-size: 40px; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+.vehicle-context { margin-top: 16px; display: grid; gap: 4px; }
+.rate-source { margin-top: 16px; }
+.rate-provenance { overflow-wrap: anywhere; }
+.session-time { display: grid; gap: 4px; }
+.session-periods { font-size: 14px; }
+.settings-dialog { max-height: calc(100dvh - 32px); overflow-y: auto; }
+.settings-scenario { border-top: 1px solid var(--border); padding-top: 24px; }
+
+@media (max-width: 700px) {
+  .reimbursement-panel { grid-template-columns: 1fr; padding: 24px; gap: 8px; }
+  .reimbursement-panel h2 { font-size: 16px; letter-spacing: normal; }
+  .reimbursement-amount { font-size: 32px; }
+  .vehicle-panel { padding: 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; align-items: center; }
+  .vehicle-heading h2 { font-size: 16px; letter-spacing: normal; }
+  .battery-reading { margin: 0; display: grid; justify-items: end; gap: 4px; }
+  .battery-number, .battery-number > span { font-size: 24px; }
+  .charging-state { font-size: 14px; }
+  .battery-glass { grid-column: 1 / -1; padding: 4px; border-radius: 8px; }
+  .battery-glass progress { height: 8px; }
+  .battery-glass::after, .charge-track { inset: 4px; }
+  .battery-scale { display: none; }
+  .vehicle-context { grid-column: 1 / -1; margin-top: 0; }
+  .session summary { grid-template-columns: minmax(0, 1fr) auto auto 16px; grid-template-areas: "date energy cost expand" "time time time time"; }
+  .session-energy { color: var(--muted-foreground); }
 }
