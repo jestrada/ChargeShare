@@ -44,3 +44,10 @@ respected; a fresh browser defaults to Joseph. Scenario controls use the existin
 Settings dialog, with September complete/missing and October estimate fixtures.
 Scenario selection is not persisted. Requirement-level verification is recorded
 in `tasks.md` and `docs/testing.md`; this completeness pass changes no app behavior.
+
+## Nonblocking follow-up
+
+Clarify rate selection and month-subtotal attribution for a session spanning
+September 30 to October 1, including the effective-date boundary between the
+summer sample and winter estimate. This edge case is deferred and adds no
+implementation or test requirements to this change.
