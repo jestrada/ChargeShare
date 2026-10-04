@@ -5,6 +5,10 @@ later explicit apply request. Live setup is excluded rather than implied by thes
 tasks: Tesla registration, OAuth, key pairing, public hosting and real telemetry
 need a separate reviewed change and authorization.
 
+## 0. Preserve the three-stage integration plan
+
+- [ ] 0.1 Write `docs/plan.md` to capture the complete local end-to-end plan in the [architecture guide](../../../docs/architecture.md#proposed-local-end-to-end-flow) and [three-stage diagram](../../../docs/images/local-flow-ownership.png): (1) the Nix/Tilt local synthetic receiver test harness through the official Tesla Fleet Telemetry receiver into Kafka; (2) Rust normalization and SQLite durable ingestion; (3) persisted charging results using the existing Rust ledger/pricing core and persisted API/dashboard reads. Record each stage's scope, non-goals, upstream versus ChargeShare ownership, dependencies and observable acceptance gates, including receiver rejection/failure, deterministic replay, reconnect/restart without double counting, scoped core-calculated results and visible missing-data holds. Identify this change as stage 1 and track later stages as separate future specs/PRs with links as they are created; verify the document preserves synthetic local-only boundaries, marks unimplemented work as proposed and requires separate review and explicit implementation approval for each future change.
+
 ## 1. Pinned shell and host preflight
 
 - [ ] 1.1 Add the flake and lockfile with pinned Tilt, Docker CLI/Compose, the repository Rust version, Node/npm and required utilities; verify `nix develop` version output and no lockfile changes on repeated entry.
