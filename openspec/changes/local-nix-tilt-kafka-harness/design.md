@@ -58,6 +58,8 @@ Kafka consumer, persistent ledger, Nix flake or Tilt environment exists.
 The [local-development delta](specs/local-development/spec.md) owns the developer
 experience. The [harness delta](specs/synthetic-telemetry-harness/spec.md) owns the
 transport acceptance boundary. Existing product contracts are unchanged.
+The separate [POC roadmap](../../../docs/plan.md) covers later durable ingestion,
+persisted results and the final Cloudflare architecture/Terraform stage.
 
 ## Initial support and verification matrix
 
@@ -250,7 +252,8 @@ failed assertion or missing expected output, then record a passing exact-commit
 hosted run before calling the implementation verified.
 
 Cloudflare is the eventual deployment target, to be evaluated only after all
-three local stages work. The future final plan step must select its actual runtime
+three local stages work. The final [roadmap stage](../../../docs/plan.md#stage-4-cloudflare-architecture-and-terraform-deployment)
+uses Terraform for reviewed infrastructure and must select its actual runtime
 and validate image/architecture support, receiver WebSocket/mTLS ingress and
 client-certificate identity, internal broker connectivity, lifecycle limits and
 durable storage/recovery. It needs a separately reviewed deployment/security plan

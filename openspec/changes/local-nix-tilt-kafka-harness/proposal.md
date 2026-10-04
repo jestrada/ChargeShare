@@ -13,7 +13,7 @@ ChargeShare needs a repeatable local environment before its receiver-to-ledger i
 - Define readiness, actionable failures, per-service logs, explicit shutdown, isolated runtime files and a deliberate synthetic-state reset.
 - Propose a bounded Linux x86_64 GitHub Actions integration job that starts the pinned stack, requires a receiver acknowledgment plus matching decoded Kafka output, and always tears down its resources.
 - Keep Kafka as the chosen local dispatcher. Defer the Rust normalization/consumer adapter, durable ledger storage, receiver-backed dashboard and all live Tesla setup.
-- Preserve the three-stage local end-to-end plan and add Cloudflare runtime/deployment validation as its final future step, after the local stages work. This change does not deploy to Cloudflare.
+- The separate [POC roadmap](../../../docs/plan.md) covers three local stages and final Cloudflare architecture/Terraform deployment validation after the local stages work. Those later stages are outside this change's implementation scope.
 
 This change contains planning artifacts only. The shell, service definitions and harness are proposed, not implemented. No production reliability or utility-meter accuracy is claimed.
 

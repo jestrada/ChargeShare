@@ -28,6 +28,7 @@ The guides in `docs/` are:
 - [Offline pricing](docs/pricing.md): exact amounts, rate windows, scoped quotes
   and the runnable fictional example
 - [Local preview](docs/local-preview.md): launch, interactions and demo limits
+- [POC plan](docs/plan.md): three local integration stages, then Cloudflare architecture and Terraform deployment
 
 [Spec 1](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md)
 was implemented, verified and archived on 2026-10-03. Its seven accepted
