@@ -2,15 +2,15 @@
 
 ## Purpose
 
-Provide a repeatable, inspectable development environment for synthetic ChargeShare work on Linux machines, including suitable cloud Linux environments, without requiring cloud provisioning or a live vehicle connection.
+Provide a repeatable, inspectable development environment for synthetic ChargeShare work on Linux x86_64 machines, including suitable cloud Linux environments, without requiring cloud provisioning or a live vehicle connection.
 
 ## ADDED Requirements
 
 ### Requirement: Reproducible developer entry point
-The environment SHALL provide `nix develop` followed by `tilt up` as its normal startup path on Linux after documented host prerequisites. Suitable cloud Linux environments SHALL meet the same permitted Docker-runtime and private-networking prerequisites. Tool and upstream service inputs MUST be pinned and version-inspectable. Startup MUST NOT update lockfiles or require Kubernetes, Tesla credentials or new cloud accounts. Support for other operating systems is outside this change.
+The environment SHALL provide `nix develop` followed by `tilt up` as its normal startup path on Linux x86_64 after documented host prerequisites. Suitable cloud Linux environments SHALL meet the same permitted Docker-runtime and private-networking prerequisites. Tool and upstream service inputs MUST be pinned and version-inspectable. Startup MUST NOT update lockfiles or require Kubernetes, Tesla credentials or new cloud accounts. Support for other operating systems and architectures is outside this change.
 
 #### Scenario: Fresh supported checkout
-- **WHEN** a developer follows the prerequisite instructions on a tested Linux configuration, on a machine or in a suitable cloud environment, and starts a clean checkout
+- **WHEN** a developer follows the prerequisite instructions on a tested Linux x86_64 configuration, on a machine or in a suitable cloud environment, and starts a clean checkout
 - **THEN** the pinned tools are available and local resources start without manually launching each service
 - **AND** required dependency installation and first-run downloads are documented and visible
 - **AND** cloud execution preserves private container networking and loopback host listeners without provisioning public ingress or deployment

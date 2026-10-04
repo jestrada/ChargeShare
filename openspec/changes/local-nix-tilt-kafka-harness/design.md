@@ -2,7 +2,7 @@
 
 ## Outcome at a glance
 
-Proposed stage 1 runs on Linux machines, including suitable cloud Linux
+Proposed stage 1 runs on Linux x86_64 machines, including suitable cloud Linux
 environments. Nix supplies pinned tools; Tilt manages the receiver and Kafka
 through Compose, the explicit smoke test, and the existing preview processes.
 The harness below is not implemented. The fixture preview already exists;
@@ -22,8 +22,9 @@ flowchart TB
         receiver["Official Tesla Go receiver<br/>Upstream transport and dispatcher"]
         kafka["Kafka KRaft<br/>Upstream broker; private Compose network"]
         verifier["ChargeShare verifier<br/>Match records after run-start offsets"]
-        result["Pass or fail: receiver-to-Kafka only"]
+        result["Pass or fail: receiver ACK + Kafka match"]
         sender -->|"Authenticated local-test transport"| receiver
+        receiver -->|"Expected protocol acknowledgment"| sender
         receiver -->|"Decoded JSON"| kafka
         kafka -->|"Retained synthetic records"| verifier
         verifier --> result
@@ -58,6 +59,20 @@ The [local-development delta](specs/local-development/spec.md) owns the develope
 experience. The [harness delta](specs/synthetic-telemetry-harness/spec.md) owns the
 transport acceptance boundary. Existing product contracts are unchanged.
 
+## Initial support and verification matrix
+
+| Surface | Initial target | Current status / acceptance boundary |
+| --- | --- | --- |
+| Existing offline core and fixture preview | Existing Rust/frontend Linux checks | Implemented; these checks do not exercise a receiver or Kafka. |
+| Stage 1 local harness | Linux x86_64 machine or suitable cloud Linux environment with Nix and a permitted Docker daemon | Proposed, not implemented or verified. Verify the pinned stack on the selected host/runtime before claiming support. |
+| Stage 1 GitHub Actions integration | Fresh `ubuntu-24.04` x86_64 VM using its host Docker daemon and the same pinned project inputs | Proposed dedicated job; success requires a receiver acknowledgment and matching decoded Kafka output. Existing CI is not evidence that this integration passes. |
+| Cloudflare deployment | Runtime, ingress and storage choices to be validated after the three local stages work | Future final plan step, outside stage 1. Passing generic Linux tests does not prove Cloudflare compatibility. |
+| Other operating systems / architectures | Deferred | No initial implementation or acceptance-test requirement. |
+
+The planning sandbox used for this amendment has no Nix, Tilt or Docker runtime,
+so it has not executed the proposed stack. The first implementation verification
+must use a Linux environment meeting the prerequisites above.
+
 ## Goals / Non-Goals
 
 **Goals:** Make the first integration boundary runnable with a small local service
@@ -81,7 +96,8 @@ a pinned overlay/input; never silently use a different Rust version. Package
 lockfiles and Cargo.lock stay authoritative for project dependencies. Expose a
 version summary including Nix, tools, receiver revision and image digests.
 
-Initial support is Linux machines, including suitable cloud Linux environments.
+Initial support is Linux x86_64 machines, including suitable cloud Linux
+environments.
 Host prerequisites are Nix with `nix-command` and flakes enabled, a running
 Docker daemon providing Linux containers, permission to access its socket, and
 network access for the first locked dependency fetch. A cloud environment must
@@ -187,9 +203,11 @@ values. Compare per-vehicle semantic multisets or defined partition order rather
 than global arrival order. Negative tests use the same isolation and explicit
 observation deadlines so old records cannot hide a failure.
 
-A passing report means synthetic client -> authenticated receiver -> decoded
-Kafka output only. A direct Kafka fixture producer is useful for a future Rust
-adapter test but cannot pass this milestone's receiver test.
+A passing report requires both the pinned receiver's expected protocol
+acknowledgment and matching decoded Kafka output after an authenticated synthetic
+exchange. The acknowledgment alone does not prove broker delivery. A direct
+Kafka fixture producer is useful for a future Rust adapter test but cannot pass
+this milestone's receiver test.
 
 ### 5. Stop preserves state; reset is explicit and narrow
 
@@ -204,6 +222,40 @@ broker volume, test offsets and generated runtime files. It never uses global
 Docker prune, deletes source, resets browser settings or touches other checkouts.
 Certificates regenerate after reset. Ordinary stop/start retains state; clean
 reset restores reproducible fixture expectations.
+
+### 6. Gate the transport boundary in Linux GitHub Actions
+
+Add a dedicated integration job on every pull request and push. Start with a
+fresh `ubuntu-24.04` x86_64 VM and its host Docker daemon; do not require nested
+virtualization or Docker-in-Docker. Pin the Nix setup/tooling and reuse the local
+Tilt/Compose configuration, receiver revision, image digests and fixture
+expectations. Use a documented non-interactive entry point that explicitly runs
+`telemetry-smoke`; service readiness alone must not finish the job successfully.
+
+Bound the entire job, startup/readiness and message-observation deadlines. Send
+one finite fictional fixture through the actual receiver's local-test mTLS
+WebSocket transport. Assert its expected protocol acknowledgment and the matching
+decoded record on the configured Kafka topic, including fixture identity, source
+fields and values. A missing acknowledgment, absent/mismatched record or timeout
+fails the job with a nonzero exit. This is a minimal transport round trip; it
+does not duplicate every domain-input case or include future Rust ingestion,
+SQLite or receiver-backed dashboard reads.
+
+Generate disposable test trust at runtime and use no real vehicle data, Tesla
+account or repository secrets. Collect only allowlisted synthetic stage summaries
+and safe logs on failure; exclude keys, certificates and unrestricted runtime
+dumps. Always tear down this job's Compose resources, host processes and temporary
+state, even after a failed setup or test. Prove the failure gate with a controlled
+failed assertion or missing expected output, then record a passing exact-commit
+hosted run before calling the implementation verified.
+
+Cloudflare is the eventual deployment target, to be evaluated only after all
+three local stages work. The future final plan step must select its actual runtime
+and validate image/architecture support, receiver WebSocket/mTLS ingress and
+client-certificate identity, internal broker connectivity, lifecycle limits and
+durable storage/recovery. It needs a separately reviewed deployment/security plan
+and explicit authorization before provisioning, credentials, spending or live
+traffic. This Linux integration job makes no Cloudflare compatibility claim.
 
 ## Risks / Trade-offs
 
@@ -237,6 +289,10 @@ Official Tilt Docker Compose guidance, Tiltfile API reference, Nix `develop` and
 flake manuals, and the Tesla Fleet Telemetry README, Compose configuration,
 Makefile and integration configuration were inspected on 2026-10-03. They support
 the orchestration and transport approach, not an executed compatibility claim.
+Official GitHub-hosted runner/image documentation and Tilt CI guidance were
+inspected on 2026-10-04 for the proposed Linux integration job. Cloudflare container
+architecture guidance informed the deferred runtime/ingress/storage checks; it
+does not establish that this stack can be deployed there unchanged.
 Version numbers, source hashes, image digests and host support evidence must be
 recorded together during implementation. No Nix/Docker installation, service
 startup or receiver test was performed while preparing this proposal.

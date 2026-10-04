@@ -12,6 +12,7 @@ The harness SHALL send fixed fictional telemetry through the pinned official rec
 #### Scenario: Successful receiver delivery
 - **WHEN** the developer explicitly runs the documented smoke scenario against a ready environment
 - **THEN** the sender completes its expected exchange and the verifier observes matching records from the receiver's Kafka dispatcher within a bounded timeout
+- **AND** the sender receives the pinned receiver's expected protocol acknowledgment; this alone is not sufficient for success
 - **AND** success identifies the scenario, pinned receiver version and verified boundary
 
 #### Scenario: Reject invalid client authentication
@@ -58,3 +59,26 @@ The harness SHALL report which transport stage failed within documented timeouts
 - **WHEN** the test consumer is stopped and later restarted with an independent documented starting position while records remain within retention
 - **THEN** retained synthetic records can be read again and compared against the expected output
 - **AND** the report states that this checks local broker retention, not ChargeShare crash recovery or production durability
+
+### Requirement: Automated Linux transport gate
+The harness SHALL run as a dedicated GitHub Actions job on every pull request and push using fresh Linux x86_64 and the same pinned project inputs as local execution. A bounded smoke run MUST obtain the receiver's expected acknowledgment and matching decoded Kafka output for a finite fictional fixture. Setup, readiness, transport, record-matching or timeout failure MUST fail the job.
+
+#### Scenario: Fresh-runner transport success
+- **WHEN** the integration job starts the pinned receiver and single Kafka broker on a fresh Linux runner and sends the known fixture through authenticated local-test transport
+- **THEN** it succeeds only after the expected receiver acknowledgment and matching decoded record on the configured topic are observed within their deadlines
+- **AND** comparison verifies the fixture identity, source fields and values rather than accepting process startup or direct Kafka injection
+- **AND** the result identifies the tested commit, runner/runtime, pinned inputs and receiver-to-Kafka acceptance boundary
+
+#### Scenario: Acknowledgment without output or other transport failure
+- **WHEN** setup or readiness fails, the expected acknowledgment is absent, the decoded record is absent or mismatched, or a stage exceeds its deadline
+- **THEN** the job exits unsuccessfully with a safe stage-specific diagnostic
+- **AND** a sender acknowledgment without the required Kafka output cannot pass
+
+### Requirement: CI isolation and cleanup
+The integration job MUST use disposable local-test credentials, private container networking and loopback host listeners, without Tesla accounts, real telemetry or repository secrets. It SHALL always tear down its project resources and retain only allowlisted synthetic diagnostic summaries and safe logs, never keys, certificates or unrestricted runtime dumps.
+
+#### Scenario: Failure diagnostics and teardown
+- **WHEN** setup, startup or the smoke assertion fails
+- **THEN** the job preserves its failure exit status and retains only the allowlisted synthetic diagnostics
+- **AND** teardown runs for this job's containers, host processes and temporary state despite the failure
+- **AND** private test material is not published in logs or artifacts
