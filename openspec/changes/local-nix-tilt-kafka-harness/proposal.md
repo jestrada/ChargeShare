@@ -6,8 +6,8 @@ ChargeShare needs a repeatable local environment before its receiver-to-ledger i
 
 ## What Changes
 
-- Propose `nix develop` followed by `tilt up` as the normal local startup path after installing Nix and a working host Docker daemon.
-- Pin development tools and upstream container inputs; use Tilt with Docker Compose, without Kubernetes or cloud accounts.
+- Propose `nix develop` followed by `tilt up` as the normal startup path on Linux machines, including suitable cloud Linux environments, after installing Nix and a working host Docker daemon.
+- Pin development tools and upstream container inputs; use Tilt with Docker Compose, without requiring Kubernetes or new cloud accounts.
 - Run a local Kafka broker and the official Tesla Go receiver, with a deterministic synthetic sender and a bounded Kafka output verifier.
 - Include the existing Rust preview API and React dashboard in Tilt as separately labeled synthetic demo resources. Their data stays independent of receiver traffic in this milestone.
 - Define readiness, actionable failures, per-service logs, explicit shutdown, isolated runtime files and a deliberate synthetic-state reset.
@@ -30,4 +30,4 @@ None. Existing ledger, pricing and dashboard behavior remains unchanged.
 
 Future implementation will add a root flake and lockfile, Tilt/Compose definitions, narrowly scoped local helpers, public-safe fixture expectations and local-development documentation. It may wrap the existing preview launch path but does not change domain APIs or add Kafka/Tesla dependencies to `chargeshare-core`.
 
-Host prerequisites remain Nix with flakes and `nix-command` enabled, a running Docker-compatible daemon with Linux-container support, permission to use it, and first-run network access for pinned dependencies. Nix provides developer tools, not the host daemon or macOS VM. macOS and Linux are the intended support targets; architecture-specific support must be verified during implementation.
+Initial support is Linux machines, including suitable cloud Linux environments; support for other operating systems is deferred. Host prerequisites remain Nix with flakes and `nix-command` enabled, a running Docker-compatible daemon with Linux-container support, permission to use it, and first-run network access for pinned dependencies. Nix provides developer tools, not the host daemon. Record the tested Linux architecture and runtime during implementation rather than claiming support for untested configurations. Cloud execution must provide the same permitted runtime and preserve private networking and loopback listeners; cloud provisioning, public ingress and deployment remain outside scope.

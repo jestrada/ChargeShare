@@ -20,6 +20,9 @@ context: |
 rules:
   proposal:
     - Distinguish proposed behavior from implemented functionality and state non-goals.
+  design:
+    - Include at least one concise architecture or flow diagram near the beginning of every design.md, preferably a fenced Mermaid diagram, so the proposed outcome is understandable at a glance.
+    - Label component ownership and relevant boundaries; distinguish existing behavior, this change's proposed scope and deferred work. Keep diagrams consistent with the proposal, specs and tasks.
   specs:
     - Include observable failure, missing-data, privacy and deterministic replay scenarios.
   tasks:

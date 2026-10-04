@@ -1,5 +1,52 @@
 # Design
 
+## Outcome at a glance
+
+Proposed stage 1 runs on Linux machines, including suitable cloud Linux
+environments. Nix supplies pinned tools; Tilt manages the receiver and Kafka
+through Compose, the explicit smoke test, and the existing preview processes.
+The harness below is not implemented. The fixture preview already exists;
+only its Tilt management is proposed.
+
+```mermaid
+flowchart TB
+    shell["Nix dev shell<br/>Pinned tools; host provides Docker"]
+    tilt["Tilt<br/>ChargeShare orchestration"]
+    shell -. "tools for tilt up" .-> tilt
+    tilt -. "Compose services and manual smoke test" .-> harness
+    tilt -. "local preview processes" .-> preview
+
+    subgraph harness["Proposed stage 1: local synthetic harness"]
+        direction TB
+        sender["Synthetic sender<br/>Upstream protocol helpers + ChargeShare fixtures"]
+        receiver["Official Tesla Go receiver<br/>Upstream transport and dispatcher"]
+        kafka["Kafka KRaft<br/>Upstream broker; private Compose network"]
+        verifier["ChargeShare verifier<br/>Match records after run-start offsets"]
+        result["Pass or fail: receiver-to-Kafka only"]
+        sender -->|"Authenticated local-test transport"| receiver
+        receiver -->|"Decoded JSON"| kafka
+        kafka -->|"Retained synthetic records"| verifier
+        verifier --> result
+    end
+
+    subgraph preview["Existing fixture demo: proposed Tilt management"]
+        direction TB
+        fixtures["Fictional fixtures + sample rates"]
+        core["ChargeShare Rust ledger / pricing core"]
+        api["Loopback Rust preview API"]
+        dashboard["React/shadcn dashboard"]
+        fixtures --> core --> api --> dashboard
+    end
+```
+
+Solid arrows show data/results; dotted arrows show tooling and lifecycle control.
+Synthetic transport uses generated local-test trust only. There is no telemetry
+path into the fixture demo. Rust normalization/ingestion, SQLite durability and
+receiver-backed dashboard reads are deferred to separate future changes, outside
+this stage's acceptance boundary. Cloud Linux execution still uses private
+container networking and loopback host listeners; it does not imply deployment
+or public ingress.
+
 ## Context
 
 See [proposal](proposal.md) for motivation and scope. Main currently has the pure
@@ -34,14 +81,15 @@ a pinned overlay/input; never silently use a different Rust version. Package
 lockfiles and Cargo.lock stay authoritative for project dependencies. Expose a
 version summary including Nix, tools, receiver revision and image digests.
 
+Initial support is Linux machines, including suitable cloud Linux environments.
 Host prerequisites are Nix with `nix-command` and flakes enabled, a running
 Docker daemon providing Linux containers, permission to access its socket, and
-network access for the first locked dependency fetch. macOS additionally needs
-a functioning Linux container VM, provided by the developer's chosen Docker
-runtime. Nix does not install or start that host runtime, alter socket permissions,
-or accept provider agreements. Document a tested host/runtime version matrix;
-record x86_64 and aarch64 Linux/macOS results separately and do not label untested
-architectures supported.
+network access for the first locked dependency fetch. A cloud environment must
+provide the same permitted container runtime; this change does not provision
+cloud infrastructure. Nix does not install or start the host runtime, alter
+socket permissions, or accept provider agreements. Record the tested Linux
+architecture and host/runtime versions; do not label untested configurations
+supported. Support for other operating systems is deferred.
 
 Entering the shell does not start services. `tilt up` performs project-scoped
 preflight and prerequisite build/install resources using locked inputs. The
@@ -160,8 +208,8 @@ reset restores reproducible fixture expectations.
 ## Risks / Trade-offs
 
 - Upstream native dependencies and container architecture support differ -> pin
-  the full build closure and verify target platforms; report unsupported combinations.
-- Nix bootstrap and Docker VM remain prerequisites -> provide one concise host
+  the full build closure and verify selected Linux configurations; report unsupported combinations.
+- Nix bootstrap and a permitted Docker daemon remain prerequisites -> provide one concise host
   setup checklist and actionable doctor output; never claim zero-install setup.
 - Single-node Kafka can lose data -> use it only for local synthetic verification;
   defer production durability and recovery contracts.

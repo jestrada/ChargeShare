@@ -13,11 +13,11 @@ need a separate reviewed change and authorization.
 
 - [ ] 1.1 Add the flake and lockfile with pinned Tilt, Docker CLI/Compose, the repository Rust version, Node/npm and required utilities; verify `nix develop` version output and no lockfile changes on repeated entry.
 - [ ] 1.2 Add project-scoped preflight checks for daemon reachability, Linux-container capability, required ports and synthetic-only configuration; test stopped daemon, unsupported platform, occupied port and unsafe binding failures without changing host settings.
-- [ ] 1.3 Document Nix features, host daemon/macOS VM prerequisites, cold-start downloads and the supported architecture matrix; verify the documented entry commands on each platform before marking it supported.
+- [ ] 1.3 Document Nix features, Linux host/daemon prerequisites, suitable cloud Linux runtime requirements and cold-start downloads; verify the documented entry commands on the selected Linux configuration and record its architecture/runtime versions. Keep other operating systems deferred and preserve private networking and loopback listeners in cloud environments.
 
 ## 2. Minimal managed service graph
 
-- [ ] 2.1 Select compatible immutable Kafka KRaft image and official receiver source/build inputs, recording versions, digests and upstream notices; verify reproducible builds or pulls for each supported architecture.
+- [ ] 2.1 Select compatible immutable Kafka KRaft image and official receiver source/build inputs, recording versions, digests and upstream notices; verify reproducible builds or pulls on the selected Linux architecture without claiming support for untested configurations.
 - [ ] 2.2 Add project-isolated Compose resources and Tilt orchestration for Kafka and receiver; verify usable protocol/status readiness, bounded failures and loopback-only published ports with no profiler exposure.
 - [ ] 2.3 Generate local-only test CA/client/server material under ignored runtime storage; verify restricted permissions, failed untrusted-client handshake, no system trust changes and absence of keys from Git, Nix store inputs and image layers.
 - [ ] 2.4 Add independent Tilt local resources for the existing Rust API and Vite, with locked dependency-install/build steps; verify existing preview behavior, discoverable logs and readiness, and no orphaned child process after stop.
@@ -39,6 +39,6 @@ need a separate reviewed change and authorization.
 
 ## 5. Integrated acceptance and review
 
-- [ ] 5.1 Run the complete local-development and synthetic-telemetry-harness scenarios from a clean checkout on the declared host matrix; retain a synthetic summary of versions, timings, outcomes and unsupported combinations.
+- [ ] 5.1 Run the complete local-development and synthetic-telemetry-harness scenarios from a clean checkout on the selected Linux configuration, including a suitable cloud Linux environment when used; retain a synthetic summary of architecture/runtime versions, timings, outcomes and unsupported configurations. Do not require acceptance tests on other operating systems.
 - [ ] 5.2 Run strict OpenSpec validation, security guard tests/scans, existing offline Rust acceptance tests, formatting/Clippy and frontend build; review the final diff to verify the core remains independent and existing direct preview still works.
 - [ ] 5.3 After implementation review and verification, sync only this change's accepted deltas and archive its artifacts on the implementation PR; verify the canonical requirements and archived tasks match actual completed evidence before any separately authorized merge.
