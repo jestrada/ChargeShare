@@ -37,7 +37,7 @@ One process owns each database. SQLite evidence/dispositions and partition progr
 
 Only ignored owned local runtime paths may contain the database, writer lock and WAL/SHM companions. Reset must be explicit and scoped to those synthetic files; storage corruption or retention loss never triggers automatic reset. Recovery tests establish local process/database behavior on the tested filesystem, not backup, replicated-broker or cloud durability.
 
-On Linux, no-follow directory/file handles and inode checks reject symlinks, hardlinks, special files and non-private database companions. Ancestors must be owned by the user or trusted root and not writable by other users, apart from root-owned sticky temporary directories. The runtime and its files are private. These checks assume a trusted filesystem and no hostile process running as the same user; they are not a same-UID security sandbox.
+On Linux, no-follow directory/file handles and inode checks reject symlinks, hardlinks, special files and non-private database companions. Ancestors must be owned by the user or trusted root and not writable by other users, apart from trusted root/user-owned sticky directories. The runtime and its files are private. These checks assume a trusted filesystem and no hostile process running as the same user; they are not a same-UID security sandbox.
 
 ## Focused verification
 

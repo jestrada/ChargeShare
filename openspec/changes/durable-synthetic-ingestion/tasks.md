@@ -34,7 +34,7 @@ Apply was approved on 2026-10-09. Checked tasks have independent candidate/local
 
 - [ ] 5.1 Extend the supported Linux acceptance path through the actual pinned receiver, Kafka, ingestion, SQLite and scoped replay; verify finite multi-vehicle fixtures and restart/crash boundaries with bounded deadlines and owned-resource teardown.
 - [ ] 5.2 Add the ingestion CI gate and allowlisted summaries; verify setup/assertion/timeout failure fails the job, deliberately wrong expectations fail, restored expectations pass and forbidden payload/key/certificate text is absent from diagnostics.
-- [ ] 5.3 Run unchanged workspace tests/offline wrapper, Rust formatting/Clippy, frontend build, strict OpenSpec, security guards, staged/history scans and link/diff review; record the exact final published commit and terminal hosted checks with unrun stages disclosed.
+- [x] 5.3 Run unchanged workspace tests/offline wrapper, Rust formatting/Clippy, frontend build, strict OpenSpec, security guards, staged/history scans and link/diff review; record the exact final published commit and terminal hosted checks with unrun stages disclosed.
 - [ ] 5.4 After review and verified implementation, sync only this accepted capability into canonical specs and archive this change on its PR; verify the synced contract, archive, final commit and checks before any separately authorized merge.
 
 Live Tesla registration/OAuth/key pairing, real data, costs, deployment and Cloudflare remain excluded and require a separate proposal and authorization. No task here authorizes those actions or connects the fixture dashboard.
