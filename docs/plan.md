@@ -62,8 +62,9 @@ outside stage 1.
 
 ## Stage 2 Durable Rust ingestion
 
-**Status:** Proposed in the separate [durable ingestion change](../openspec/changes/durable-synthetic-ingestion/proposal.md),
-stacked on the stage-1 PR. Its [design](../openspec/changes/durable-synthetic-ingestion/design.md),
+**Status:** Proposed in [draft PR #6](https://github.com/jestrada/ChargeShare/pull/6),
+stacked on [PR #5](https://github.com/jestrada/ChargeShare/pull/5), with a separate
+[durable ingestion change](../openspec/changes/durable-synthetic-ingestion/proposal.md). Its [design](../openspec/changes/durable-synthetic-ingestion/design.md),
 [detailed contract](../openspec/changes/durable-synthetic-ingestion/specs/durable-telemetry-ingestion/spec.md)
 and [tasks](../openspec/changes/durable-synthetic-ingestion/tasks.md) are ready for review; implementation
 has not started. Stage 1's published PR is still planning-only, and its verified
