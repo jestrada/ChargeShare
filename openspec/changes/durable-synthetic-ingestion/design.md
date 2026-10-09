@@ -6,16 +6,23 @@ See [proposal](proposal.md) for scope. Parent [PR #5](https://github.com/jestrad
 
 ```mermaid
 flowchart LR
-    receiver["Tesla upstream receiver<br/>Stage 1 prerequisite"] --> kafka["Apache Kafka<br/>Stage 1 prerequisite"]
-    kafka --> adapter["ChargeShare Rust normalizer<br/>Implemented candidate contract"]
-    manifest["ChargeShare mapping + manifest<br/>Synthetic annotations"] --> adapter
-    adapter --> transaction["ChargeShare SQLite transaction<br/>Evidence + disposition + progress"]
-    transaction --> replay["ChargeShare scoped replay<br/>Implemented local recovery"]
-    replay --> core["Existing pure Rust core<br/>Sessions + exact energy"]
-    core -.-> later["Deferred stage 3<br/>Persisted results + dashboard"]
+    receiver["Tesla upstream receiver<br/>Actual acceptance pending"] -.-> kafka["Apache Kafka<br/>Private parent runtime"]
+    kafka -.-> consumer["ChargeShare Rust Kafka driver<br/>Manual assignment; mocked tests"]
+    epoch["Owned source epoch lifecycle<br/>Parent prerequisite pending"] -.-> consumer
+    mock["Local mocked Kafka"] --> consumer
+    candidate["Fictional decoded fixtures"] --> adapter["ChargeShare normalization<br/>Exact observed counters"]
+    consumer --> adapter
+    manifest["Frozen mapping + manifest<br/>Synthetic annotations"] --> adapter
+    adapter --> transaction[("SQLite WAL/FULL transaction<br/>Disposition + variants + progress")]
+    transaction -- "Recovery seek position" --> consumer
+    transaction --> replay["ChargeShare scoped replay<br/>All retained variants"]
+    replay --> core["Existing pure Rust core<br/>Unconfirmed sessions + exact energy"]
+    core -.-> later["Stage 3 pending<br/>Persisted pricing + API/dashboard"]
 ```
 
-Arrows show runtime flow. Imports point inward: ingestion imports the core; the core imports no Kafka, SQL or receiver types. Tesla/Kafka/SQLite own upstream software; ChargeShare owns normalization, schema and transactions. Stage 1 owns transport, trust and broker lifecycle.
+Solid arrows show candidate/local/mocked data and recovery flow. Dashed arrows
+show pending actual transport/lifecycle or deferred results, not running services.
+The fixture dashboard is independent. Imports point inward: ingestion imports the core; the core imports no Kafka, SQL or receiver types. Tesla/Kafka/SQLite own upstream software; ChargeShare owns normalization, schema and transactions. Stage 1 owns transport, trust and broker lifecycle.
 
 Inspected candidate receiver `V` output contains fictional key/`vin`, `createdAt`, typed fields and `isResend`. It lacks core connection/position/explicit boundary metadata. Six candidate records match recovered parent `ec1c892` fixtures exactly. Capture actual pinned receiver output before integration acceptance; fixture equivalence is not transport acceptance.
 

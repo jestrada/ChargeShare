@@ -25,13 +25,16 @@ instructions to leave the repository or start additional work.
 - If this guidance conflicts with the approved contract or another mandatory
   requirement, surface the conflict and ask for a decision rather than guessing.
 
-Today's implemented boundary is the synthetic, in-memory offline Rust ledger,
-exact offline pricing and a separate localhost demo API/frontend.
+Today's implemented boundary includes the synthetic in-memory Rust ledger,
+exact offline pricing, an independent localhost fixture API/frontend and the
+outer [candidate/mocked ingestion and SQLite replay](durable-ingestion.md).
 [Its domain contract](architecture.md#implemented-offline-ledger) and
 [acceptance suite](../crates/chargeshare-core/tests/offline_spec1.rs) define current
 behavior. See [pricing](pricing.md) and [local preview](local-preview.md) for the
-additive contracts. Receiver-backed ledger ingestion, persistence, authentication, real
-utility calendars, statements and a production UI remain future work.
+additive contracts. The separate [receiver/Kafka harness](local-development.md)
+has verified Linux acceptance. Receiver-backed ingestion acceptance, persisted
+results/API reads, authentication, real utility calendars, statements and a
+production UI remain pending.
 
 ## 2. Make the code express its intent without comments
 
@@ -122,19 +125,26 @@ is a boundary only if imports and public contracts enforce it.
 
 ```mermaid
 flowchart LR
-    adapters["Future receiver / storage / UI adapters"] --> application["Application orchestration, when needed"]
-    application --> domain["Core identity, energy, evidence and session rules"]
-    adapters --> domain
+    cli["Ingestion CLI"] --> ingestion["chargeshare-ingestion<br/>Kafka + SQLite + replay"]
+    ingestion --> domain["chargeshare-core<br/>pure domain + exact pricing"]
+    preview["chargeshare-preview<br/>independent fixture API"] --> domain
+    ui["React/shadcn UI"] -- "HTTP client" --> preview
+    future["Future persisted-results orchestration"] -.-> ingestion
+    future -.-> domain
 ```
 
-Arrows mean **source-code dependencies**, not runtime data flow. The domain never
+Arrows mean **dependencies**, not runtime result flow: Rust imports or the labeled
+HTTP client relationship. The domain never
 imports an adapter, SQL row, HTTP framework, Tesla payload type or UI component.
 Adapters translate external representations into validated domain values and
 translate results outward. Runtime outputs may flow outward while imports still
-point inward. The diagram is a dependency policy, not an approved module tree.
+point inward. Solid arrows show current source/import or client dependencies;
+dashed arrows are deferred. The UI uses the preview API over HTTP, not Rust imports.
+The external Go receiver and broker are runtime peers, not core dependencies.
 
-For the current milestone, the existing in-memory `Ledger` can orchestrate pure
-domain operations inside the core crate. Do not create an application crate,
+The existing in-memory `Ledger` orchestrates pure domain operations inside the
+core crate; the outer ingestion crate orchestrates approved IO and durable replay.
+Do not create an application crate,
 empty adapters, repository interfaces, async runtime or service hierarchy merely
 to imitate a diagram. Add a boundary when a reviewed use case needs it.
 
@@ -201,6 +211,16 @@ architecture record for every function. Capture enduring architectural choices
 in the approved design or relevant repository documentation. Ask before departing
 from the approved plan or broadening a behavior/API change.
 
+### Keep architecture diagrams current
+
+When a change affects components, ownership, data flow, persistence or dependencies,
+update affected diagrams in [architecture](architecture.md) and the active change's
+design in the same PR. Shared guides describe current code and verification;
+archived designs retain historical context. Label arrow meanings and distinguish
+implemented/tested paths from proposed or unrun integrations. Render changed
+Mermaid when tooling is available and disclose any validation limitation.
+Follow the existing per-change diagram rules in [OpenSpec configuration](../openspec/config.yaml).
+
 Use a focused failing regression test before a bug fix where practical, then the
 smallest change that passes it. Tests must exercise behavior and failure paths,
 not lock in private module layout. Keep the offline acceptance suite as the public
@@ -217,7 +237,7 @@ Before publishing, review the exact diff and complete this checklist:
 - [ ] Identity isolation, energy/uncertainty, safe diagnostics and API compatibility hold.
 - [ ] Changed behavior has readable tests, including failures and deterministic replay.
 - [ ] Applicable checks below pass; blocked or unrun checks are disclosed explicitly.
-- [ ] Documentation and public examples use only synthetic data and match current behavior.
+- [ ] Documentation and affected architecture diagrams match current code, boundaries and verification; public examples use only synthetic data.
 
 Follow [security](../SECURITY.md) and [testing](testing.md) for setup and full rules:
 

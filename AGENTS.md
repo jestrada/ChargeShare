@@ -15,7 +15,7 @@ Do not add comments to authored code, including Rust doc comments. Make intent c
 - Keep changes inside this repository. Do not import private repositories, personal correspondence or live vehicle data.
 - Use synthetic vehicle examples and the explicitly labeled public sample tariff only. Never commit secrets, real VINs, home locations, bills, receipts, account identifiers or contact details.
 - Do not register a Tesla app, pair keys, authorize OAuth, deploy, incur costs, or add vehicle-control features without a separate explicit request.
-- Preserve the distinction between proposed behavior and implemented functionality. Keep unimplemented OpenSpec tasks unchecked.
+- Preserve the distinction between proposed behavior and implemented functionality. Keep unimplemented OpenSpec tasks unchecked. Keep affected architecture diagrams current in the same PR, following [the design guide](docs/code-design.md#keep-architecture-diagrams-current).
 - Use the generated OpenSpec skills under .agents/skills. Start with a proposal and scenarios, then implement an approved change.
 - Run npm run spec:validate and the security checks described in SECURITY.md before a commit. Review the exact staged diff and paths as well as scanner output. Do not bypass failing hooks.
 - Treat every energy total as a measured or estimated quantity with a stated boundary and quality. Never advertise utility-meter accuracy without evidence.
