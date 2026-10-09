@@ -1,14 +1,12 @@
 # Architecture and domain contract
 
-ChargeShare currently implements an in-memory, synthetic multi-vehicle Rust
-ledger in [chargeshare-core](../crates/chargeshare-core/src/lib.rs). Spec 1 was
-approved and implemented on 2026-10-02. The core has no runtime dependencies.
-The additive localhost preview is a separate Rust API and React/shadcn UI;
-there is no production application, live receiver, account integration or database.
-Owner/vehicle scope checks are domain invariants, not authentication or approved
-cross-owner sharing. The additive [offline pricing contract](pricing.md) calculates
-synthetic priced subtotals from versioned rate windows; it does not calculate a
-real bill, issue money owed, or certify a meter.
+ChargeShare implements a pure synthetic Rust ledger/pricing core, an independent
+localhost fixture preview, and the approved [stage-2 ingestion crate](durable-ingestion.md).
+Ingestion retains curated fictional evidence and recovery progress in local SQLite
+and rebuilds scoped, unconfirmed sessions. Its candidate/direct/mocked tests pass;
+the actual receiver-to-Kafka-to-SQLite path has not run. No live Tesla account,
+production authentication or deployment is connected. Domain owner/vehicle checks
+are not authentication or permission for cross-owner sharing.
 
 The separate [stage-1 harness](local-development.md) now verifies synthetic
 authenticated traffic through the official receiver into Kafka on Linux x86_64.
@@ -16,135 +14,93 @@ Its [acceptance evidence](testing.md#complete-linux-acceptance-and-warm-caches)
 covers transport, retained replay, stop/start, reset and cleanup. That traffic
 does not enter the ledger, database or dashboard.
 
-The [archived OpenSpec change](../openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md)
-retains its original review context. The accepted requirements are now in the
-[main vehicle-ledger spec](../openspec/specs/vehicle-ledger/spec.md). The contract
-below describes implemented behavior; later integrations require separately reviewed specs and explicit approval.
+The canonical [ledger](../openspec/specs/vehicle-ledger/spec.md),
+[pricing](../openspec/specs/session-pricing/spec.md) and
+[dashboard](../openspec/specs/local-dashboard/spec.md) contracts remain unchanged.
+The active [ingestion design](../openspec/changes/durable-synthetic-ingestion/design.md)
+and [tasks](../openspec/changes/durable-synthetic-ingestion/tasks.md) retain its
+unfinished integration acceptance. The roadmap is in [the POC plan](plan.md).
 
 ## Architecture at a glance
 
-The solid path is the **implemented synthetic ledger, pricing and local preview**.
-Dashed paths are future integrations requiring
-separately reviewed specs and explicit approval.
+Solid arrows show implemented flows exercised by synthetic fixtures, local mock
+Kafka or the verified stage-1 receiver/Kafka harness. Dashed arrows show pending
+integration; they do not indicate running services.
+The fixture preview and retained-ingestion view use separate in-memory ledgers.
 
 ```mermaid
-flowchart TD
-    fixtures["Synthetic events for multiple vehicles"]
-    rust["Rust ChargeShare logic: separate vehicle sessions and AC energy"]
-    result["Spec 1: per-vehicle test results and eligible kWh"]
-    fixtures --> rust
-  rust --> result
-  result --> pricing["Offline pricing: exact quotes or explicit holds"]
-  rates["Fictional versioned rate windows"] --> pricing
-  pricing --> preview["Loopback Rust demo API"]
-  preview --> browser["Local React/shadcn dashboard"]
-
-    subgraph future_ingress["Future live ingestion - not approved or implemented"]
-        car_a["Tesla vehicle A"]
-        car_b["Tesla vehicle B"]
-        internet["Internet via Wi-Fi or cellular"]
-        receiver["Official Tesla receiver - separate Go service"]
-        allowlist["Ingress allowlist before payload storage or logging"]
-        broker["Decoded JSON handoff via dispatcher / broker - choice undecided"]
-        car_a -.-> internet
-        car_b -.-> internet
-        internet -. "WebSocket with mTLS terminated at receiver" .-> receiver
-        receiver -.-> allowlist
-        allowlist -.-> broker
+flowchart TB
+    subgraph ingestion_path["Implemented candidate / mocked ingestion - ChargeShare"]
+        candidate["Fictional decoded records"] --> ingest["Rust ingestion<br/>mapping + normalization"]
+        mock["Local mocked Kafka"] --> ingest
+        manifest["Frozen synthetic manifest"] --> ingest
+        ingest --> sqlite[("SQLite<br/>evidence + dispositions + progress")]
+        sqlite --> replay["Scoped core replay<br/>all retained variants"]
+        replay --> cli["CLI sessions<br/>Unconfirmed; zero eligible energy"]
     end
-
-    broker -.-> rust
-
-    subgraph future_output["Future storage and website - not approved or implemented"]
-        db["Private database - SQLite proposed"]
-        view["Rust authenticated read / review layer"]
-        website["Private website - access and sharing policy to review"]
-        db -.-> view
-        view -.-> website
+    subgraph preview_path["Implemented fixture preview - independent of ingestion"]
+        demo["Preview fixtures + sample rates"] --> pricing["Rust core/pricing<br/>exact quotes or holds"]
+        pricing --> api["Loopback Rust demo API"]
+        api --> ui["Local React/shadcn dashboard"]
     end
-
-    rust -.-> db
+    subgraph verified_transport["Verified synthetic transport - stage 1"]
+        client["Fictional upstream test client"] --> receiver["Tesla upstream Go receiver"]
+        receiver --> kafka["Apache Kafka<br/>private Compose network"]
+    end
+    lifecycle["Pending owned broker epoch lifecycle"] -.-> ingest
+    kafka -.-> ingest
+    sqlite -.-> results["Stage 3: persisted results + pricing<br/>scoped API/dashboard reads"]
 ```
 
-The Go receiver is a separate process, not Go code embedded in Rust. Its proposed
-handoff to Rust is decoded JSON through a supported dispatcher/broker, not a
-stock Tesla HTTP webhook. Tesla documents decoded dispatcher output and options
-such as Kafka; the production broker and durability approach remain undecided. This
-background comes from Tesla's Fleet Telemetry receiver configuration guidance;
-it does not select or authorize an integration.
+Tesla owns the external receiver software, Apache owns Kafka and SQLite is an
+upstream embedded database. ChargeShare owns their local configuration, the Rust
+adapter/schema/transactions and domain rules. SQLite is a file, not a separate
+server. Existing CLI replay does not populate the fixture dashboard; persisted
+results and reviews remain a separately reviewed stage-3 change.
 
-The allowlist box is a required ingress policy, not an implemented extra service.
-A future integration must enforce it before any receiver sink, payload log or
-broker persistence. Spec 1 bypasses all live transport, database and website
-components: it exercises Rust domain behavior using synthetic vehicle evidence.
-The local preview also includes explicitly labeled public sample rates.
-Neither a cloud nor home host is selected; a future receiver needs suitable
-public reachability and security. The website must use authenticated application
-access, never direct public database access; owner visibility remains a review
-question rather than approved cross-owner sharing.
+## Durable ingestion and recovery boundary
 
-The [local preview](local-preview.md) uses pinned tiny_http/serde_json outside
-the domain and Vite's loopback API proxy. Its battery widgets are presentation
-fixtures; its session quotes use the core. It adds no production sharing policy.
+The outer [ingestion facade](../crates/chargeshare-ingestion/src/lib.rs) keeps IO and
+receiver-shaped payloads outside the dependency-free core:
 
-## Proposed local end-to-end flow
+- `manifest`/`normalize`: frozen fictional associations and exact observed counters;
+  explicit boundary annotations never create an event without an observed record
+- `kafka`/`stream`: manual partition assignment, epoch/identity/retention checks;
+  automatic broker commits and offset storage are disabled
+- `store`/`schema`: one owning writer, versioned SQLite, curated accepted variants
+  or fixed rejection reasons, provenance and progress in one WAL/FULL transaction
+- `replay`: all scoped retained variants enter the unchanged core; conflict holds,
+  exact energy and Unconfirmed classification are preserved
+- `main`: bounded consume, scoped replay and the explicitly labeled candidate demo
 
-This is the proposed complete integration path. Its receiver-to-Kafka stage is
-implemented and verified; durable ingestion and persisted results remain future
-work. It uses synthetic data on a supported local Linux machine; it does
-not connect a real car, Tesla account or hosted service. Cloudflare and production
-hosting are deferred.
+SQLite is the sole recovery-position authority. A known rollback changes neither
+evidence nor progress; interrupted commits recover consistent old-or-new state.
+Redelivery is idempotent, while distinct domain variants are retained. No arbitrary
+raw JSON, rejected text, names or locations are stored. Private ignored runtime
+files and the [documented filesystem/deadline limits](durable-ingestion.md) bound
+these guarantees; they do not establish backup or cloud durability.
 
-![Proposed local ChargeShare flow, showing upstream software, ChargeShare-owned integration and three proposed spec boundaries](images/local-flow-ownership.png)
+## Pending all-services integration
 
-The intended path is a synthetic Tesla test client, adapted by us, through the
-upstream Tesla Fleet Telemetry receiver and Apache Kafka, then our Rust normalizer,
-SQLite, our existing Rust ledger/pricing core, and a persisted API/dashboard.
-The normalizer maps transport evidence into the domain contract; the core keeps
-its inward, infrastructure-independent dependencies. SQLite is storage used by
-our application, not a dependency to import into the pure domain core.
+[PR #5](https://github.com/jestrada/ChargeShare/pull/5) publishes the verified stage-1
+harness at `4179906`. Its Linux receiver/Kafka acceptance passes after an observed
+deliberate assertion failure and cleanup; deliberate-failure mode is removed.
+[The recorded evidence](testing.md#complete-linux-acceptance-and-warm-caches)
+covers transport, retained replay, stop/start, reset and cleanup.
 
-### Software ownership and local operation
+Stage-2 runtime integration still needs the owned broker epoch marker, preserving
+it on restart and replacing it on explicit reset. The reviewed Kafka endpoint
+is `kafka:9092`
+inside its private Compose network, with no host listener. An in-network ingestion
+runner and receiver → Kafka → SQLite → scoped replay acceptance are still pending.
+[Stage 3](plan.md#stage-3-persisted-charging-results) adds the all-services
+startup/readiness and persisted priced API/dashboard path; it does not make these
+parent or ingestion gates complete by moving them to another PR.
 
-- **Tesla upstream:** Fleet Telemetry receiver and the original synthetic test
-  client. Stage 1 configures the receiver and adapts the client for local tests;
-  this is not a Tesla-hosted receiver service.
-- **Apache Kafka:** third-party broker software run locally by stage 1. We own
-  its configuration and integration, not Kafka itself. No managed Kafka service,
-  cloud deployment or hosting purchase is selected.
-- **SQLite:** third-party embedded database software. We would own its schema,
-  migrations, persistence adapter and local database file lifecycle.
-- **ChargeShare:** our Rust normalizer, persistence/replay orchestration, existing
-  Rust ledger/pricing rules, and API/dashboard integration. Existing frontend
-  libraries remain third-party dependencies. The persisted read path is future
-  work; today's API/dashboard still reads synthetic in-memory fixtures.
-
-### Proposed spec boundaries
-
-The three boundaries in the diagram are review/acceptance milestones. Stage 1
-is complete; stages 2 and 3 need separate reviewed changes. The
-existing canonical contracts cover the [ledger](../openspec/specs/vehicle-ledger/spec.md),
-[pricing](../openspec/specs/session-pricing/spec.md), and
-[local dashboard](../openspec/specs/local-dashboard/spec.md), with stage 1's
-[local development](../openspec/specs/local-development/spec.md) and
-[transport harness](../openspec/specs/synthetic-telemetry-harness/spec.md).
-New integration contracts need separate proposals, scenarios and approval before
-implementation. No upstream receiver or broker rewrite is proposed.
-
-1. **Completed receiver test harness:** the local upstream test client,
-   receiver and broker verify transport and decoded handoff with synthetic
-   fixtures, rejection/failure cases and retained restart/reset acceptance.
-2. **Durable ingestion:** define our Rust mapping, identity
-   allowlist, retained evidence, durable offsets, duplicate/late/conflicting data,
-   transactional persistence and restart-safe replay into the existing core.
-3. **Persisted charging results:** replace the current fixture-backed read path with
-   scoped persisted results; preserve core-calculated costs, visible uncertainty,
-   missing-data behavior and local-only access. Production authentication and
-   cross-owner sharing remain separately reviewed work.
-
-The live-ingress allowlist and privacy requirements below still apply before any
-future real data reaches receiver sinks, logs or broker persistence. Local
-synthetic tests do not establish those production controls or physical accuracy.
+Live vehicle transport, ingress allowlisting before sinks/logs/persistence,
+production authentication and cross-owner sharing need separately approved
+contracts. Cloudflare/Terraform deployment is stage 4. Neither the local synthetic
+tests nor exact arithmetic certify utility-meter accuracy or a real bill.
 
 ## Implemented offline ledger
 
@@ -176,11 +132,10 @@ event on identity and energy; session on identity, event, energy and error;
 ledger on these domain modules. No implementation imports through the public
 facade, and no domain module depends on an adapter or external service.
 
-The smallest viable split replaces the single implementation file with cohesive
-private modules. Keeping one file would avoid movement but leave unrelated
-responsibilities coupled; an application crate, replay submodule, traits or
-adapter interfaces would add boundaries without an approved consumer. They remain
-deferred with persistence, live ingestion, authentication, pricing and UI.
+The refactor replaced the single implementation file with cohesive private
+modules. Extra core application layers, replay submodules, traits and generic
+adapter interfaces remain unnecessary. Approved ingestion and preview IO now
+live in their outer crates without changing that core boundary.
 
 Ledger replay groups already vehicle-partitioned evidence by connection, marks
 conflicts explicitly with a named internal evidence type, and stably sorts by
@@ -247,10 +202,11 @@ physically unvalidated evidence label.
 
 These counter, boundary and charge-type semantics are a fixture contract. They
 are not claims about Tesla's production counter resets, samples or session state.
-The synthetic Go receiver-to-Kafka test is implemented. Ledger adapters, durable
-ingestion and manual real-car validation still require separate approved specs.
-No location, credentials, account IDs,
-vehicle controls, tariffs, statements or payments are implemented.
+The synthetic Go receiver-to-Kafka transport is verified. The synthetic adapter
+and durable retention are implemented; receiver-backed ingestion acceptance and
+manual real-car validation remain pending. Real-data mapping, trust/retention,
+tariff calendars and production access require separate approved contracts. No
+live location/account data, vehicle controls, real statements or payments are connected.
 
 ## Measurement boundary
 
@@ -303,12 +259,14 @@ has been selected. The proposed local synthetic path above uses Kafka for testin
 
 ### Language and records
 
-Implement future ChargeShare adapters, session reconstruction, pricing, private
-view and CSV in Rust. Keep the official Go receiver as a separate external
-service; do not rewrite its protocol. Node.js/npm is development tooling only.
-SQLite, persistence and the private view are not current dependencies.
+Keep ChargeShare backend adapters, reconstruction, pricing and future persisted
+views/CSV in Rust; the official Go receiver stays external. The implemented
+React/TypeScript frontend uses Node.js/npm tooling. SQLite and persistence now
+belong to the outer synthetic ingestion crate; production private views remain
+future work.
 
-Proposed records:
+Future real-data records require a separately reviewed retention/privacy contract;
+they are not the current curated synthetic SQLite schema. Candidate records:
 
 - Raw event: private vehicle identity, source/receipt timestamps, field/value/unit,
   invalid status, payload hash, original evidence reference and schema version
