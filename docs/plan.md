@@ -62,17 +62,34 @@ outside stage 1.
 
 ## Stage 2 Durable Rust ingestion
 
-After verified schema/delivery, propose ingestion separately.
-Define the outer consumer/normalizer, synthetic identity mapping, retained evidence,
-SQLite migrations, deduplication and atomic transaction/consumer-progress contract.
-Keep payload/database types outside the core. Define how retained evidence
-reconstructs session boundaries without invented samples or completion from silence.
+**Status:** Proposed in the separate [durable ingestion change](../openspec/changes/durable-synthetic-ingestion/proposal.md),
+stacked on the stage-1 PR. Its [design](../openspec/changes/durable-synthetic-ingestion/design.md),
+[detailed contract](../openspec/changes/durable-synthetic-ingestion/specs/durable-telemetry-ingestion/spec.md)
+and [tasks](../openspec/changes/durable-synthetic-ingestion/tasks.md) are ready for review; implementation
+has not started. Stage 1's published PR is still planning-only, and its verified
+decoded schema and transport acceptance remain prerequisites.
 
-**Acceptance:** Scoped multi-vehicle mapping, deterministic duplicate/reordered/late
-replay, visible missing/invalid/conflicting readings, safe diagnostics and
-unknown-identity rejection. Exercise reconnect/restart and crashes between reading and committing,
-without lost accepted evidence or inflated energy. Production allowlists, real
-retention, authentication and provisioning need separate contracts.
+Define the outer Rust consumer/normalizer, configured synthetic identity mapping,
+evidence retention and SQLite schema. Specify deduplication, late/conflicting
+messages, transaction boundaries and durable consumer progress before building.
+Keep upstream payload types and database details out of the core. Decide how
+retained transport evidence reconstructs the domain's explicit session boundaries
+without inventing samples or treating silence as completion. The proposed local
+synthetic manifest supplies explicit connection/position/boundary annotations
+that receiver records do not provide; it does not establish real vehicle
+boundary semantics. Stage 2 retains observed evidence and defaults reconstructed
+sessions to unconfirmed. Persisted review decisions and results remain stage 3.
+
+**Acceptance:** Fixed multi-vehicle records map into valid scoped core events;
+duplicates and reordered/late input replay deterministically without double
+counting. Missing, invalid and conflicting readings remain visible. Demonstrate
+reconnect and restart at transaction/consumer-progress boundaries, including a
+crash between reading and committing, with no lost accepted evidence or inflated
+energy. Review safe diagnostics and unknown-identity rejection.
+
+**Boundary:** Durable synthetic ingestion and replay only. Production allowlists,
+real telemetry retention, account authentication and vehicle provisioning need
+their own reviewed contracts before any live input.
 
 ## Stage 3 Persisted charging results
 
