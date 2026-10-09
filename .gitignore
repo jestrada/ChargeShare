@@ -103,4 +103,5 @@ security-reports/
 
 __pycache__/
 *.py[cod]
+.local-runtime/
 .local-runtime-run.lock

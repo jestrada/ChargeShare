@@ -1,13 +1,16 @@
 # Testing and verification
 
 Spec 1 has been approved for implementation and now has an offline Rust suite.
-The approved local receiver-to-Kafka harness is described in [local development](local-development.md). Its adapter, durable ingestion and receiver-backed dashboard remain later changes.
+The verified receiver-to-Kafka harness is described in [local development](local-development.md).
+The [stage-2 ingestion change](../openspec/changes/durable-synthetic-ingestion/proposal.md)
+is approved and partially applied; actual receiver-backed ingestion acceptance
+remains pending. Persisted results/API/dashboard reads remain stage 3.
 
 Offline session pricing adds 15 acceptance tests in
 `crates/chargeshare-core/tests/offline_pricing.rs` and five unit tests for money
 and tariff primitives. The existing 17 acceptance tests and two energy tests are
 unchanged. The [pricing contract](pricing.md) describes the implemented scope.
-The preview adds twelve Rust route/fixture/rate-table tests, for 51 workspace tests total.
+The preview adds twelve Rust route/fixture/rate-table tests, for 51 baseline tests.
 Its React frontend has a TypeScript/production-build check and local browser
 verification described in [local preview](local-preview.md).
 
@@ -23,6 +26,26 @@ or fewer than 15 pricing scenarios, and produces a safe synthetic
 summary plus test log. The allowlisted artifact has seven-day retention and is
 uploaded on success or failure. No `continue-on-error`, credentials or network
 calls are used in the domain suite. Dependency/tool downloads are setup only.
+
+## Durable synthetic ingestion verification
+
+The outer crate adds 64 focused tests, for 115 workspace tests. Commands and
+limits are in [durable ingestion](durable-ingestion.md). Local checks on 2026-10-09:
+
+- Complete workspace and unchanged offline wrapper: 115 passed, zero failed/ignored/filtered
+- Focused ingestion wrapper and four failure-guard tests passed
+- Rust formatting, warnings-denied Clippy, frontend build, strict OpenSpec and security guards passed
+- Independent code review found no unresolved implementation findings; repeated parallel recovery checks passed
+- Separate verification combined recovered parent `ec1c892` with the same ingestion source: 125 Rust tests, formatting and Clippy passed; the exact parent's 51 runtime helper tests also passed
+- Candidate records match all six recovered parent fixture records; this establishes fixture provenance only
+
+The combined check used a separate detached worktree and did not rewrite either
+PR. No actual receiver/Kafka stack ran here: Docker/Nix execution was unavailable,
+the parent's published branch is still `fb6b2d3`, and its broker epoch lifecycle
+is incomplete. The focused Kafka tests use librdkafka's local mock cluster. The
+dedicated actual-receiver ingestion CI task and archive remain unchecked. Hosted
+checks must be verified on the exact published head; local or historical results
+do not establish that outcome.
 
 ## Spec 1 scenario coverage
 

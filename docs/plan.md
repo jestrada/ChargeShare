@@ -5,7 +5,11 @@ Each needs reviewed acceptance; this roadmap authorizes no implementation,
 deployment, credentials, spending or vehicle access.
 
 Offline ledger/pricing, fixture preview and stage 1's synthetic receiver/Kafka
-harness are implemented and verified. Stages 2–4 need separate changes.
+harness are implemented and verified. Stage 2 has independently tested candidate
+normalization, SQLite recovery and mocked Kafka replay; its actual receiver-backed
+ingestion acceptance remains pending. Persisted results and Cloudflare need
+separate changes. See [architecture](architecture.md), [pricing](pricing.md) and
+[local preview](local-preview.md) for existing behavior.
 
 ## Route to a working POC
 
@@ -13,7 +17,7 @@ harness are implemented and verified. Stages 2–4 need separate changes.
 flowchart LR
     baseline["Implemented baseline<br/>Offline core + fixture preview"]
     harness["1 Verified receiver harness<br/>Nix + Tilt + Kafka"]
-    ingestion["2 Future durable ingestion<br/>Rust adapter + SQLite"]
+    ingestion["2 Partially applied ingestion<br/>Rust adapter + SQLite"]
     results["3 Future persisted results<br/>Core + API + dashboard"]
     cloudflare["4 Future Cloudflare POC<br/>Architecture + Terraform"]
     baseline --> harness --> ingestion --> results --> cloudflare
@@ -62,17 +66,20 @@ outside stage 1.
 
 ## Stage 2 Durable Rust ingestion
 
-**Status:** Proposed in [draft PR #6](https://github.com/jestrada/ChargeShare/pull/6),
+**Status:** Approved and partially applied in [draft PR #6](https://github.com/jestrada/ChargeShare/pull/6),
 stacked on [PR #5](https://github.com/jestrada/ChargeShare/pull/5), with a separate
 [durable ingestion change](../openspec/changes/durable-synthetic-ingestion/proposal.md). Its [design](../openspec/changes/durable-synthetic-ingestion/design.md),
 [detailed contract](../openspec/changes/durable-synthetic-ingestion/specs/durable-telemetry-ingestion/spec.md)
-and [tasks](../openspec/changes/durable-synthetic-ingestion/tasks.md) are ready for review; implementation
-has not started. Stage 1's published PR is still planning-only, and its verified
-decoded schema and transport acceptance remain prerequisites.
+and [tasks](../openspec/changes/durable-synthetic-ingestion/tasks.md) track the accepted scope. Candidate normalization,
+atomic SQLite evidence/progress and scoped replay have focused tests; see the
+[implementation guide](durable-ingestion.md). Stage 1's published branch is still
+planning-only. Its recovered `ec1c892` implementation preserves the later ACK
+fixes, but publication, broker epoch lifecycle and actual receiver acceptance
+remain prerequisites for end-to-end acceptance.
 
-Define the outer Rust consumer/normalizer, configured synthetic identity mapping,
-evidence retention and SQLite schema. Specify deduplication, late/conflicting
-messages, transaction boundaries and durable consumer progress before building.
+The outer Rust consumer/normalizer implements configured synthetic identity mapping,
+evidence retention, SQLite schema, deduplication, late/conflicting messages and
+transactional consumer progress under the reviewed spec.
 Keep upstream payload types and database details out of the core. Decide how
 retained transport evidence reconstructs the domain's explicit session boundaries
 without inventing samples or treating silence as completion. The proposed local

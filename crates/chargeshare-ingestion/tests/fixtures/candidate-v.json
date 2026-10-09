@@ -1,0 +1,214 @@
+{
+  "provenance": {
+    "classification": "synthetic_candidate_decoded_fixture",
+    "receiver_revision": "bd076fe1494841707528449560c4a19d0d426da4",
+    "source": "stage-1 dev/fixtures.json complete expected records",
+    "actual_receiver_transport_verified": false
+  },
+  "records": [
+    {
+      "key": "device-1",
+      "payload": {
+        "data": [
+          {
+            "key": "VehicleName",
+            "value": {
+              "stringValue": "Synthetic vehicle 1"
+            }
+          },
+          {
+            "key": "BatteryLevel",
+            "value": {
+              "stringValue": "50"
+            }
+          },
+          {
+            "key": "DetailedChargeState",
+            "value": {
+              "detailedChargeStateValue": "DetailedChargeStateCharging"
+            }
+          },
+          {
+            "key": "ACChargingEnergyIn",
+            "value": {
+              "stringValue": "100.00"
+            }
+          }
+        ],
+        "createdAt": "2026-09-01T12:00:00Z",
+        "vin": "device-1",
+        "isResend": false
+      }
+    },
+    {
+      "key": "device-2",
+      "payload": {
+        "data": [
+          {
+            "key": "VehicleName",
+            "value": {
+              "stringValue": "Synthetic vehicle 2"
+            }
+          },
+          {
+            "key": "BatteryLevel",
+            "value": {
+              "stringValue": "50"
+            }
+          },
+          {
+            "key": "DetailedChargeState",
+            "value": {
+              "detailedChargeStateValue": "DetailedChargeStateCharging"
+            }
+          },
+          {
+            "key": "ACChargingEnergyIn",
+            "value": {
+              "stringValue": "200.00"
+            }
+          }
+        ],
+        "createdAt": "2026-09-01T12:00:00Z",
+        "vin": "device-2",
+        "isResend": false
+      }
+    },
+    {
+      "key": "device-1",
+      "payload": {
+        "data": [
+          {
+            "key": "VehicleName",
+            "value": {
+              "stringValue": "Synthetic vehicle 1"
+            }
+          },
+          {
+            "key": "BatteryLevel",
+            "value": {
+              "stringValue": "51"
+            }
+          },
+          {
+            "key": "DetailedChargeState",
+            "value": {
+              "detailedChargeStateValue": "DetailedChargeStateCharging"
+            }
+          },
+          {
+            "key": "ACChargingEnergyIn",
+            "value": {
+              "stringValue": "100.25"
+            }
+          }
+        ],
+        "createdAt": "2026-09-01T12:05:00Z",
+        "vin": "device-1",
+        "isResend": false
+      }
+    },
+    {
+      "key": "device-2",
+      "payload": {
+        "data": [
+          {
+            "key": "VehicleName",
+            "value": {
+              "stringValue": "Synthetic vehicle 2"
+            }
+          },
+          {
+            "key": "BatteryLevel",
+            "value": {
+              "stringValue": "51"
+            }
+          },
+          {
+            "key": "DetailedChargeState",
+            "value": {
+              "detailedChargeStateValue": "DetailedChargeStateCharging"
+            }
+          },
+          {
+            "key": "ACChargingEnergyIn",
+            "value": {
+              "stringValue": "200.125"
+            }
+          }
+        ],
+        "createdAt": "2026-09-01T12:05:00Z",
+        "vin": "device-2",
+        "isResend": false
+      }
+    },
+    {
+      "key": "device-1",
+      "payload": {
+        "data": [
+          {
+            "key": "VehicleName",
+            "value": {
+              "stringValue": "Synthetic vehicle 1"
+            }
+          },
+          {
+            "key": "BatteryLevel",
+            "value": {
+              "stringValue": "52"
+            }
+          },
+          {
+            "key": "DetailedChargeState",
+            "value": {
+              "detailedChargeStateValue": "DetailedChargeStateComplete"
+            }
+          },
+          {
+            "key": "ACChargingEnergyIn",
+            "value": {
+              "stringValue": "100.50"
+            }
+          }
+        ],
+        "createdAt": "2026-09-01T12:10:00Z",
+        "vin": "device-1",
+        "isResend": false
+      }
+    },
+    {
+      "key": "device-2",
+      "payload": {
+        "data": [
+          {
+            "key": "VehicleName",
+            "value": {
+              "stringValue": "Synthetic vehicle 2"
+            }
+          },
+          {
+            "key": "BatteryLevel",
+            "value": {
+              "stringValue": "52"
+            }
+          },
+          {
+            "key": "DetailedChargeState",
+            "value": {
+              "detailedChargeStateValue": "DetailedChargeStateComplete"
+            }
+          },
+          {
+            "key": "ACChargingEnergyIn",
+            "value": {
+              "stringValue": "200.25"
+            }
+          }
+        ],
+        "createdAt": "2026-09-01T12:10:00Z",
+        "vin": "device-2",
+        "isResend": false
+      }
+    }
+  ]
+}
