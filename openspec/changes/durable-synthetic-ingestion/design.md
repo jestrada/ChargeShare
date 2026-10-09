@@ -2,22 +2,22 @@
 
 ## Context
 
-See [proposal](proposal.md) for scope. Parent [PR #5](https://github.com/jestrada/ChargeShare/pull/5) at `fb6b2d3` contains transport plans. Its harness implementation is unpublished and receiver/Kafka acceptance remains unverified. This proposal does not change that status.
+See [proposal](proposal.md) for scope. Parent [PR #5](https://github.com/jestrada/ChargeShare/pull/5) at `fb6b2d3` contains transport plans. Its recovered harness implementation at `ec1c892` is absent from that published branch, and receiver/Kafka acceptance remains unverified. The approved stage-2 implementation has separate local/mocked evidence; it does not satisfy that transport gate.
 
 ```mermaid
 flowchart LR
     receiver["Tesla upstream receiver<br/>Stage 1 prerequisite"] --> kafka["Apache Kafka<br/>Stage 1 prerequisite"]
-    kafka --> adapter["ChargeShare Rust normalizer<br/>Proposed stage 2"]
+    kafka --> adapter["ChargeShare Rust normalizer<br/>Implemented candidate contract"]
     manifest["ChargeShare mapping + manifest<br/>Synthetic annotations"] --> adapter
     adapter --> transaction["ChargeShare SQLite transaction<br/>Evidence + disposition + progress"]
-    transaction --> replay["ChargeShare scoped replay<br/>Proposed stage 2"]
+    transaction --> replay["ChargeShare scoped replay<br/>Implemented local recovery"]
     replay --> core["Existing pure Rust core<br/>Sessions + exact energy"]
     core -.-> later["Deferred stage 3<br/>Persisted results + dashboard"]
 ```
 
 Arrows show runtime flow. Imports point inward: ingestion imports the core; the core imports no Kafka, SQL or receiver types. Tesla/Kafka/SQLite own upstream software; ChargeShare owns normalization, schema and transactions. Stage 1 owns transport, trust and broker lifecycle.
 
-Inspected candidate receiver `V` output contains fictional key/`vin`, `createdAt`, typed fields and `isResend`. It lacks core connection/position/explicit boundary metadata. Capture its actual pinned schema before implementation; local fixture code is not transport acceptance.
+Inspected candidate receiver `V` output contains fictional key/`vin`, `createdAt`, typed fields and `isResend`. It lacks core connection/position/explicit boundary metadata. Six candidate records match recovered parent `ec1c892` fixtures exactly. Capture actual pinned receiver output before integration acceptance; fixture equivalence is not transport acceptance.
 
 ## Goals / Non-Goals
 
@@ -29,7 +29,7 @@ Inspected candidate receiver `V` output contains fictional key/`vin`, `createdAt
 
 ### 1. Outer Rust responsibilities
 
-Add one cohesive ingestion crate with decoding, identity/manifest, SQLite and replay modules and a small facade. Preserve the existing core API/dependencies. Pin compatible Kafka/SQLite/serialization dependencies during approved apply and verify actual client controls. Avoid speculative repository/service frameworks. Follow the no-comments code rule.
+The ingestion crate has decoding, identity/manifest, SQLite, Kafka and replay modules and a small facade. Existing core API/dependencies are unchanged. Kafka/SQLite/serialization dependencies are locked; focused tests verify client controls. Avoid speculative repository/service frameworks. Follow the no-comments code rule.
 
 Alternative: SQL/Kafka inside the core violates its offline boundary; independent microservices add consistency costs without a POC need.
 
@@ -59,7 +59,7 @@ Process fetched records in partition order. One SQLite transaction stores dispos
 
 Verify WAL, `synchronous=FULL`, foreign keys and bounded busy timeout. Keep the database and WAL/SHM companions on one owned ignored local filesystem. Storage failure stops consumption without advancing progress.
 
-Kafka's [external offset storage guidance](https://kafka.apache.org/41/javadoc/org/apache/kafka/clients/consumer/KafkaConsumer.html) supports atomic results/position storage and recovery seek. SQLite's [synchronous](https://www.sqlite.org/pragma.html#pragma_synchronous) and [WAL guidance](https://www.sqlite.org/wal.html) inform local durability settings; this unimplemented proposal has no runtime acceptance evidence.
+Kafka's [external offset storage guidance](https://kafka.apache.org/41/javadoc/org/apache/kafka/clients/consumer/KafkaConsumer.html) supports atomic results/position storage and recovery seek. SQLite's [synchronous](https://www.sqlite.org/pragma.html#pragma_synchronous) and [WAL guidance](https://www.sqlite.org/wal.html) inform local durability settings. Child-process recovery tests establish local SQLite behavior; they do not establish the actual receiver path.
 
 Alternative: separate broker/evidence commits introduce a second recovery authority; before-write checkpointing can lose evidence. No broker-wide exactly-once claim is made.
 
@@ -77,7 +77,7 @@ Register frozen aliases and ingest all retained variants through the existing sc
 
 ## Risks / Trade-offs
 
-- [Unverified parent schema/transport] → Gate apply/integration on pinned decoded output and actual receiver acceptance.
+- [Unverified parent transport] → Keep candidate implementation evidence separate and gate integration acceptance on pinned decoded output, published lifecycle and actual receiver acceptance.
 - [Synthetic annotations resemble measured facts] → Preserve provenance; forbid counter substitution or inferred End.
 - [Rejected/missing evidence hides incompleteness] → Safe dispositions and explicit complete-fixture failure.
 - [Storage/retention loss] → Fail recovery gaps, preserve state and bound guarantees to tested local recovery.
@@ -85,6 +85,6 @@ Register frozen aliases and ingest all retained variants through the existing sc
 
 ## Migration Plan
 
-This PR adds planning only. After apply approval and parent verification, implement each tested/documented task, initialize isolated SQLite and run actual receiver/recovery acceptance on Linux. Rollback preserves the database and parent harness; deployment is excluded.
+Apply was approved on 2026-10-09. Independently testable normalization, SQLite recovery, bounded mocked Kafka and replay are implemented. The [guide](../../../docs/durable-ingestion.md) records remaining parent/lifecycle/actual-receiver gates and guarantee limits. Rollback preserves the database and parent harness; deployment is excluded.
 
 Before a separately authorized merge, complete review/implementation/verification, sync this accepted delta and archive only this change on its PR, then reverify the final commit. The active parent change remains independent; planning completeness is not implementation completion.
