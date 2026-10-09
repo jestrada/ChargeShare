@@ -93,7 +93,7 @@ it on restart and replacing it on explicit reset. The reviewed Kafka endpoint
 is `kafka:9092`
 inside its private Compose network, with no host listener. An in-network ingestion
 runner and receiver → Kafka → SQLite → scoped replay acceptance are still pending.
-[Stage 3](plan.md#stage-3-persisted-charging-results) adds the all-services
+[Stage 3](plan.md#stage-3-run-the-persisted-synthetic-poc-end-to-end) adds the all-services
 startup/readiness and persisted priced API/dashboard path; it does not make these
 parent or ingestion gates complete by moving them to another PR.
 
