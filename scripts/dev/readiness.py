@@ -3,9 +3,12 @@ import json
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+from runtime import ProjectRuntime, RuntimeFailure, SYNTHETIC_LABEL, run_command
 
 
-RESOURCES = ("kafka", "receiver", "rust-build", "frontend-install", "fixture-api", "fixture-dashboard", "receiver-ready")
+RESOURCES = ("kafka", "broker-ready", "receiver", "rust-build", "frontend-install", "fixture-api", "fixture-dashboard", "receiver-ready")
 STATES = {"none", "pending", "in_progress", "ok", "error", "not_applicable"}
 HEALTH_STATES = {"starting", "healthy", "unhealthy"}
 FAILURE_CATEGORIES = {
@@ -16,6 +19,9 @@ FAILURE_CATEGORIES = {
     "readiness: receiver status": "receiver-status",
     "readiness: expected receiver authenticated status": "receiver-status",
     "Connection refused": "receiver-connect",
+    "transport: receiver unavailable": "receiver-connect",
+    "readiness: authenticated receiver TLS": "receiver-authentication",
+    "Owned service health failed": "container-health",
 }
 
 
@@ -48,11 +54,60 @@ def failure_categories(output):
 
 def report_failure_categories():
     try:
-        completed = subprocess.run(["tilt", "logs", "receiver-ready", "--source", "build", "--tail", "30"], capture_output=True, text=True, timeout=5)
+        completed = subprocess.run(["tilt", "logs", "broker-ready", "receiver-ready", "--source", "all", "--tail", "50"], capture_output=True, text=True, timeout=5)
         categories = failure_categories(completed.stdout + completed.stderr)
     except (OSError, subprocess.TimeoutExpired):
         categories = ["diagnostic-unavailable"]
     print("readiness failure categories: " + json.dumps(categories), flush=True)
+
+
+def service_healths(runtime, containers, names):
+    states = {name: {"running": False, "health": "missing", "exited": False} for name in names}
+    observed = set()
+    for container in containers:
+        labels = container.get("Config", {}).get("Labels") or {}
+        name = labels.get("com.docker.compose.service")
+        if labels.get("com.docker.compose.project") != runtime.project_name or labels.get(SYNTHETIC_LABEL) != "true" or name not in {"kafka", "receiver"} or name in observed:
+            raise ReadinessFailure("Cannot establish exact owned service health.")
+        observed.add(name)
+        if name in states:
+            state = container.get("State", {})
+            health = state.get("Health", {}).get("Status")
+            states[name] = {
+                "running": state.get("Running") is True,
+                "health": health if health in HEALTH_STATES else "unknown",
+                "exited": state.get("Status") in {"exited", "dead"},
+            }
+    return states
+
+
+def read_service_health(runtime, names, command_runner=run_command):
+    try:
+        identifiers = command_runner(["docker", "ps", "--all", "--filter", "label=com.docker.compose.project=" + runtime.project_name, "--format", "{{.ID}}"], runtime.environment()).split()
+        containers = json.loads(command_runner(["docker", "inspect", *identifiers], runtime.environment())) if identifiers else []
+        return service_healths(runtime, containers, names)
+    except (RuntimeFailure, json.JSONDecodeError):
+        raise ReadinessFailure("Owned service health query failed.") from None
+
+
+def wait_service_health(names, timeout, reader, monotonic=time.monotonic, sleeper=time.sleep, report=print):
+    deadline = monotonic() + timeout
+    previous = None
+    next_report = 0
+    while monotonic() < deadline:
+        states = reader()
+        now = monotonic()
+        if states != previous or now >= next_report:
+            report("owned service health: " + json.dumps(states, sort_keys=True), flush=True)
+            previous = states
+            next_report = now + 30
+        failed = [name for name, state in states.items() if state["exited"] or state["health"] == "unhealthy"]
+        if failed:
+            raise ReadinessFailure("Owned service health failed: " + ", ".join(failed))
+        if now < deadline and all(states[name]["running"] and states[name]["health"] == "healthy" for name in names):
+            return
+        sleeper(min(1, max(0, deadline - now)))
+    raise ReadinessFailure("Owned service health exceeded " + str(timeout) + " seconds")
 
 
 def read_resources():
@@ -88,14 +143,22 @@ def wait_ready(names, timeout, reader=read_resources, monotonic=time.monotonic, 
 def main():
     parser = argparse.ArgumentParser(description="Wait for owned Tilt interfaces and report only allowlisted resource state.")
     parser.add_argument("--timeout", type=int, required=True)
+    parser.add_argument("--service-health", action="store_true")
     parser.add_argument("resources", nargs="+", choices=RESOURCES)
     options = parser.parse_args()
     if options.timeout <= 0 or options.timeout > 900:
         parser.error("timeout must be between 1 and 900 seconds")
     try:
-        wait_ready(options.resources, options.timeout)
+        if options.service_health:
+            if any(name not in {"kafka", "receiver"} for name in options.resources):
+                parser.error("service health is restricted to kafka and receiver")
+            runtime = ProjectRuntime.at(Path(__file__).resolve().parents[2])
+            wait_service_health(options.resources, options.timeout, reader=lambda: read_service_health(runtime, options.resources))
+        else:
+            wait_ready(options.resources, options.timeout)
     except ReadinessFailure as failure:
-        report_failure_categories()
+        if not options.service_health:
+            report_failure_categories()
         print("readiness failed: " + str(failure), file=sys.stderr)
         return 1
     return 0

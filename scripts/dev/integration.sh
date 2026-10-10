@@ -62,7 +62,7 @@ start_stack() {
     sleep 1
   done
   tilt wait --for=condition=Ready 'uiresource/(Tiltfile)' --timeout 90s
-  python3 scripts/dev/readiness.py --timeout 900 kafka receiver rust-build receiver-ready | tee -a "$summary"
+  python3 scripts/dev/readiness.py --timeout 900 kafka broker-ready receiver rust-build receiver-ready | tee -a "$summary"
   python3 scripts/dev/readiness.py --timeout 300 frontend-install fixture-api fixture-dashboard | tee -a "$summary"
   record 'PASS: protocol/status readiness and independent fixture preview'
 }

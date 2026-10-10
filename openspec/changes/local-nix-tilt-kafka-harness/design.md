@@ -103,6 +103,15 @@ resource dependencies. TCP/process startup cannot pass transport acceptance.
 Inspect pinned-version behavior before selecting probes; document final log/status
 commands and resource names.
 
+Tilt 0.37.7 marks Compose resources ready when their processes run, including
+while Docker health is still starting. Cold compilation masked this race. Add
+an explicit `broker-ready` local prerequisite that waits up to 180 seconds for
+the owned Kafka protocol healthcheck before starting receiver. The final
+`receiver-ready` probe likewise waits for authenticated receiver health before
+its metadata/topic/status checks. Failed/exited owned containers fail promptly;
+missing/starting interfaces remain pending only until their bound. Keep the
+existing manual ACK-plus-record acceptance separate from readiness.
+
 Containers reduce host coupling; omit second orchestrators and observability stacks.
 
 ### 3. Kafka provides the retained handoff

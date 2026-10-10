@@ -34,6 +34,7 @@ class TiltfileLifecycleTests(unittest.TestCase):
 
         def resource(*arguments, **options):
             observed.append(arguments)
+            observed.append({"arguments": arguments, "options": options})
 
         namespace = {
             "config": SimpleNamespace(tilt_subcommand=action),
@@ -78,6 +79,13 @@ class TiltfileLifecycleTests(unittest.TestCase):
     def test_cached_receiver_does_not_bypass_invalid_startup_trust(self):
         with self.assertRaisesRegex(runtime.RuntimeFailure, "Incomplete synthetic certificate bundle"):
             self.evaluate("up", "Incomplete synthetic certificate bundle", prebuilt=True)
+
+    def test_receiver_startup_depends_on_broker_protocol_health(self):
+        observed = self.evaluate("up", None)
+        resources = {item["arguments"][0]: item["options"] for item in observed if isinstance(item, dict) and item["arguments"]}
+        self.assertEqual(resources["receiver"]["resource_deps"], ["broker-ready"])
+        self.assertEqual(resources["broker-ready"]["resource_deps"], ["kafka"])
+        self.assertIn("--service-health --timeout 180 kafka", resources["broker-ready"]["cmd"])
 
 
 def synthetic_compose(project):

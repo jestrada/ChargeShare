@@ -448,3 +448,20 @@ then failed the multiset assertion. Both retained the failure exit status,
 completed teardown and uploaded only the allowlisted summary and versions.
 The push job took 4m31s; this was an assertion failure, not a setup failure.
 The setting has been removed for full acceptance.
+
+### Cache creation and startup race evidence
+
+The [first cached-build run](https://github.com/jestrada/ChargeShare/actions/runs/38080187563)
+on commit `4eb5f9c019c307ce3d4955919c4b26680f108a7c` passed 56 runtime,
+eight readiness and four cached-image tests. It created the Nix tool cache and
+all receiver build-stage layers before generating trust. The cold locked shell
+step took 42 seconds, Nix cache save 15 seconds, and receiver build/load/export
+4m22s, including the first cache upload. Ordinary repository checks passed.
+
+The safe resource report showed Kafka and receiver with Tilt `Ready=True` while
+Docker health was `starting`; `receiver-ready` then failed. Fail-fast detection
+and cleanup completed the integration step in 37 seconds, rather than waiting
+15 minutes. The added broker-health prerequisite and receiver-health wait
+address this cold/warm startup race without changing transport assertions or
+retained-state/reset scenarios. Passing warm-cache and complete lifecycle
+acceptance remain pending.

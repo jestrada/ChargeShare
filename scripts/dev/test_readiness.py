@@ -1,5 +1,6 @@
 import json
 import unittest
+from types import SimpleNamespace
 
 import readiness
 
@@ -14,6 +15,44 @@ def document(ready=False, update="ok", runtime="pending", error=""):
 
 
 class ReadinessTests(unittest.TestCase):
+    def test_running_broker_with_starting_health_blocks_receiver_startup(self):
+        current = [0]
+        observed = []
+
+        def reader():
+            observed.append(current[0])
+            return {"kafka": {"running": True, "health": "healthy" if current[0] >= 2 else "starting", "exited": False}}
+
+        def sleep(duration):
+            current[0] += duration
+
+        readiness.wait_service_health(["kafka"], 3, reader=reader, monotonic=lambda: current[0], sleeper=sleep, report=lambda *args, **kwargs: None)
+        self.assertEqual(observed, [0, 1, 2])
+
+    def test_unhealthy_or_exited_service_fails_without_waiting(self):
+        for state in ({"running": True, "health": "unhealthy", "exited": False}, {"running": False, "health": "unknown", "exited": True}):
+            with self.subTest(state=state), self.assertRaisesRegex(readiness.ReadinessFailure, "kafka"):
+                readiness.wait_service_health(["kafka"], 180, reader=lambda: {"kafka": state}, sleeper=lambda duration: self.fail("Terminal failure must not wait"), report=lambda *args, **kwargs: None)
+
+    def test_health_inspection_rejects_unrelated_ownership_and_filters_details(self):
+        project = SimpleNamespace(project_name="synthetic-project")
+        container = {"Config": {"Labels": {"com.docker.compose.project": "synthetic-project", "com.docker.compose.service": "kafka", readiness.SYNTHETIC_LABEL: "true"}}, "State": {"Running": True, "Status": "running", "Health": {"Status": "starting", "Log": [{"Output": "never-emit-health-details"}]}}}
+        states = readiness.service_healths(project, [container], ["kafka"])
+        self.assertNotIn("never-emit", json.dumps(states))
+        container["Config"]["Labels"]["com.docker.compose.project"] = "unrelated-project"
+        with self.assertRaises(readiness.ReadinessFailure):
+            readiness.service_healths(project, [container], ["kafka"])
+
+    def test_missing_service_health_expires_at_deadline(self):
+        current = [0]
+
+        def sleep(duration):
+            current[0] += duration
+
+        with self.assertRaisesRegex(readiness.ReadinessFailure, "2 seconds"):
+            readiness.wait_service_health(["kafka"], 2, reader=lambda: {"kafka": {"running": False, "health": "missing", "exited": False}}, monotonic=lambda: current[0], sleeper=sleep, report=lambda *args, **kwargs: None)
+        self.assertEqual(current[0], 2)
+
     def test_running_process_does_not_count_as_ready(self):
         state = readiness.resource_states(document(runtime="ok"), ["receiver-ready"])
         self.assertFalse(state["receiver-ready"]["ready"])

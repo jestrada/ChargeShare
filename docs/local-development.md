@@ -48,6 +48,7 @@ remain untrusted.
 | Tilt resource | Responsibility / readiness |
 | --- | --- |
 | kafka | Single KRaft broker, private container `kafka:9092`; Kafka metadata request |
+| broker-ready | Owned Kafka container health must pass its metadata-request probe before receiver startup |
 | receiver | Official decoded JSON dispatcher; authenticated `/status` on loopback `https://127.0.0.1:8443` |
 | rust-build | Locked workspace compilation, including outer transport harness |
 | frontend-install | Locked `apps/web` npm install |
@@ -90,6 +91,16 @@ verification command has a 25-second deadline; Kafka record observation is
 The upstream producer has `acks=all` and a 10-second message timeout, with
 reliable V acknowledgments configured to Kafka. This single-broker development
 policy is separate from future database/offset atomicity and durability.
+
+CI reports allowlisted Tilt resource states, health and dependency blockers as
+they change. A terminal resource failure exits immediately instead of consuming
+the entire readiness timeout; pending resources retain their bounded deadline.
+Only known failure categories are retained, with raw local logs excluded.
+The broker and receiver each have a 180-second interface-health deadline. Tilt's
+Compose process-ready condition can become true while Docker health is still
+starting, so `broker-ready` explicitly gates receiver startup on Kafka protocol
+health. The final probe waits for authenticated receiver health before checking
+broker metadata/topic creation and the receiver status response.
 
 A stage-specific nonzero exit identifies prerequisite, authentication,
 acknowledgment, broker-observation or matching failure. An ACK alone cannot
@@ -150,6 +161,20 @@ full clean resets. An overall timeout and exit-preserving cleanup bound the job.
 Only versions, stage summaries and synthetic normalized results are uploaded;
 private material and unrestricted local logs are excluded. Cloudflare,
 ingestion, SQLite and receiver-backed dashboard behavior are not covered.
+
+CI restores pinned Nix store outputs and receiver build layers using GitHub's
+cache before generating test trust. Nix keys include the installer version,
+Linux architecture and flake/toolchain inputs. Receiver cache scopes include the
+reviewed Dockerfile, upstream pins and build-context definition. The official
+Docker actions use pinned Buildx/BuildKit, load the receiver into this runner's
+daemon, and publish no image or automatic build-record artifact. Tilt accepts
+the loaded image only when its exact job image ID, architecture, upstream
+revision and build-input hash match. It then uses the same resolved service
+configuration without a redundant source build. Local startup keeps source
+builds; shutdown uses the reviewed source configuration and needs no cached image.
+Cache misses follow the pinned download/build path. Runtime certificates,
+payloads, logs, offsets and broker volumes are never cached. Timing and full
+acceptance evidence are recorded after terminal hosted verification.
 
 Implementation validation on this editing sandbox: flake evaluation/lock
 stability, pinned CLI version checks, Rust formatting/Clippy/workspace tests,
