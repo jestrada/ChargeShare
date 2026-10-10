@@ -4,6 +4,9 @@ context: |
   ChargeShare is a multi-vehicle Tesla AC charging reimbursement proof of concept.
   Implemented milestones are offline synthetic session/energy isolation and exact
   synthetic pricing, plus a loopback Rust API with a React/shadcn demo dashboard.
+  Repository issue tracking uses GitHub Issues in jestrada/ChargeShare through gh.
+  Follow docs/agents/issue-tracker.md and pass it to delegated agents. Keep OpenSpec
+  artifacts and implementation checklists here, linking them from related issues.
   Review one spec at a time; implementation requires a later explicit request.
   Archive completed changes before merging their PR, after review, implementation
   and verification. Sync accepted delta requirements into openspec/specs, then move

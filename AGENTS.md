@@ -10,6 +10,7 @@ Do not add comments to authored code, including Rust doc comments. Make intent c
 
 ## Working rules
 
+- Create or switch to a dedicated branch before editing, and commit and push that branch. Do not commit or push directly to `main` unless the user explicitly authorizes an exception for the current change.
 - Keep domain logic and backend source in Rust. The user-authorized localhost preview uses React/TypeScript and shadcn in `apps/web`; Node.js/npm runs its build/dev tooling and OpenSpec. Keep money calculations in the Rust core.
 - Read [docs/code-design.md](docs/code-design.md) before code or architecture changes. Keep `lib.rs` a small public facade, use cohesive modules and inward domain dependencies, and follow the guide's required decision/review workflow within the approved OpenSpec scope.
 - Keep changes inside this repository. Do not import private repositories, personal correspondence or live vehicle data.
@@ -20,11 +21,21 @@ Do not add comments to authored code, including Rust doc comments. Make intent c
 - Run npm run spec:validate and the security checks described in SECURITY.md before a commit. Review the exact staged diff and paths as well as scanner output. Do not bypass failing hooks.
 - Treat every energy total as a measured or estimated quantity with a stated boundary and quality. Never advertise utility-meter accuracy without evidence.
 
+## Issue tracking
+
+All agents and skills working in this repository use GitHub Issues in
+`jestrada/ChargeShare` through `gh` whenever issue tracking is needed. Read
+[the tracker conventions](docs/agents/issue-tracker.md) before tracker operations,
+and pass the repository and guide path to delegated agents. This tracker is
+already configured; generic skill setup prompts and local-Markdown tracker
+fallbacks do not apply here. Keep OpenSpec artifacts and implementation checklists
+in `openspec/`, linking them from related issues.
+
 ## Wayfinder trial
 
 User-invoked Wayfinder sessions use the repository-local Matt Pocock skills in
-`.agents/skills/`. Track their maps and decision tickets in this repository's
-GitHub Issues through `gh`, following [the tracker conventions](docs/agents/issue-tracker.md).
+`.agents/skills/`. Track their maps and decision tickets using the issue-tracking
+conventions above.
 Wayfinder is approved for exploratory planning. New behavior still needs an
 approved implementation scope and the applicable domain contracts and checks.
 

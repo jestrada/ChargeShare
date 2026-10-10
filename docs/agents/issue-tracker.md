@@ -1,10 +1,22 @@
-# Wayfinder issue tracker
+# Repository issue tracker
 
-Use GitHub Issues in `jestrada/ChargeShare` through the `gh` CLI for Wayfinder maps
-and decision tickets. Run commands from this repository or supply
+Use GitHub Issues in `jestrada/ChargeShare` through the `gh` CLI for repository
+issue tracking, including Wayfinder maps and decision tickets. This applies to
+all agents and skills, including delegated agents and supporting skills invoked
+independently. Run commands from this repository or supply
 `--repo jestrada/ChargeShare` explicitly.
 
-## Trial scope
+This document supplies the tracker configuration expected by the bundled skills.
+Their generic setup prompts and local-Markdown tracker fallbacks do not apply
+here. Pass this guide and the repository name to delegated agents. If `gh` or
+GitHub access is unavailable, report the blocker and retain any draft for later
+publication; do not establish a separate tracker.
+
+Create or update issues when requested or required by the invoked workflow,
+reusing relevant existing issues. Keep OpenSpec artifacts and implementation
+checklists in `openspec/` and link them from related issues.
+
+## Wayfinder trial scope
 
 Invoke `$wayfinder` with the goal to explore or an existing map's issue URL.
 Agree on the destination before creating a map. If the question fits one session,
