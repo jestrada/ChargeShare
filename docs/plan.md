@@ -18,7 +18,7 @@ flowchart LR
     baseline["Implemented baseline<br/>Offline core + fixture preview"]
     harness["1 Verified receiver harness<br/>Nix + Tilt + Kafka"]
     ingestion["2 Partially applied ingestion<br/>Rust adapter + SQLite"]
-    results["3 Future persisted results<br/>Core + API + dashboard"]
+    results["3 Proposed end-to-end POC<br/>Persisted core + API + dashboard"]
     cloudflare["4 Future Cloudflare POC<br/>Architecture + Terraform"]
     baseline --> harness --> ingestion --> results --> cloudflare
 ```
@@ -99,18 +99,49 @@ energy. Review safe diagnostics and unknown-identity rejection.
 real telemetry retention, account authentication and vehicle provisioning need
 their own reviewed contracts before any live input.
 
-## Stage 3 Persisted charging results
+## Stage 3 Run the persisted synthetic POC end to end
 
-After durable ingestion, propose persisted API/dashboard reads using existing
-core session, eligibility and pricing rules. Retain synthetic labels, review boundaries, visible holds, versioned rates and calculation
-provenance; money arithmetic stays in Rust.
+**Status:** Proposed as the third PR in the local stack, based on stage-2
+[PR #6](https://github.com/jestrada/ChargeShare/pull/6), in the separate
+[run-synthetic-poc-end-to-end change](../openspec/changes/run-synthetic-poc-end-to-end/proposal.md).
+Its [design](../openspec/changes/run-synthetic-poc-end-to-end/design.md),
+[contract](../openspec/changes/run-synthetic-poc-end-to-end/specs/persisted-synthetic-results/spec.md)
+and [tasks](../openspec/changes/run-synthetic-poc-end-to-end/tasks.md) are planning only.
+No all-services or receiver-backed dashboard acceptance is claimed.
 
-**Acceptance:** Expected per-vehicle sessions/results across the complete path;
-stable replay/restart without double counting. Missing readings/rates and conflicts
-show held/incomplete results, never invented zeroes. Reject out-of-scope reads and
-reviews. Test persistence/API results rather than treating Kafka success as whole-app
-proof. Real utility calendars, bills, payments, production authentication and cross-owner sharing stay
-outside this local POC; scope checks alone are not authentication.
+Extend the existing pinned Linux Nix/Tilt/Compose graph with one Rust runtime
+inside the private Kafka network, owning ingestion, the embedded SQLite file and
+the scoped persisted API, plus an explicitly persisted dashboard. Preserve the
+independent fixture API/dashboard. Provide one-command startup/readiness,
+explicit finite check, restart, state-preserving stop and narrowly confirmed reset.
+SQLite has no separate server to start. Stage 1's transport/trust/ACK acceptance
+is verified at `33a4568`. Stage 2's broker-epoch and actual receiver-backed
+ingestion/durable replay acceptance remain prerequisites in their original
+change; its incomplete tasks do not move here.
+
+Calculate sessions, observed/eligible/priced energy and exact subtotals through
+the existing Rust core from committed curated evidence. Persist minimal scoped
+manual review revisions and immutable public-sample rate versions with explicit
+synthetic time conversion. Default sessions remain Unconfirmed; explicit review
+cannot clear quality holds, and changed evidence makes earlier review stale until
+reconfirmed. Display missing readings/rates, conflicts and source/review/rate
+provenance. The frontend does no money arithmetic or fixture fallback.
+
+**Acceptance:** A fresh supported Linux checkout starts every configured resource
+through the documented locked command and passes protocol/application readiness.
+A separately triggered finite test proves actual receiver ACK → new Kafka records
+→ committed SQLite evidence/progress → scoped API and persisted-dashboard results.
+Verify unconfirmed zero-eligible results before explicit scoped review/pricing,
+real crash/restart, duplicate/reordered/late input, conflict/missing-data holds,
+retention-gap refusal and safe owned teardown/reset. A dedicated Linux CI gate
+must fail with a deliberately wrong expectation, then pass after restoration on
+the recorded exact commit. Separately execute desktop/mobile UI smoke; readiness,
+fixture previews and API/build checks do not substitute for that evidence.
+
+**Boundary:** A working local synthetic review/pricing POC. Real utility calendars,
+bills, payments/statements, production authentication, cross-owner sharing, live
+Tesla access and deployment remain separate. The final Cloudflare/Terraform stage
+needs its own architecture and actual platform acceptance.
 
 ## Stage 4 Cloudflare architecture and Terraform deployment
 
