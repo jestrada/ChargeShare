@@ -21,12 +21,12 @@ import runtime
 
 
 class TiltfileLifecycleTests(unittest.TestCase):
-    def evaluate(self, action, certificate_failure, configuration_failure=False):
+    def evaluate(self, action, certificate_failure, configuration_failure=False, prebuilt=False):
         observed = []
 
         def local(command, **options):
             observed.append(command)
-            if command.endswith(" prepare"):
+            if command.endswith(" prepare") and certificate_failure:
                 raise runtime.RuntimeFailure(certificate_failure)
             if command.endswith(" validate-config") and configuration_failure:
                 raise runtime.RuntimeFailure("Unsafe Compose configuration")
@@ -37,7 +37,7 @@ class TiltfileLifecycleTests(unittest.TestCase):
 
         namespace = {
             "config": SimpleNamespace(tilt_subcommand=action),
-            "os": SimpleNamespace(putenv=lambda *arguments: None),
+            "os": SimpleNamespace(putenv=lambda *arguments: None, getenv=lambda name: "1" if prebuilt else None),
             "local": local,
             "docker_compose": resource,
             "dc_resource": resource,
@@ -67,6 +67,17 @@ class TiltfileLifecycleTests(unittest.TestCase):
     def test_shutdown_still_refuses_unsafe_configuration(self):
         with self.assertRaisesRegex(runtime.RuntimeFailure, "Unsafe Compose configuration"):
             self.evaluate("down", "Incomplete synthetic certificate bundle", configuration_failure=True)
+
+    def test_cached_receiver_is_startup_only_and_shutdown_uses_reviewed_source_configuration(self):
+        observed = self.evaluate("up", None, prebuilt=True)
+        self.assertIn("python3 scripts/dev/cached_receiver.py compose", observed)
+        observed = self.evaluate("down", "Incomplete synthetic certificate bundle", prebuilt=True)
+        self.assertNotIn("python3 scripts/dev/cached_receiver.py compose", observed)
+        self.assertIn(("dev/compose.yaml",), observed)
+
+    def test_cached_receiver_does_not_bypass_invalid_startup_trust(self):
+        with self.assertRaisesRegex(runtime.RuntimeFailure, "Incomplete synthetic certificate bundle"):
+            self.evaluate("up", "Incomplete synthetic certificate bundle", prebuilt=True)
 
 
 def synthetic_compose(project):

@@ -74,6 +74,12 @@ The harness SHALL run as a dedicated GitHub Actions job on every pull request an
 - **THEN** the job exits unsuccessfully with a safe stage-specific diagnostic
 - **AND** a sender acknowledgment without the required Kafka output cannot pass
 
+#### Scenario: Reuse reviewed build outputs
+- **WHEN** a fresh Linux integration runner restores pinned tool outputs or receiver build layers
+- **THEN** tool versions and lockfiles remain verified and the loaded receiver image matches this job's reviewed build inputs and platform
+- **AND** a cache miss follows the same pinned build path and cache reuse cannot substitute for transport or lifecycle acceptance
+- **AND** caches exclude generated test trust, telemetry, broker state and unrestricted runtime logs
+
 ### Requirement: CI isolation and cleanup
 The integration job MUST use disposable local-test credentials, private container networking and loopback host listeners, without Tesla accounts, real telemetry or repository secrets. It SHALL always tear down its project resources and retain only allowlisted synthetic diagnostic summaries and safe logs, never keys, certificates or unrestricted runtime dumps.
 

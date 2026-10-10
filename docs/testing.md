@@ -423,3 +423,28 @@ input. A cancellable watchdog closes the socket at the 10-second deadline and
 is joined before return. The Docker/Nix
 prerequisites are still absent in this sandbox, so full transport and lifecycle
 tasks remain unchecked.
+
+### Linux workflow activation and failure proof
+
+On 2026-10-10, activation commit `4ea28f01445265b8e9e630cccc848895847a6d59`
+was pushed normally using the existing GitHub login's `repo` and `workflow`
+scopes. The [push integration run](https://github.com/jestrada/ChargeShare/actions/runs/38076460351)
+and [PR integration run](https://github.com/jestrada/ChargeShare/actions/runs/38076463792)
+both built the pinned official receiver and started Kafka on fresh Ubuntu 24.04
+x86_64 runners. Repeated `nix develop --no-update-lock-file` entries produced
+identical versions and unchanged lockfile hashes.
+
+The recorded runtime was Nix 2.28.6, Tilt 0.37.7, Docker CLI 29.8.1, Compose
+5.5.1, Rust 1.99.0, Node 24.21.0/npm 11.19.0, Go 1.27.1, Python 3.14.7 and
+OpenSSL 3.5.8. The host Docker daemon was 28.0.4. All 54 runtime-helper tests
+passed, including the new regression that permits `down` with expired or
+incomplete trust while startup still refuses it and configuration checks remain
+enforced. These Linux runs establish no macOS ARM support.
+
+Each run passed authenticated receiver/status readiness, preview readiness and
+the manually triggered ACK-plus-Kafka smoke. With
+`CHARGESHARE_CI_PROVE_FAILURE=1`, the additional nonexistent output expectation
+then failed the multiset assertion. Both retained the failure exit status,
+completed teardown and uploaded only the allowlisted summary and versions.
+The push job took 4m31s; this was an assertion failure, not a setup failure.
+The setting has been removed for full acceptance.

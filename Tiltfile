@@ -10,7 +10,10 @@ os.putenv('CHARGESHARE_GID', gid)
 if config.tilt_subcommand != 'down':
     local('python3 scripts/dev/runtime.py prepare', quiet=False)
 local('python3 scripts/dev/runtime.py validate-config', quiet=False)
-docker_compose('dev/compose.yaml', project_name=project_name)
+if config.tilt_subcommand != 'down' and os.getenv('CHARGESHARE_CI_PREBUILT_RECEIVER') == '1':
+    docker_compose(local('python3 scripts/dev/cached_receiver.py compose', quiet=True), project_name=project_name)
+else:
+    docker_compose('dev/compose.yaml', project_name=project_name)
 dc_resource('kafka', labels=['synthetic-transport'])
 dc_resource('receiver', labels=['synthetic-transport'])
 local_resource('rust-build', cmd='cargo build --workspace --locked', deps=['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates'], labels=['build'])

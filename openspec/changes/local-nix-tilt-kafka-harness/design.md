@@ -179,6 +179,38 @@ Cloudflare runtime, image architecture, mTLS ingress identity, private broker
 connectivity, lifecycle and durable recovery require the separate Terraform-stage
 review in the roadmap before any authorized provisioning.
 
+### 7. Reuse build outputs without retaining test state
+
+The user approved dependency and image caching on 2026-10-10. Keep the Ubuntu
+runner, host daemon and pinned Nix shell. Restore/save only `/nix`, keyed by the
+Nix version, Linux architecture and flake/toolchain inputs, before generating
+test trust. Shell version and unchanged-lock checks run on both misses and hits.
+
+Use pinned official Docker actions, Buildx 0.38.0 and digest-pinned BuildKit
+0.34.0 with GitHub cache v2. Build the same reviewed receiver Dockerfile, export
+all build stages under a Dockerfile/upstream-input/context hash, and load the
+image into the job's daemon. No registry publication or new credentials are
+needed. Restrict the build context to the Dockerfile and ignore definition.
+Disable automatic build-record uploads; use the existing artifact allowlist.
+
+The Python runtime helpers own CI image validation and Compose rendering. They
+require this job's exact image ID, Linux amd64 and labels for the reviewed input
+hash and upstream revision. After validating the original resolved Compose
+configuration, remove only its receiver build field for Tilt startup. Local
+development keeps source builds; teardown always uses the original reviewed
+configuration and never depends on a cached image or valid certificates. This
+avoids Tilt's unconditional Compose build on each startup. A second Nix container
+image or registry would add publishing and lifecycle work without fixing the
+retained restart. Domain types, APIs and database behavior remain unchanged.
+
+Readiness reports only resource names, allowed status/health enums, dependency
+names and known failure categories. A terminal failed build exits immediately;
+pending resources retain documented deadlines. Preserve raw diagnostics only in
+ignored local files. Tests cover cache identity/platform rejection, unchanged
+Compose boundaries, cached-mode teardown and failure/timeout diagnostic privacy.
+Measure fresh-runner cache creation and a subsequent hit; keep a cache only when
+its warm restore and setup are faster overall. Full acceptance remains required.
+
 ## Risks / Trade-offs
 
 - Native dependencies / image architecture: pin inputs and verify the selected Linux runtime.

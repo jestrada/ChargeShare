@@ -62,8 +62,8 @@ start_stack() {
     sleep 1
   done
   tilt wait --for=condition=Ready 'uiresource/(Tiltfile)' --timeout 90s
-  tilt wait --for=condition=Ready uiresource/receiver-ready --timeout 15m
-  tilt wait --for=condition=Ready uiresource/fixture-api uiresource/fixture-dashboard --timeout 5m
+  python3 scripts/dev/readiness.py --timeout 900 kafka receiver rust-build receiver-ready | tee -a "$summary"
+  python3 scripts/dev/readiness.py --timeout 300 frontend-install fixture-api fixture-dashboard | tee -a "$summary"
   record 'PASS: protocol/status readiness and independent fixture preview'
 }
 
@@ -79,6 +79,8 @@ PY
 }
 
 python3 scripts/dev/test_runtime.py
+python3 scripts/dev/test_readiness.py
+python3 scripts/dev/test_cached_receiver.py
 record 'PASS: project preflight, privacy, certificate and reset guardrails'
 python3 scripts/dev/runtime.py preflight > "$output/preflight-local.json"
 record "Host Docker daemon: $(jq -r .docker_version "$output/preflight-local.json")"

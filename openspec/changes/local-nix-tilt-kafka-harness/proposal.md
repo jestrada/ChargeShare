@@ -13,6 +13,7 @@ Tesla receiver into Kafka before building ledger ingestion.
 - Manage the existing API/dashboard as separate fixture-demo resources; receiver traffic does not feed them.
 - Provide bounded readiness, per-service logs, explicit shutdown and isolated, confirmed synthetic reset.
 - Run the same transport gate on fresh `ubuntu-24.04` GitHub Actions runners, with safe diagnostics and guaranteed teardown.
+- Reuse pinned Nix outputs and receiver build layers across fresh runners; verify cached image inputs and exclude runtime credentials from caches.
 
 Local implementation is in progress; full receiver/Kafka acceptance remains
 unverified. [Tasks](tasks.md) track completion. Rust ingestion, durable storage,

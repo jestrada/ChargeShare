@@ -8,21 +8,23 @@ platforms and live Tesla setup are excluded. Full acceptance:
 
 ## 1. Pinned shell and preflight
 
-- [ ] 1.1 Pin flake/lockfile, matching Rust, Tilt, Docker/Compose, Node/npm and utilities; verify `nix develop` versions and repeated-entry lock stability.
+- [x] 1.1 Pin flake/lockfile, matching Rust, Tilt, Docker/Compose, Node/npm and utilities; verify `nix develop` versions and repeated-entry lock stability.
 - [x] 1.2 Add synthetic-only daemon/platform/port/binding preflight; test stopped daemon, unsupported platform, occupied port and unsafe binding without host changes.
-- [ ] 1.3 Document Nix features, host/cloud daemon prerequisites, cold downloads and support matrix; execute entry commands and record tested architecture/runtime versions.
+- [x] 1.3 Document Nix features, host/cloud daemon prerequisites, cold downloads and support matrix; execute entry commands and record tested architecture/runtime versions.
+- [ ] 1.4 Reuse only pinned Nix tool outputs before generating test credentials; verify cache miss/hit, unchanged versions/locks and measured warm setup benefit.
 
 ## 2. Managed services
 
-- [ ] 2.1 Pin Kafka KRaft and official receiver versions, digests and notices; verify reproducible Linux builds/pulls.
+- [x] 2.1 Pin Kafka KRaft and official receiver versions, digests and notices; verify reproducible Linux builds/pulls.
 - [ ] 2.2 Add checkout-isolated Compose/Tilt services; verify protocol/status readiness, bounded failure, loopback publishing and no profiler exposure.
 - [ ] 2.3 Generate ignored test certificates; verify permissions, untrusted-client rejection, unchanged system trust and no keys in Git, Nix inputs or images.
 - [ ] 2.4 Manage API/Vite with independent locked installs/builds; verify unchanged preview, logs/readiness and orphan-free stop.
 - [ ] 2.5 Document resources, endpoints, logs and Tilt start/stop; execute commands and verify container/host shutdown retains broker state.
+- [ ] 2.6 Cache all receiver build stages with pinned Linux Buildx/BuildKit; validate this job's loaded image and reviewed inputs, avoid a second Tilt build, exclude runtime material, and record miss/hit timing benefit.
 
 ## 3. Receiver smoke scenarios
 
-- [ ] 3.1 Integrate pinned upstream helpers and Kafka verifier without domain API changes; require authenticated receiver ACK and matching decoded Kafka output, rejecting ACK-only or direct-injection success.
+- [x] 3.1 Integrate pinned upstream helpers and Kafka verifier without domain API changes; require authenticated receiver ACK and matching decoded Kafka output, rejecting ACK-only or direct-injection success.
 - [ ] 3.2 Test fixed multi-vehicle complete/missing/duplicate/out-of-order fixtures against expected semantics; preserve omissions without invented energy/cost or exactly-once claims.
 - [ ] 3.3 Isolate finite runs using partition-start offsets plus exclusive execution/supported markers; reject stale matches and compare two clean normalized results.
 - [ ] 3.4 Expose manual `telemetry-smoke` with bounded diagnostics; verify triggering, missing output, broker outage and invalid authentication within documented deadlines.

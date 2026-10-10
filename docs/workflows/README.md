@@ -20,3 +20,13 @@ transport, retention or lifecycle acceptance, and unchecked OpenSpec tasks stay
 unchecked until their stated runtime evidence exists. Only allowlisted synthetic
 summaries, versions and normalized fixture results are uploaded. Keys,
 certificates and unrestricted runtime logs are excluded.
+
+The next verification adds pinned Nix-store and receiver build-layer caches.
+Both are populated before generating test credentials. The receiver image is
+loaded into the runner daemon and validated against this job's exact image ID,
+Linux amd64, input hash and upstream revision. Tilt uses the validated image
+without rebuilding; local development and teardown retain the reviewed Compose
+source configuration. Cache timings and a complete passing run remain pending.
+The first normal run reached all transport/negative cases but timed out after
+the retained-state restart; allowlisted readiness diagnostics now expose resource
+health, blockers and known failure categories instead of silently waiting.
