@@ -2,6 +2,7 @@
   "name": "chargeshare",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "A spec-driven Tesla AC charging reimbursement proof of concept",
   "scripts": {
     "preview:dev": "bash scripts/preview-dev.sh",

@@ -6,6 +6,7 @@
 !/.env.example
 .envrc
 .direnv/
+.local-runtime/
 
 # Credentials, authentication state, signing material, and local tool settings.
 *.pem
@@ -99,3 +100,7 @@ charging-history/
 # Scanner output can contain sensitive context even with redaction enabled.
 gitleaks-report.*
 security-reports/
+
+__pycache__/
+*.py[cod]
+.local-runtime-run.lock

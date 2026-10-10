@@ -1,0 +1,92 @@
+name: Synthetic telemetry integration
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  receiver-kafka:
+    name: Receiver to Kafka synthetic round trip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install pinned official Nix
+        id: nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+        with:
+          install_url: https://releases.nixos.org/nix/nix-2.28.6/install
+          enable_kvm: false
+          set_as_trusted_user: false
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Restore the pinned Nix tool store
+        uses: nix-community/cache-nix-action/restore@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-2.28.6-ubuntu24-x86_64-${{ hashFiles('flake.nix', 'flake.lock', 'rust-toolchain.toml') }}
+      - name: Verify locked shell entry twice
+        run: |
+          mkdir -p target/harness-results
+          sha256sum flake.lock > target/harness-results/lock-before.txt
+          nix develop --no-update-lock-file -c bash scripts/dev/versions.sh > target/harness-results/versions.txt
+          nix develop --no-update-lock-file -c bash scripts/dev/versions.sh > target/harness-results/versions-second.txt
+          sha256sum flake.lock > target/harness-results/lock-after.txt
+          cmp target/harness-results/lock-before.txt target/harness-results/lock-after.txt
+          cmp target/harness-results/versions.txt target/harness-results/versions-second.txt
+      - name: Save only the Nix tool store before generating test credentials
+        uses: nix-community/cache-nix-action/save@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-2.28.6-ubuntu24-x86_64-${{ hashFiles('flake.nix', 'flake.lock', 'rust-toolchain.toml') }}
+      - name: Select reviewed receiver build inputs
+        id: receiver-inputs
+        run: nix develop --no-update-lock-file -c python3 scripts/dev/cached_receiver.py identity
+      - name: Set up pinned receiver builder
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          version: v0.38.0
+          driver-opts: image=moby/buildkit:v0.34.0@sha256:b059f8d7226d0b326bc871af489a5dddf65e36af4d20d14251b072974d9ee87c
+      - name: Build and load the receiver with reusable native and Go layers
+        id: receiver-build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: 'false'
+          DOCKER_BUILD_SUMMARY: 'false'
+        with:
+          context: dev
+          file: dev/receiver.Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          tags: ${{ steps.receiver-inputs.outputs.tag }}
+          labels: |
+            dev.chargeshare.receiver-build-inputs=${{ steps.receiver-inputs.outputs.inputs_sha }}
+            org.opencontainers.image.revision=${{ steps.receiver-inputs.outputs.revision }}
+          cache-from: type=gha,version=2,scope=${{ steps.receiver-inputs.outputs.cache_scope }}
+          cache-to: type=gha,version=2,scope=${{ steps.receiver-inputs.outputs.cache_scope }},mode=max,timeout=5m
+      - name: Start, explicitly test and always tear down the synthetic stack
+        env:
+          CHARGESHARE_CI_PREBUILT_RECEIVER: '1'
+          CHARGESHARE_CI_RECEIVER_IMAGE_ID: ${{ steps.receiver-build.outputs.imageid }}
+        run: nix develop --no-update-lock-file -c timeout --signal=TERM --kill-after=30s 40m bash scripts/dev/integration.sh
+      - name: Ensure project teardown even after an interrupted integration step
+        if: always() && steps.nix.outcome == 'success'
+        run: nix develop --no-update-lock-file -c bash scripts/dev/cleanup.sh
+      - name: Retain only allowlisted synthetic summaries
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: synthetic-receiver-kafka-results
+          path: |
+            target/harness-results/summary.md
+            target/harness-results/versions.txt
+            target/harness-results/normalized-first.json
+            target/harness-results/normalized-second.json
+          retention-days: 7
+          if-no-files-found: warn

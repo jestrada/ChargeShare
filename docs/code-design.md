@@ -30,7 +30,7 @@ exact offline pricing and a separate localhost demo API/frontend.
 [Its domain contract](architecture.md#implemented-offline-ledger) and
 [acceptance suite](../crates/chargeshare-core/tests/offline_spec1.rs) define current
 behavior. See [pricing](pricing.md) and [local preview](local-preview.md) for the
-additive contracts. Receiver integration, persistence, authentication, real
+additive contracts. Receiver-backed ledger ingestion, persistence, authentication, real
 utility calendars, statements and a production UI remain future work.
 
 ## 2. Make the code express its intent without comments

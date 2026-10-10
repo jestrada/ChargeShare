@@ -1,0 +1,33 @@
+{
+  "host": "0.0.0.0",
+  "port": 4443,
+  "status_port": 8080,
+  "log_level": "info",
+  "json_log_enable": true,
+  "namespace": "chargeshare_synthetic",
+  "transmit_decoded_records": true,
+  "use_default_eng_ca": false,
+  "reliable_ack_sources": {
+    "V": "kafka"
+  },
+  "kafka": {
+    "bootstrap.servers": "kafka:9092",
+    "acks": "all",
+    "queue.buffering.max.messages": 1000,
+    "queue.buffering.max.ms": 50,
+    "message.timeout.ms": 10000
+  },
+  "records": {
+    "V": [
+      "kafka"
+    ],
+    "connectivity": [
+      "kafka"
+    ]
+  },
+  "tls": {
+    "ca_file": "/runtime/certificates/ca.crt",
+    "server_cert": "/runtime/certificates/server.crt",
+    "server_key": "/runtime/certificates/server.key"
+  }
+}

@@ -1,7 +1,7 @@
 # Testing and verification
 
 Spec 1 has been approved for implementation and now has an offline Rust suite.
-Receiver integration still needs its own later reviewed spec.
+The approved local receiver-to-Kafka harness is described in [local development](local-development.md). Its adapter, durable ingestion and receiver-backed dashboard remain later changes.
 
 Offline session pricing adds 15 acceptance tests in
 `crates/chargeshare-core/tests/offline_pricing.rs` and five unit tests for money
@@ -389,3 +389,125 @@ These are future acceptance requirements, not implemented billing behavior.
 Real charging, OAuth/key pairing, deployment and costs are not
 automated CI tests and are not authorized by this plan. Passing simulated tests
 proves software behavior for those fixtures, not utility-meter accuracy.
+
+## Local Nix/Tilt transport implementation checks
+
+Stage 1 implementation on 2026-10-04 adds an outer Rust synthetic harness without
+changing `chargeshare-core` APIs or dependencies. The workspace now has 61 tests:
+51 existing core/preview tests plus ten fixture/verifier/deadline tests. Local
+formatting, Clippy with warnings denied, the complete offline wrapper, strict
+OpenSpec validation, security guard tests and the frontend production build pass.
+The frontend cache was project-local; original dependency locks remain intact
+apart from the approved MIT metadata. Generated license copies are included in
+`dist/licenses`. Runtime helper tests additionally exercise daemon/configuration
+failures, occupied ports, reset ownership and real disposable loopback TLS trust.
+
+The Nix flake evaluates, its genuine lock remains stable on repeated resolution,
+and pinned Docker/Compose/Tilt/Go CLI versions were checked from official cached
+outputs. Pinned Tilt evaluated the actual Tiltfile successfully without starting
+services. The original `npm run preview:dev` command returned successful frontend
+and Rust proxy API responses, and its shutdown released both preview ports. This editing sandbox has no host Docker daemon or installed Nix store.
+It has not run full shell entry, container builds or a receiver/Kafka round trip.
+Those acceptance claims remain pending the exact-commit
+[integration workflow](../.github/workflows/telemetry-integration.yml).
+[Verification steps](workflows/README.md) track the deliberate failure proof and
+restored successful run; activation alone is not transport acceptance.
+No later Cloudflare, SQLite, ingestion or live dashboard coverage is implied.
+
+Rechecked on 2026-10-07 with Rust 1.99.0 on Linux x86_64: all 61 workspace
+tests, 51 runtime tests, formatting, Clippy, strict specs, security guards/scans
+and the frontend build pass. The direct preview serves the frontend and proxied
+fixture API, then releases both listeners on shutdown. Four ACK regression
+tests enforce a total deadline across WebSocket keepalives and continuous partial
+input. A cancellable watchdog closes the socket at the 10-second deadline and
+is joined before return. The Docker/Nix
+prerequisites are still absent in this sandbox, so full transport and lifecycle
+tasks remain unchecked.
+
+### Linux workflow activation and failure proof
+
+On 2026-10-10, activation commit `4ea28f01445265b8e9e630cccc848895847a6d59`
+was pushed normally using the existing GitHub login's `repo` and `workflow`
+scopes. The [push integration run](https://github.com/jestrada/ChargeShare/actions/runs/38076460351)
+and [PR integration run](https://github.com/jestrada/ChargeShare/actions/runs/38076463792)
+both built the pinned official receiver and started Kafka on fresh Ubuntu 24.04
+x86_64 runners. Repeated `nix develop --no-update-lock-file` entries produced
+identical versions and unchanged lockfile hashes.
+
+The recorded runtime was Nix 2.28.6, Tilt 0.37.7, Docker CLI 29.8.1, Compose
+5.5.1, Rust 1.99.0, Node 24.21.0/npm 11.19.0, Go 1.27.1, Python 3.14.7 and
+OpenSSL 3.5.8. The host Docker daemon was 28.0.4. All 54 runtime-helper tests
+passed, including the new regression that permits `down` with expired or
+incomplete trust while startup still refuses it and configuration checks remain
+enforced. These Linux runs establish no macOS ARM support.
+
+Each run passed authenticated receiver/status readiness, preview readiness and
+the manually triggered ACK-plus-Kafka smoke. With
+`CHARGESHARE_CI_PROVE_FAILURE=1`, the additional nonexistent output expectation
+then failed the multiset assertion. Both retained the failure exit status,
+completed teardown and uploaded only the allowlisted summary and versions.
+The push job took 4m31s; this was an assertion failure, not a setup failure.
+The setting has been removed for full acceptance.
+
+### Cache creation and startup race evidence
+
+The [first cached-build run](https://github.com/jestrada/ChargeShare/actions/runs/38080187563)
+on commit `4eb5f9c019c307ce3d4955919c4b26680f108a7c` passed 56 runtime,
+eight readiness and four cached-image tests. It created the Nix tool cache and
+all receiver build-stage layers before generating trust. The cold locked shell
+step took 42 seconds, Nix cache save 15 seconds, and receiver build/load/export
+4m22s, including the first cache upload. Ordinary repository checks passed.
+
+The safe resource report showed Kafka and receiver with Tilt `Ready=True` while
+Docker health was `starting`; `receiver-ready` then failed. Fail-fast detection
+and cleanup completed the integration step in 37 seconds, rather than waiting
+15 minutes. The added broker-health prerequisite and receiver-health wait
+address this cold/warm startup race without changing transport assertions or
+retained-state/reset scenarios. The following run supplies the previously pending
+warm-cache and complete lifecycle acceptance.
+
+### Complete Linux acceptance and warm caches
+
+On 2026-10-10, [push integration 38080880179](https://github.com/jestrada/ChargeShare/actions/runs/38080880179)
+passed the complete stage-1 contract on commit
+`8455a45e937b7f9ad7359d4fcb9b1b46a111d847`. The fresh Ubuntu 24.04 x86_64
+runner reused the Nix cache and 15 receiver build stages, including native
+library compilation and the Go receiver. Buildx 0.38.0 and BuildKit 0.34.0
+used the pinned reviewed Dockerfile and loaded the validated job image into
+the host daemon; Tilt's resolved startup configuration omitted only the
+receiver build field. Version output and lockfile hashes stayed unchanged.
+The runtime versions match the failure-proof evidence above.
+
+| Setup / acceptance | Cold cache creation run | Warm passing run |
+| --- | --- | --- |
+| Repeated locked Nix shell entry | 42 seconds | 15 seconds |
+| Nix cache restore / initial save | 15 seconds to save | 18 seconds to restore; no new save |
+| Receiver build, daemon load and layer-cache export | 4m22s | 21 seconds |
+| Complete integration scenarios and teardown | Startup race failed | 4m13s integration step; 5m24s whole job |
+
+All 57 runtime, 12 readiness and four cached-image tests passed. The owned
+Kafka protocol-health prerequisite held receiver startup until healthy;
+authenticated receiver health preceded metadata/topic/status readiness.
+Both explicit manual smoke triggers and each complete fixture suite required
+receiver ACKs plus decoded Kafka matches. Each clean suite had 26 expected
+ACKs and 26 matching records, preserving complete, missing, duplicate and
+out-of-order semantics.
+
+Stale-output, missing-output/ACK-only, missing or unrelated client trust,
+active reset and broker outage were rejected within their existing bounds.
+Independent verifier processes replayed retained records twice per clean run.
+Normal full stop/start retained the broker volume and passed replay. Shutdown
+released managed listeners; the second shutdown also succeeded with an
+incomplete certificate bundle. Both confirmed stopped-project resets completed.
+The two normalized 26-record outputs were byte-identical, SHA-256
+`efc3a47b9c6566ec510e5cc2e2687f78c1e5faa7f5664c18d37de2a86d4e328a`.
+
+Exit-preserving teardown and the separate always-run cleanup both succeeded.
+The artifact contained exactly `summary.md`, `versions.txt`,
+`normalized-first.json` and `normalized-second.json`; test trust, unrestricted
+logs and broker/runtime state were excluded. Existing push and PR security,
+strict-spec, complete Rust/fmt/Clippy and frontend checks also passed. The
+duplicate diagnostic PR integration was cancelled while the single push run
+completed; both triggers must pass on the final archival commit. Passing stage 1
+does not establish macOS ARM, ingestion, database recovery, live telemetry,
+Cloudflare compatibility or deployment.

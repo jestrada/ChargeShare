@@ -1,0 +1,79 @@
+name: ${CHARGESHARE_PROJECT_NAME}
+services:
+  kafka:
+    image: apache/kafka:4.1.2@sha256:d50ab7b5df612b3c303f9d8afe8fee59626a5de798addfd626fe1924e3205965
+    platform: linux/amd64
+    labels:
+      dev.chargeshare.synthetic-only: 'true'
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: '1'
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: '1'
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: '1'
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: '1'
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: '0'
+      KAFKA_NUM_PARTITIONS: '1'
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_LOG_RETENTION_HOURS: '24'
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    tmpfs:
+      - /etc/kafka/secrets:uid=1000,gid=1000,mode=0700
+      - /mnt/shared/config:uid=1000,gid=1000,mode=0700
+    healthcheck:
+      test: [CMD, /opt/kafka/bin/kafka-broker-api-versions.sh, --bootstrap-server, kafka:9092]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 15s
+  receiver:
+    build:
+      context: .
+      dockerfile: receiver.Dockerfile
+    image: ${CHARGESHARE_PROJECT_NAME}-receiver:bd076fe
+    platform: linux/amd64
+    user: ${CHARGESHARE_UID}:${CHARGESHARE_GID}
+    labels:
+      dev.chargeshare.synthetic-only: 'true'
+    command: [-config, /etc/chargeshare/receiver.json]
+    ports:
+      - target: 4443
+        published: '8443'
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ./receiver.synthetic.json
+        target: /etc/chargeshare/receiver.json
+        read_only: true
+      - type: bind
+        source: ${CHARGESHARE_RUNTIME_DIR}/certificates
+        target: /runtime/certificates
+        read_only: true
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --show-error, --max-time, '5', --cacert, /runtime/certificates/ca.crt, --cert, /runtime/certificates/client.crt, --key, /runtime/certificates/client.key, https://localhost:4443/status]
+      interval: 5s
+      timeout: 8s
+      retries: 30
+      start_period: 5s
+volumes:
+  kafka-data:
+    name: ${CHARGESHARE_BROKER_VOLUME}
+    labels:
+      dev.chargeshare.synthetic-only: 'true'
+networks:
+  default:
+    name: ${CHARGESHARE_PROJECT_NAME}_default
+    labels:
+      dev.chargeshare.synthetic-only: 'true'
