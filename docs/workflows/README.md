@@ -7,11 +7,13 @@ The current local GitHub login has the required workflow scope, so the recovered
 workflow is now active at
 [telemetry-integration.yml](../../.github/workflows/telemetry-integration.yml).
 
-The initial activation retains `CHARGESHARE_CI_PROVE_FAILURE: '1'`. Its intended
-run deliberately fails after a successful receiver/Kafka smoke to prove the
-missing-output gate; a setup failure does not prove that gate. Verify its
-stage summary and successful owned-resource teardown before removing that job's
-`env` block. A subsequent normal run must pass on its exact published commit.
+Activation commit `4ea28f01445265b8e9e630cccc848895847a6d59` retained
+`CHARGESHARE_CI_PROVE_FAILURE=1`. The [push run](https://github.com/jestrada/ChargeShare/actions/runs/38076460351)
+and [PR run](https://github.com/jestrada/ChargeShare/actions/runs/38076463792)
+both passed the authenticated receiver smoke, then failed the deliberately
+missing-output multiset assertion. Both completed cleanup and uploaded only the
+allowlisted summary and versions. The setting is now removed; full passing
+acceptance remains required before tasks are marked complete.
 
 Existing repository checks remain required. Activation does not prove startup,
 transport, retention or lifecycle acceptance, and unchecked OpenSpec tasks stay

@@ -39,6 +39,12 @@ The documented shutdown SHALL stop this environment's services and release its l
 - **WHEN** the developer runs the documented shutdown and then starts again
 - **THEN** no managed listeners remain after shutdown and retained synthetic broker records are available after restart
 
+#### Scenario: Expired or incomplete test trust
+- **WHEN** generated test certificates have expired or their bundle is incomplete
+- **THEN** documented shutdown still stops the owned environment without preparing certificates
+- **AND** configuration and runtime ownership checks remain enforced
+- **AND** startup refuses invalid trust until the stopped environment is explicitly reset
+
 #### Scenario: Clean rerun
 - **WHEN** the developer explicitly requests the documented reset while the environment is stopped
 - **THEN** only the named project runtime files, broker volume and harness consumer state are removed or recreated
