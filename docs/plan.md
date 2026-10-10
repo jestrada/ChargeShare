@@ -1,178 +1,113 @@
 # ChargeShare proof of concept plan
 
-Build the working synthetic POC locally in three stages, then validate and deploy
-the reviewed architecture on Cloudflare using Terraform. Each stage has its own
-acceptance boundary and review; this roadmap does not approve implementation,
-deployment, credentials, spending or real vehicle access.
+Build three synthetic local stages, then validate Cloudflare using Terraform.
+Each needs reviewed acceptance; this roadmap authorizes no implementation,
+deployment, credentials, spending or vehicle access.
 
-The current baseline is the implemented offline Rust ledger and exact pricing,
-plus a loopback Rust API and React/shadcn fixture dashboard. Receiver transport,
-Kafka integration, durable ingestion and Cloudflare hosting are not implemented.
-See [architecture](architecture.md), [pricing](pricing.md) and
-[local preview](local-preview.md) for existing behavior.
+Offline ledger/pricing and fixture preview work. Stage 1 has local implementation
+but no full receiver/Kafka acceptance; stages 2–4 need separate changes.
 
 ## Route to a working POC
 
 ```mermaid
 flowchart LR
     baseline["Implemented baseline<br/>Offline core + fixture preview"]
-    harness["1 Proposed receiver harness<br/>Nix + Tilt + Kafka"]
+    harness["1 Receiver harness<br/>Nix + Tilt + Kafka; verification pending"]
     ingestion["2 Future durable ingestion<br/>Rust adapter + SQLite"]
     results["3 Future persisted results<br/>Core + API + dashboard"]
     cloudflare["4 Future Cloudflare POC<br/>Architecture + Terraform"]
     baseline --> harness --> ingestion --> results --> cloudflare
 ```
 
-Arrows show milestone order, not runtime data flow. The first three stages stay
-synthetic and local on Linux x86_64 machines or suitable cloud Linux environments
-with a permitted Docker daemon. The Cloudflare stage starts after the local path
-works; a generic Linux test is not evidence of Cloudflare compatibility.
+Arrows show milestone order. Local stages target Linux x86_64 with permitted
+Docker, including private cloud hosts. Cloudflare follows working local stages;
+Linux success establishes no Cloudflare compatibility.
 
-The eventual synthetic path is client → official receiver → Kafka → ChargeShare
-Rust normalization and durable ingestion → existing ledger/pricing core → scoped
-persisted API/dashboard reads. A working POC must retain correct results across
-replay and restart, expose missing/conflicting evidence as holds, and preserve
-the core's identity and exact-arithmetic rules. It is not a real bill or a claim
-of utility-meter accuracy.
+Keep scoped, exact results across replay/restart; show missing/conflicting
+evidence as holds. Synthetic results establish no real bill or meter accuracy.
 
-## Ownership and boundaries
+## Ownership
 
-| Component | Software ownership | ChargeShare responsibility |
-| --- | --- | --- |
-| Fleet Telemetry receiver and its Kafka dispatcher | Tesla upstream | Pin, configure and operate the official receiver; do not rewrite its transport or dispatcher. |
-| Synthetic transport client | Upstream protocol/test helpers | Adapt finite fictional fixtures and validate the exchange. |
-| Kafka broker | Apache Kafka | Operate and configure the broker and its handoff; no managed provider is selected. |
-| SQLite | Upstream embedded database | Own schema, migrations, transactional ingestion and the database lifecycle. |
-| Rust integration, domain rules, API and dashboard | ChargeShare application code with its declared dependencies | Own normalization, replay orchestration, evidence quality, exact pricing and scoped presentation. |
-| Cloudflare platform and Terraform provider | Upstream infrastructure services/tooling | Design the deployment topology and versioned infrastructure configuration after compatibility review. |
+| Component | Owner / ChargeShare responsibility |
+| --- | --- |
+| Official receiver / dispatcher | Tesla; pin and configure, preserve upstream transport. |
+| Synthetic client | Upstream helpers; adapt finite fictional fixtures. |
+| Kafka | Apache; configure retained handoff, no managed provider selected. |
+| SQLite | Upstream; own schema, migrations, transactions and lifecycle. |
+| Rust integration / core / API / dashboard | ChargeShare; normalize, replay, price and present scoped evidence. |
+| Cloudflare / Terraform provider | Upstream; review topology and versioned infrastructure. |
 
-Transport, storage and presentation remain outside the pure Rust domain core.
-The receiver's decoded record and acknowledgment are transport evidence, not an
-accepted ledger event or a durable application transaction.
+Transport, storage and presentation stay outside the pure Rust core. Receiver
+ACK and decoded records do not establish an accepted ledger event or database
+commit. Existing behavior is documented in [architecture](architecture.md),
+[pricing](pricing.md) and [local preview](local-preview.md).
 
 ## Stage 1 Receiver transport harness
 
-**Status:** Proposed in the active
-[local Nix/Tilt/Kafka change](../openspec/changes/local-nix-tilt-kafka-harness/proposal.md).
-Its [design and support matrix](../openspec/changes/local-nix-tilt-kafka-harness/design.md)
-and [tasks](../openspec/changes/local-nix-tilt-kafka-harness/tasks.md) own the
-implementation details. The new harness and its integration CI have not run.
+Details: active [proposal](../openspec/changes/local-nix-tilt-kafka-harness/proposal.md),
+[design](../openspec/changes/local-nix-tilt-kafka-harness/design.md),
+[tasks](../openspec/changes/local-nix-tilt-kafka-harness/tasks.md). Full integration
+is unverified.
 
-Provide pinned Nix tools and a Tilt-managed local Compose graph containing the
-official receiver and one Kafka broker. Keep the existing API/frontend as
-independently labeled fixture-demo resources. Generate isolated local-test trust
-at runtime and make the smoke test explicit and finite.
-
-**Acceptance:** A fresh Linux x86_64 checkout can start the pinned stack, become
-protocol-ready, send a fictional fixture through the actual receiver's mTLS
-WebSocket transport, receive the expected protocol acknowledgment and observe
-matching decoded fields on the configured Kafka topic within bounded deadlines.
-Acknowledgment alone, process startup and direct Kafka injection cannot pass.
-Reject invalid client trust, isolate runs from stale records, and verify safe
-stop/reset behavior. The proposed GitHub Actions job uses a fresh `ubuntu-24.04`
-x86_64 runner, fails on setup/assertion/timeout errors and always tears down with
-only allowlisted synthetic diagnostics.
-
-**Boundary:** This proves synthetic receiver-to-Kafka transport. It does not
-normalize into core events, persist a ledger, calculate telemetry-backed costs
-or feed the dashboard. Existing fixture totals stay independent.
+Pinned Nix/Tilt/Compose manages receiver, Kafka and separate fixture preview.
+**Acceptance:** Fresh Linux protocol readiness, finite mTLS WebSocket exchange,
+ACK **and** matching decoded Kafka fields within deadlines. Reject invalid
+trust/stale matches; verify stop/reset. The fresh `ubuntu-24.04` gate fails
+setup/assertions/timeouts, cleans up and retains safe diagnostics. ACK-only/direct
+injection cannot pass. Ingestion, persistence and telemetry-backed results remain
+outside stage 1.
 
 ## Stage 2 Durable Rust ingestion
 
-**Status:** Future separate OpenSpec proposal and PR, not yet created. Depends on
-stage 1's verified decoded schema and delivery/acknowledgment behavior.
+After verified schema/delivery, propose ingestion separately.
+Define the outer consumer/normalizer, synthetic identity mapping, retained evidence,
+SQLite migrations, deduplication and atomic transaction/consumer-progress contract.
+Keep payload/database types outside the core. Define how retained evidence
+reconstructs session boundaries without invented samples or completion from silence.
 
-Define the outer Rust consumer/normalizer, configured synthetic identity mapping,
-evidence retention and SQLite schema. Specify deduplication, late/conflicting
-messages, transaction boundaries and durable consumer progress before building.
-Keep upstream payload types and database details out of the core. Decide how
-retained transport evidence reconstructs the domain's explicit session boundaries
-without inventing samples or treating silence as completion.
-
-**Acceptance:** Fixed multi-vehicle records map into valid scoped core events;
-duplicates and reordered/late input replay deterministically without double
-counting. Missing, invalid and conflicting readings remain visible. Demonstrate
-reconnect and restart at transaction/consumer-progress boundaries, including a
-crash between reading and committing, with no lost accepted evidence or inflated
-energy. Review safe diagnostics and unknown-identity rejection.
-
-**Boundary:** Durable synthetic ingestion and replay only. Production allowlists,
-real telemetry retention, account authentication and vehicle provisioning need
-their own reviewed contracts before any live input.
+**Acceptance:** Scoped multi-vehicle mapping, deterministic duplicate/reordered/late
+replay, visible missing/invalid/conflicting readings, safe diagnostics and
+unknown-identity rejection. Exercise reconnect/restart and crashes between reading and committing,
+without lost accepted evidence or inflated energy. Production allowlists, real
+retention, authentication and provisioning need separate contracts.
 
 ## Stage 3 Persisted charging results
 
-**Status:** Future separate OpenSpec proposal and PR, not yet created. Depends on
-stage 2's durable evidence and replay contract.
+After durable ingestion, propose persisted API/dashboard reads using existing
+core session, eligibility and pricing rules. Retain synthetic labels, review boundaries, visible holds, versioned rates and calculation
+provenance; money arithmetic stays in Rust.
 
-Use the existing Rust ledger/pricing core to calculate scoped sessions, eligible
-energy and exact priced subtotals from persisted evidence. Replace the dashboard's
-fixture-backed read path with explicit persisted API reads while retaining demo
-labels for synthetic data, review/classification boundaries and visible holds.
-Version rates and preserve calculation provenance; do not make the frontend
-responsible for money arithmetic.
-
-**Acceptance:** The full local synthetic path produces the expected per-vehicle
-sessions and core-calculated results in the dashboard. Replaying or restarting
-does not change complete results or count them twice. Missing readings, absent
-rates and conflicts display incomplete/held results rather than invented zeroes.
-Scope checks reject reads/reviews outside the configured owner/vehicle boundary.
-The integration test now includes ingestion, persistence and API results rather
-than using stage 1's Kafka success as proof of the whole application.
-
-**Boundary:** A working local synthetic POC. Real utility calendars, bills,
-payments, production authentication and cross-owner sharing are not implied.
-Domain scope checks alone are not authentication.
+**Acceptance:** Expected per-vehicle sessions/results across the complete path;
+stable replay/restart without double counting. Missing readings/rates and conflicts
+show held/incomplete results, never invented zeroes. Reject out-of-scope reads and
+reviews. Test persistence/API results rather than treating Kafka success as whole-app
+proof. Real utility calendars, bills, payments, production authentication and cross-owner sharing stay
+outside this local POC; scope checks alone are not authentication.
 
 ## Stage 4 Cloudflare architecture and Terraform deployment
 
-**Status:** Final future stage after the three local stages work. Requires a
-separate architecture/security proposal and deployment PR; neither exists yet.
+After local success, propose architecture/security and deployment separately.
+Validate the actual runtime first:
 
-Choose the actual Cloudflare runtime and topology before writing deployment
-code. Validate the official receiver, Rust processes, broker placement and storage
-against that runtime rather than assuming Cloudflare supplies an ordinary Docker
-host. Resolve these decisions first:
+- Image/CPU support, lifecycle, resource limits and cold starts
+- WebSocket/mTLS ingress preserving authenticated client-certificate identity
+- Private broker/consumer connectivity and access control
+- Durable evidence, offsets and SQLite/storage recovery; local disk is not assumed durable
+- Private authenticated UI/API, scope, secrets, observability, retention, costs and rollback
 
-- Image/CPU architecture, process lifecycle, resource limits and cold-start behavior
-- Receiver WebSocket/mTLS ingress and preservation of authenticated client-certificate identity
-- Private receiver-to-broker and broker-to-consumer connectivity and access control
-- Durable evidence, consumer progress and SQLite/storage recovery across restarts;
-  do not assume a local container disk is durable
-- Private authenticated API/dashboard access, identity scope, secret handling,
-  observability, retention, cost limits and rollback
+Pin Terraform/provider versions and review the plan before apply. Verify provider
+resource support; document application/image deployment separately. Keep protected
+state and credentials outside this public repository.
 
-Use Terraform for the reviewed Cloudflare infrastructure, with pinned Terraform
-and provider versions and a reviewed plan before apply. Verify that the selected
-resources are supported by the provider; document any required application/image
-deployment steps separately instead of claiming Terraform covers everything.
-Protect Terraform state and credentials, and keep them out of this public repo.
-
-**Acceptance:** After explicit deployment authorization, provision the agreed
-synthetic POC, exercise its actual Cloudflare ingress and complete persisted path,
-and verify acknowledgment, correct scoped results, rejection behavior and
-restart/recovery under the platform lifecycle. Validate the Terraform plan,
-repeatable configuration, safe rollback and resource/cost boundaries. Linux CI
-continues to protect local behavior; a separate Cloudflare run proves deployment
-compatibility. Resolve unsupported ingress or persistence before declaring this
-stage complete.
-
-**Boundary:** A synthetic Cloudflare POC on a reviewed architecture. Live Tesla
-registration, OAuth, key pairing, real data and accuracy/reimbursement validation
-remain separately authorized work. No cloud resource or credential is created
-by this plan.
+**Acceptance:** After explicit deployment authorization, exercise actual Cloudflare
+ingress and the complete persisted path: ACK, correct scoped results, rejection
+and platform restart/recovery. Verify repeatable Terraform configuration, safe
+rollback and agreed resource/cost limits. Resolve unsupported ingress/storage
+before completion. This remains synthetic; live Tesla setup and accuracy or
+reimbursement validation need separate authorization.
 
 ## Review and evidence
 
-Keep stage 1's active change separate from the future ingestion, persisted-results
-and Cloudflare changes. Add their spec/PR links here when they are created; do not
-mark stages implemented based on this roadmap. For each implementation, record
-the exact commit, pinned inputs, acceptance results and known unsupported cases.
-After review, implementation and verification, sync accepted requirements and
-archive that change on its PR before any separately authorized merge.
-
-The ownership and local-stage boundaries follow the existing architecture guide.
-Official Tesla Fleet Telemetry, GitHub runner/image, Tilt CI, Cloudflare Containers
-architecture and Cloudflare Terraform provider documentation informed this plan.
-Those references establish tooling/platform guidance, not an executed integration
-or a preselected Cloudflare deployment architecture.
+Link future specs/PRs; record exact commits, pins, acceptance and unsupported
+cases. Review, verify, sync and archive before authorized merge. Official upstream
+guidance establishes no executed compatibility or chosen Cloudflare topology.

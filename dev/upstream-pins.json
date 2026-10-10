@@ -1,0 +1,65 @@
+{
+  "receiver_source": {
+    "repository": "https://github.com/teslamotors/fleet-telemetry",
+    "revision": "bd076fe1494841707528449560c4a19d0d426da4",
+    "url": "https://codeload.github.com/teslamotors/fleet-telemetry/tar.gz/bd076fe1494841707528449560c4a19d0d426da4",
+    "sha256": "cb5226fe19f55e2d112244463668d9769b3bf9d65d30805258e3b29bfcdf140f",
+    "patched": false
+  },
+  "receiver_build_image": {
+    "reference": "docker.io/library/golang:1.27.1-bookworm@sha256:966278043a40889499db9b0cd196fc789c37c385d41bd9a10cb1e7764af60cdc",
+    "platform": "linux/amd64",
+    "go_version": "1.27.1"
+  },
+  "receiver_runtime_image": {
+    "reference": "docker.io/library/golang:1.27.1-bookworm@sha256:966278043a40889499db9b0cd196fc789c37c385d41bd9a10cb1e7764af60cdc",
+    "platform": "linux/amd64"
+  },
+  "kafka_image": {
+    "reference": "apache/kafka:4.1.2@sha256:d50ab7b5df612b3c303f9d8afe8fee59626a5de798addfd626fe1924e3205965",
+    "platform": "linux/amd64",
+    "version": "4.1.2",
+    "upstream": "https://hub.docker.com/r/apache/kafka"
+  },
+  "native_sources": {
+    "libsodium": {
+      "version": "1.0.19",
+      "url": "https://github.com/jedisct1/libsodium/releases/download/1.0.19-RELEASE/libsodium-1.0.19.tar.gz",
+      "sha256": "018d79fe0a045cca07331d37bd0cb57b2e838c51bc48fd837a1472e50068bbea"
+    },
+    "zeromq": {
+      "version": "4.3.4",
+      "url": "https://github.com/zeromq/libzmq/releases/download/v4.3.4/zeromq-4.3.4.tar.gz",
+      "sha256": "c593001a89f5a85dd2ddf564805deb860e02471171b3f204944857336295c3e5"
+    }
+  },
+  "receiver_go_modules": {
+    "go_mod_sha256": "3434e87325705111d44185ddd10238d7fcf68c2cbd6a3504c638d714ae399807",
+    "go_sum_sha256": "9128da99915057f407b0bd24c9255ba885dde74d9334334f8000fc38083294ce",
+    "upstream_dockerfile_sha256": "6f6efda20eeec23daaf86f2de6a1a9c0a70e96640c3cb3f5ba5b7c8725c2136b",
+    "dependency_policy": "unmodified upstream go.mod and go.sum; GOTOOLCHAIN=local; go mod verify; go build -mod=readonly"
+  },
+  "synthetic_certificates": {
+    "generator": "OpenSSL from the pinned Nix shell via scripts/dev/certificates.sh",
+    "local_ca_common_name": "Tesla Motors Products CA",
+    "client_ids": [
+      "device-1",
+      "device-2"
+    ],
+    "server_id": "receiver",
+    "default_receiver_ca": "upstream embedded production CA plus generated local-test CA; use_default_eng_ca=false",
+    "client_server_trust": "generated local-test CA only",
+    "runtime_directory": ".local-runtime/certificates"
+  },
+  "fixtures": {
+    "path": "dev/fixtures.json",
+    "sha256": "4d09903bab83d896fd1071b612b0fd5b607f7a6f2a36bec29182106c2595a84a",
+    "receiver_revision": "bd076fe1494841707528449560c4a19d0d426da4",
+    "generator_go_version": "1.27.1",
+    "generator_go_archive_url": "https://go.dev/dl/go1.27.1.linux-amd64.tar.gz",
+    "generator_go_archive_sha256": "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445",
+    "source_encoding_helper": "messages/tesla.FlatbuffersStreamToBytes",
+    "source_acknowledgment_helper": "messages/tesla.FlatbuffersStreamAckToBytes",
+    "expected_payload_helper": "telemetry.NewRecord with transmitDecodedRecords=true"
+  }
+}

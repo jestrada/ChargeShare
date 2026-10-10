@@ -19,13 +19,19 @@ context: |
 
 rules:
   proposal:
+    - Write for human reviewers in plain language. Lead with the problem and decision; keep sentences short and avoid overly verbose wording, repetition and filler.
+    - Keep the proposal brief. Put technical choices in design and detailed requirements/scenarios in specs; link rather than repeat them.
     - Distinguish proposed behavior from implemented functionality and state non-goals.
   design:
+    - Lead with the outcome and key decisions. Explain each choice and trade-off once in plain language; avoid overly verbose prose and repeated proposal/spec content.
+    - Link to specs for exhaustive requirements and scenarios. Preserve safety boundaries and honest verification status when shortening prose.
     - Include at least one concise architecture or flow diagram near the beginning of every design.md, preferably a fenced Mermaid diagram, so the proposed outcome is understandable at a glance.
     - Label component ownership and relevant boundaries; distinguish existing behavior, this change's proposed scope and deferred work. Keep diagrams consistent with the proposal, specs and tasks.
   specs:
+    - Specs may be detailed. Use precise, observable requirements and scenarios; brevity must not remove acceptance coverage, failure cases or safety constraints.
     - Include observable failure, missing-data, privacy and deterministic replay scenarios.
   tasks:
+    - Use concise action-plus-verification descriptions. Link detailed scenarios instead of repeating them; preserve every acceptance check and task's actual completion status.
     - Keep implementation and externally authorized live setup tasks distinct and unchecked until done.
 
 operations:

@@ -1,7 +1,7 @@
 # Testing and verification
 
 Spec 1 has been approved for implementation and now has an offline Rust suite.
-Receiver integration still needs its own later reviewed spec.
+The approved local receiver-to-Kafka harness is described in [local development](local-development.md). Its adapter, durable ingestion and receiver-backed dashboard remain later changes.
 
 Offline session pricing adds 15 acceptance tests in
 `crates/chargeshare-core/tests/offline_pricing.rs` and five unit tests for money
@@ -389,3 +389,36 @@ These are future acceptance requirements, not implemented billing behavior.
 Real charging, OAuth/key pairing, deployment and costs are not
 automated CI tests and are not authorized by this plan. Passing simulated tests
 proves software behavior for those fixtures, not utility-meter accuracy.
+
+## Local Nix/Tilt transport implementation checks
+
+Stage 1 implementation on 2026-10-04 adds an outer Rust synthetic harness without
+changing `chargeshare-core` APIs or dependencies. The workspace now has 61 tests:
+51 existing core/preview tests plus ten fixture/verifier/deadline tests. Local
+formatting, Clippy with warnings denied, the complete offline wrapper, strict
+OpenSpec validation, security guard tests and the frontend production build pass.
+The frontend cache was project-local; original dependency locks remain intact
+apart from the approved MIT metadata. Generated license copies are included in
+`dist/licenses`. Runtime helper tests additionally exercise daemon/configuration
+failures, occupied ports, reset ownership and real disposable loopback TLS trust.
+
+The Nix flake evaluates, its genuine lock remains stable on repeated resolution,
+and pinned Docker/Compose/Tilt/Go CLI versions were checked from official cached
+outputs. Pinned Tilt evaluated the actual Tiltfile successfully without starting
+services. The original `npm run preview:dev` command returned successful frontend
+and Rust proxy API responses, and its shutdown released both preview ports. This editing sandbox has no host Docker daemon or installed Nix store.
+It has not run full shell entry, container builds or a receiver/Kafka round trip.
+Those acceptance claims remain pending the exact-commit
+[inactive integration workflow](workflows/telemetry-integration.yml.disabled),
+which needs [maintainer activation](workflows/README.md) before it can run.
+No later Cloudflare, SQLite, ingestion or live dashboard coverage is implied.
+
+Rechecked on 2026-10-07 with Rust 1.99.0 on Linux x86_64: all 61 workspace
+tests, 51 runtime tests, formatting, Clippy, strict specs, security guards/scans
+and the frontend build pass. The direct preview serves the frontend and proxied
+fixture API, then releases both listeners on shutdown. Four ACK regression
+tests enforce a total deadline across WebSocket keepalives and continuous partial
+input. A cancellable watchdog closes the socket at the 10-second deadline and
+is joined before return. The Docker/Nix
+prerequisites are still absent in this sandbox, so full transport and lifecycle
+tasks remain unchecked.

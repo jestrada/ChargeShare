@@ -28,6 +28,7 @@ The guides in `docs/` are:
 - [Offline pricing](docs/pricing.md): exact amounts, rate windows, scoped quotes
   and the runnable fictional example
 - [Local preview](docs/local-preview.md): launch, interactions and demo limits
+- [Local development](docs/local-development.md): pinned Nix/Tilt synthetic receiver-to-Kafka harness and isolated lifecycle
 - [POC plan](docs/plan.md): three local integration stages, then Cloudflare architecture and Terraform deployment
 
 [Spec 1](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md)
@@ -110,8 +111,14 @@ copying it neither creates credentials nor authorizes live operation.
 
 ## Licensing and tooling provenance
 
-No project license has been selected. Public visibility alone grants no general
-open-source license. OpenSpec is a development dependency. The official
+ChargeShare's original source code and documentation are licensed under the
+[MIT License](LICENSE), copyright 2026 Joseph Estrada and contributors.
+Third-party code, generated components, fonts and tools retain their upstream
+licenses and copyright notices; the project MIT license does not replace them.
+Cargo workspace packages and the private npm packages declare `MIT` for
+project-owned code. This does not change their publication settings.
+
+OpenSpec is a development dependency. The official
 Fission-AI/OpenSpec 1.14.0 CLI generated `.agents/skills/openspec-*` and
 `.agents/skills/.openspec-target`; their MIT metadata and the full
 [upstream MIT notice](docs/licenses/openspec-MIT.txt) are retained. The notice is
@@ -129,4 +136,24 @@ The shadcn CLI 4.21.1 generated the Base UI `base-nova` button, select, tabs,
 tooltip, dialog, switch and table sources and utility/config scaffolding in `apps/web`. Their
 [upstream MIT notice](docs/licenses/shadcn-ui-MIT.txt) is retained. The CLI is not
 a runtime dependency. Component dependencies and tooling are pinned in the
-frontend package and lockfile; fonts are bundled locally.
+frontend package and lockfile. The locally bundled Geist font from
+`@fontsource-variable/geist` 5.3.0 remains under SIL Open Font License 1.1;
+its exact packaged [copyright and OFL notice](docs/licenses/geist-OFL-1.1.txt)
+is retained. Vite includes the project MIT, shadcn MIT and Geist OFL notices
+from [`apps/web/public/licenses/`](apps/web/public/licenses/) in frontend builds.
+
+The local synthetic harness uses the official Tesla Fleet Telemetry receiver
+and protocol helpers at revision
+`bd076fe1494841707528449560c4a19d0d426da4`. Those upstream materials remain under
+[Apache License 2.0](docs/licenses/fleet-telemetry-Apache-2.0.txt), with their
+original notices preserved. ChargeShare's MIT license applies only to the
+project-owned harness and does not relicense Tesla's receiver or helpers.
+
+The receiver's external native build inputs also retain their own terms:
+[libsodium 1.0.19](https://github.com/jedisct1/libsodium/blob/1.0.19-RELEASE/LICENSE)
+uses ISC, and
+[libzmq 4.3.4](https://github.com/zeromq/libzmq/blob/v4.3.4/README.md#license)
+uses LGPL 3.0 or later with the upstream independent-module linking exception.
+Retain their supplied license and copyright files in receiver build outputs.
+Other dependencies and base images retain their upstream notices; this section
+records the named inputs rather than a complete distribution-license audit.

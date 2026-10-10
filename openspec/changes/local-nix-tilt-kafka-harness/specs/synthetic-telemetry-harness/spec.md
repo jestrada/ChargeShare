@@ -7,7 +7,7 @@ Verify the local transport boundary from synthetic vehicle messages through the 
 ## ADDED Requirements
 
 ### Requirement: Exercise the actual receiver boundary
-The harness SHALL send fixed fictional telemetry through the pinned official receiver's authenticated transport and verify decoded output from Kafka. Directly producing fixture JSON to Kafka MUST NOT substitute for the receiver acceptance test. Only the local test certificate authority SHALL be trusted by the synthetic client and receiver.
+The harness SHALL send fixed fictional telemetry through the pinned official receiver's authenticated transport and verify decoded output from Kafka. Directly producing fixture JSON to Kafka MUST NOT substitute for the receiver acceptance test. The synthetic client SHALL trust only the generated local test certificate authority. The official receiver SHALL retain its upstream built-in certificate-authority behavior and additionally trust the generated local test authority; its default production root, or engineering root when explicitly selected upstream, is not removed. Private networking and synthetic-only configuration MUST prevent enrolling or communicating with real vehicles.
 
 #### Scenario: Successful receiver delivery
 - **WHEN** the developer explicitly runs the documented smoke scenario against a ready environment
@@ -16,7 +16,7 @@ The harness SHALL send fixed fictional telemetry through the pinned official rec
 - **AND** success identifies the scenario, pinned receiver version and verified boundary
 
 #### Scenario: Reject invalid client authentication
-- **WHEN** a test client presents no certificate or a certificate outside the generated test trust chain
+- **WHEN** a test client presents no certificate or a certificate signed by an unrelated, untrusted synthetic certificate authority
 - **THEN** the receiver rejects the connection and the verifier observes no corresponding telemetry record
 - **AND** diagnostics exclude certificate private keys and arbitrary rejected payload content
 
