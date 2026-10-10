@@ -13,8 +13,8 @@ verification described in [local preview](local-preview.md).
 
 ## What runs today
 
-[Repository checks](../.github/workflows/security.yml) runs strict OpenSpec
-validation, security guard tests/history scans, the frontend build, Rust formatting, clippy and the
+[Repository checks](../.github/workflows/security.yml) runs security guard
+tests/history scans, the frontend build, Rust formatting, clippy and the
 complete `cargo test --workspace --locked` on every push and pull request. The
 pinned Rust 1.99.0 toolchain and Cargo.lock are used on clean hosted runners.
 The wrapper `bash scripts/testing/offline-suite.sh` preserves Cargo's exit status,
@@ -23,6 +23,11 @@ or fewer than 15 pricing scenarios, and produces a safe synthetic
 summary plus test log. The allowlisted artifact has seven-day retention and is
 uploaded on success or failure. No `continue-on-error`, credentials or network
 calls are used in the domain suite. Dependency/tool downloads are setup only.
+
+OpenSpec is paused and its validation job is removed. Historical validation
+results below remain evidence of the earlier workflow, not current publication
+requirements. Track new acceptance and completion in the owning GitHub issue
+and PR; preserve the existing behavioral scenarios and tests.
 
 ## Spec 1 scenario coverage
 
@@ -87,7 +92,7 @@ Its seven accepted requirements are synced to the
 - Exact staged paths/diff reviewed: only public-safe Rust source, fictional fixture
   values, CI script/workflow and project/spec status documentation
 
-These checks are repeated before each publication. Hosted deliberate-failure and
+The current checks described above are repeated before publication. Hosted deliberate-failure and
 restored passing-run evidence is recorded below.
 
 ### Code design refactor verification

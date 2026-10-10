@@ -17,8 +17,8 @@ allowlisted summary and versions. The setting is now removed.
 passed on commit `8455a45e937b7f9ad7359d4fcb9b1b46a111d847`.
 
 Existing repository checks remain required. Activation does not prove startup,
-transport, retention or lifecycle acceptance, and unchecked OpenSpec tasks stay
-unchecked until their stated runtime evidence exists. Only allowlisted synthetic
+transport, retention or lifecycle acceptance. Historical task status is preserved;
+current acceptance and completion are tracked in GitHub Issues and PRs. Only allowlisted synthetic
 summaries, versions and normalized fixture results are uploaded. Keys,
 certificates and unrestricted runtime logs are excluded.
 
@@ -38,5 +38,5 @@ health, blockers and known failure categories instead of silently waiting.
 Explicit Kafka protocol health and authenticated receiver health prerequisites
 resolved the startup race. The passing run covered retained stop/start, two
 identical clean reset/start results, invalid-trust shutdown and successful cleanup
-in a 5m24s job. Reverify the exact published commit after documentation/spec
-archival; the PR's hosted checks retain that final evidence.
+in a 5m24s job. Reverify the exact published commit after final code or
+documentation updates; the PR's hosted checks retain that final evidence.

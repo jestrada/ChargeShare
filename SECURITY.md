@@ -56,7 +56,6 @@ history. Both fail closed if the scanner or required runtime is missing.
 git diff --cached --check
 bash scripts/security/scan.sh staged
 bash scripts/security/scan.sh history
-npm run spec:validate
 ```
 
 Run `node scripts/security/test-guards.mjs` to exercise the guardrails against
@@ -74,8 +73,9 @@ false positives carefully rather than disabling a rule or bypassing hooks.
 
 ## CI and limits
 
-GitHub Actions scans tracked paths and complete fetched history and validates all
-OpenSpec artifacts and the Rust workspace. Actions are pinned to immutable commit
+GitHub Actions scans tracked paths and complete fetched history and checks the
+Rust workspace, frontend build and synthetic receiver integration. OpenSpec
+validation is paused with its workflow. Actions are pinned to immutable commit
 IDs; Gitleaks downloads are checksum-pinned. Workflow permissions are read-only, checkout does not retain
 credentials, and no repository secrets are required.
 

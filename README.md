@@ -30,6 +30,13 @@ The guides in `docs/` are:
 - [Local preview](docs/local-preview.md): launch, interactions and demo limits
 - [Local development](docs/local-development.md): pinned Nix/Tilt synthetic receiver-to-Kafka harness and isolated lifecycle
 - [POC plan](docs/plan.md): three local integration stages, then Cloudflare architecture and Terraform deployment
+- [Issue tracking](docs/agents/issue-tracker.md): Wayfinder decisions and implementation work through GitHub Issues
+
+Current planning and implementation tracking use GitHub Issues through `gh`.
+The [Wayfinder map](https://github.com/jestrada/ChargeShare/issues/9) charts the
+remaining synthetic POC. OpenSpec is paused; the files linked below remain
+reference contracts and historical evidence, with their original completion
+status preserved. New work does not require OpenSpec artifacts or commands.
 
 [Spec 1](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md)
 was implemented, verified and archived on 2026-10-03. Its seven accepted
@@ -68,14 +75,11 @@ See [local preview](docs/local-preview.md) for prerequisites and boundaries.
 Prerequisites: Rust 1.99.0 through rustup with rustfmt/Clippy, a C linker, Node.js
 24 or newer, npm, Git, Bash, curl, tar and SHA-256 tooling. The toolchain is pinned
 in `rust-toolchain.toml`; `Cargo.lock` is committed and the core has no runtime
-dependencies. OpenSpec 1.14.0 is pinned with registry integrity hashes.
+dependencies.
 
 ```sh
-npm ci --ignore-scripts
 bash scripts/security/install-gitleaks.sh
 bash scripts/security/install-hooks.sh
-npm run spec:validate
-npm run spec:status
 node scripts/security/test-guards.mjs
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -89,8 +93,7 @@ a fresh clone does not activate hooks automatically. Gitleaks 8.30.1 is download
 from its official release and checksum-verified by the installer.
 
 The npm package's `private: true` prevents npm publication, not GitHub visibility.
-The npm OpenSpec scripts opt out of telemetry; use `OPENSPEC_TELEMETRY=0` or
-`DO_NOT_TRACK=1` for direct CLI commands. `.env.example` contains inert placeholders;
+`.env.example` contains inert placeholders;
 copying it neither creates credentials nor authorizes live operation.
 
 ## Change and publication workflow
@@ -102,17 +105,19 @@ copying it neither creates credentials nor authorizes live operation.
    [scenarios](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/specs/vehicle-ledger/spec.md)
    and [tasks](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/tasks.md)
    retain the original review context.
-2. Use the generated OpenSpec skills under `.agents/skills/` to propose/refine
-   requirements and scenarios. Obtain explicit implementation approval for new
-   behavior; later capabilities need separately reviewed specs.
-3. Run all applicable tests, strict spec validation and [publication safeguards](SECURITY.md#before-every-publication).
+2. Record the problem, approved scope and observable acceptance criteria in the
+   owning GitHub issue. Use Wayfinder when a large effort needs decisions resolved;
+   keep implementation checklists and evidence in issues and PRs, and enduring
+   contracts in repository documentation. Existing approvals carry forward; new
+   behavior needs user approval. Follow [the tracker conventions](docs/agents/issue-tracker.md).
+3. Run all applicable tests and [publication safeguards](SECURITY.md#before-every-publication).
    Stage only intended files and review the complete staged diff and commit author
    metadata. Stop on scanner findings or unexpected files; never bypass hooks.
 4. Publish only to the authorized repository/branch with a normal fast-forward
    push. If the remote changed, integrate deliberately and repeat checks; never
    force-push or replace Git history as a shortcut.
 5. Verify the exact remote commit and terminal hosted checks before claiming
-   completion. Archive only after implementation and verification. Passing checks
+   completion. Close implementation issues only after their acceptance is verified. Passing checks
    do not authorize merging, deployment, Tesla registration, OAuth/key pairing,
    credential creation, vehicle access or spending.
 
@@ -125,15 +130,16 @@ licenses and copyright notices; the project MIT license does not replace them.
 Cargo workspace packages and the private npm packages declare `MIT` for
 project-owned code. This does not change their publication settings.
 
-OpenSpec is a development dependency. The official
-Fission-AI/OpenSpec 1.14.0 CLI generated `.agents/skills/openspec-*` and
-`.agents/skills/.openspec-target`; their MIT metadata and the full
-[upstream MIT notice](docs/licenses/openspec-MIT.txt) are retained. The notice is
-legal attribution, not a fourth guide.
+OpenSpec 1.14.0 previously supplied the planning workflow and generated skills.
+Its CLI dependency, npm scripts, generated skills and validation job are removed
+while the workflow is paused. Retained planning artifacts and the
+[upstream MIT notice](docs/licenses/openspec-MIT.txt) preserve their history and
+attribution; see [the reference directory](openspec/README.md).
 
 The initial generation command was
 `OPENSPEC_TELEMETRY=0 npx @fission-ai/openspec@1.14.0 init --tools codex --profile core --no-animation`.
-This is provenance, not a command to rerun on each checkout. Gitleaks is MIT-licensed;
+This is historical provenance; do not rerun it unless OpenSpec is explicitly
+re-enabled. Gitleaks is MIT-licensed;
 its executable is not committed. Its pinned version, official source and digests
 are in [the installer](scripts/security/install-gitleaks.sh). No private project
 code, personal correspondence, live vehicle payloads or proprietary integration
