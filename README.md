@@ -11,7 +11,9 @@ Owner/vehicle scope checks are not authentication or approved cross-owner sharin
 physical measurement accuracy is unvalidated. The additive offline pricing milestone
 quotes eligible counter intervals using exact versioned rates, with explicit
 holds and exact priced subtotals. Real utility calendars, bills, monthly statements,
-live collection, ledger ingestion, persistence and deployment remain future work.
+live collection, receiver-backed ledger integration and deployment remain future work.
+An outer ingestion crate now retains fictional receiver-shaped evidence and scoped
+replay in local SQLite; receiver-backed ingestion acceptance is still pending.
 A localhost React/shadcn dashboard presents fictional battery readings and real
 core-calculated sample costs through a loopback Rust API. Its committed dated table
 contains a September public tariff sample and a separately labeled winter estimate.
@@ -30,6 +32,7 @@ The guides in `docs/` are:
 - [Local preview](docs/local-preview.md): launch, interactions and demo limits
 - [Local development](docs/local-development.md): pinned Nix/Tilt synthetic receiver-to-Kafka harness and isolated lifecycle
 - [POC plan](docs/plan.md): three local integration stages, then Cloudflare architecture and Terraform deployment
+- [Durable synthetic ingestion](docs/durable-ingestion.md): candidate normalization, local SQLite recovery and scoped replay; actual receiver integration remains unverified
 
 [Spec 1](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md)
 was implemented, verified and archived on 2026-10-03. Its seven accepted
@@ -66,7 +69,7 @@ Visit **http://127.0.0.1:5173**. Stop both preview processes with Ctrl-C.
 See [local preview](docs/local-preview.md) for prerequisites and boundaries.
 
 Prerequisites: Rust 1.99.0 through rustup with rustfmt/Clippy, a C linker, Node.js
-24 or newer, npm, Git, Bash, curl, tar and SHA-256 tooling. The toolchain is pinned
+24 or newer, npm, Git, Bash, make, curl, tar and SHA-256 tooling. The toolchain is pinned
 in `rust-toolchain.toml`; `Cargo.lock` is committed and the core has no runtime
 dependencies. OpenSpec 1.14.0 is pinned with registry integrity hashes.
 
@@ -80,6 +83,8 @@ node scripts/security/test-guards.mjs
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 bash scripts/testing/offline-suite.sh
+bash scripts/testing/ingestion-suite.sh
+python3 scripts/testing/test_ingestion_guard.py
 ```
 
 The suite runs complete `cargo test --workspace --locked` and retains synthetic

@@ -5,7 +5,11 @@ Each needs reviewed acceptance; this roadmap authorizes no implementation,
 deployment, credentials, spending or vehicle access.
 
 Offline ledger/pricing, fixture preview and stage 1's synthetic receiver/Kafka
-harness are implemented and verified. Stages 2–4 need separate changes.
+harness are implemented and verified. Stage 2 has independently tested candidate
+normalization, SQLite recovery and mocked Kafka replay; its actual receiver-backed
+ingestion acceptance remains pending. Persisted results and Cloudflare need
+separate changes. See [architecture](architecture.md), [pricing](pricing.md) and
+[local preview](local-preview.md) for existing behavior.
 
 ## Route to a working POC
 
@@ -13,7 +17,7 @@ harness are implemented and verified. Stages 2–4 need separate changes.
 flowchart LR
     baseline["Implemented baseline<br/>Offline core + fixture preview"]
     harness["1 Verified receiver harness<br/>Nix + Tilt + Kafka"]
-    ingestion["2 Future durable ingestion<br/>Rust adapter + SQLite"]
+    ingestion["2 Partially applied ingestion<br/>Rust adapter + SQLite"]
     results["3 Future persisted results<br/>Core + API + dashboard"]
     cloudflare["4 Future Cloudflare POC<br/>Architecture + Terraform"]
     baseline --> harness --> ingestion --> results --> cloudflare
@@ -62,17 +66,38 @@ outside stage 1.
 
 ## Stage 2 Durable Rust ingestion
 
-After verified schema/delivery, propose ingestion separately.
-Define the outer consumer/normalizer, synthetic identity mapping, retained evidence,
-SQLite migrations, deduplication and atomic transaction/consumer-progress contract.
-Keep payload/database types outside the core. Define how retained evidence
-reconstructs session boundaries without invented samples or completion from silence.
+**Status:** Approved and partially applied in [draft PR #6](https://github.com/jestrada/ChargeShare/pull/6),
+stacked on [PR #5](https://github.com/jestrada/ChargeShare/pull/5), with a separate
+[durable ingestion change](../openspec/changes/durable-synthetic-ingestion/proposal.md). Its [design](../openspec/changes/durable-synthetic-ingestion/design.md),
+[detailed contract](../openspec/changes/durable-synthetic-ingestion/specs/durable-telemetry-ingestion/spec.md)
+and [tasks](../openspec/changes/durable-synthetic-ingestion/tasks.md) track the accepted scope. Candidate normalization,
+atomic SQLite evidence/progress and scoped replay have focused tests; see the
+[implementation guide](durable-ingestion.md). Stage 1's published head `33a4568`
+has verified receiver/Kafka transport, retained replay, restart/reset and cleanup.
+The owned broker epoch lifecycle and actual receiver-backed ingestion remain
+prerequisites for stage-2 end-to-end acceptance.
 
-**Acceptance:** Scoped multi-vehicle mapping, deterministic duplicate/reordered/late
-replay, visible missing/invalid/conflicting readings, safe diagnostics and
-unknown-identity rejection. Exercise reconnect/restart and crashes between reading and committing,
-without lost accepted evidence or inflated energy. Production allowlists, real
-retention, authentication and provisioning need separate contracts.
+The outer Rust consumer/normalizer implements configured synthetic identity mapping,
+evidence retention, SQLite schema, deduplication, late/conflicting messages and
+transactional consumer progress under the reviewed spec.
+Keep upstream payload types and database details out of the core. Decide how
+retained transport evidence reconstructs the domain's explicit session boundaries
+without inventing samples or treating silence as completion. The proposed local
+synthetic manifest supplies explicit connection/position/boundary annotations
+that receiver records do not provide; it does not establish real vehicle
+boundary semantics. Stage 2 retains observed evidence and defaults reconstructed
+sessions to unconfirmed. Persisted review decisions and results remain stage 3.
+
+**Acceptance:** Fixed multi-vehicle records map into valid scoped core events;
+duplicates and reordered/late input replay deterministically without double
+counting. Missing, invalid and conflicting readings remain visible. Demonstrate
+reconnect and restart at transaction/consumer-progress boundaries, including a
+crash between reading and committing, with no lost accepted evidence or inflated
+energy. Review safe diagnostics and unknown-identity rejection.
+
+**Boundary:** Durable synthetic ingestion and replay only. Production allowlists,
+real telemetry retention, account authentication and vehicle provisioning need
+their own reviewed contracts before any live input.
 
 ## Stage 3 Persisted charging results
 
