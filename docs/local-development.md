@@ -173,13 +173,14 @@ revision and build-input hash match. It then uses the same resolved service
 configuration without a redundant source build. Local startup keeps source
 builds; shutdown uses the reviewed source configuration and needs no cached image.
 Cache misses follow the pinned download/build path. Runtime certificates,
-payloads, logs, offsets and broker volumes are never cached. Timing and full
-acceptance evidence are recorded after terminal hosted verification.
+payloads, logs, offsets and broker volumes are never cached. The verified warm
+receiver build/load took 21 seconds versus 4m22s for cold build/load/cache export;
+warm Nix restore and repeated shell verification took 33 seconds. See
+[testing](testing.md) for the cold comparison and exact-run evidence.
 
-Implementation validation on this editing sandbox: flake evaluation/lock
-stability, pinned CLI version checks, Rust formatting/Clippy/workspace tests,
-protocol fixture regeneration and runtime guard tests are available. A host
-Nix store and Docker daemon are absent here. Full `nix develop`, image builds,
-Tilt orchestration and the actual receiver/Kafka path require the exact-commit
-hosted result before they are called verified. See [testing](testing.md) for
-accepted evidence, updated only after the hosted job reaches a terminal result.
+Full `nix develop`, cached image loading, Tilt orchestration, transport,
+retained restart, two clean resets and cleanup passed on fresh GitHub Ubuntu
+24.04 x86_64 in [run 38080880179](https://github.com/jestrada/ChargeShare/actions/runs/38080880179).
+Local Rust, frontend, strict-spec and security checks also passed. This editing
+host has no Nix store or Docker daemon; its macOS ARM architecture remains
+unsupported. [Testing](testing.md) records versions, timings and boundaries.

@@ -463,5 +463,51 @@ Docker health was `starting`; `receiver-ready` then failed. Fail-fast detection
 and cleanup completed the integration step in 37 seconds, rather than waiting
 15 minutes. The added broker-health prerequisite and receiver-health wait
 address this cold/warm startup race without changing transport assertions or
-retained-state/reset scenarios. Passing warm-cache and complete lifecycle
-acceptance remain pending.
+retained-state/reset scenarios. The following run supplies the previously pending
+warm-cache and complete lifecycle acceptance.
+
+### Complete Linux acceptance and warm caches
+
+On 2026-10-10, [push integration 38080880179](https://github.com/jestrada/ChargeShare/actions/runs/38080880179)
+passed the complete stage-1 contract on commit
+`8455a45e937b7f9ad7359d4fcb9b1b46a111d847`. The fresh Ubuntu 24.04 x86_64
+runner reused the Nix cache and 15 receiver build stages, including native
+library compilation and the Go receiver. Buildx 0.38.0 and BuildKit 0.34.0
+used the pinned reviewed Dockerfile and loaded the validated job image into
+the host daemon; Tilt's resolved startup configuration omitted only the
+receiver build field. Version output and lockfile hashes stayed unchanged.
+The runtime versions match the failure-proof evidence above.
+
+| Setup / acceptance | Cold cache creation run | Warm passing run |
+| --- | --- | --- |
+| Repeated locked Nix shell entry | 42 seconds | 15 seconds |
+| Nix cache restore / initial save | 15 seconds to save | 18 seconds to restore; no new save |
+| Receiver build, daemon load and layer-cache export | 4m22s | 21 seconds |
+| Complete integration scenarios and teardown | Startup race failed | 4m13s integration step; 5m24s whole job |
+
+All 57 runtime, 12 readiness and four cached-image tests passed. The owned
+Kafka protocol-health prerequisite held receiver startup until healthy;
+authenticated receiver health preceded metadata/topic/status readiness.
+Both explicit manual smoke triggers and each complete fixture suite required
+receiver ACKs plus decoded Kafka matches. Each clean suite had 26 expected
+ACKs and 26 matching records, preserving complete, missing, duplicate and
+out-of-order semantics.
+
+Stale-output, missing-output/ACK-only, missing or unrelated client trust,
+active reset and broker outage were rejected within their existing bounds.
+Independent verifier processes replayed retained records twice per clean run.
+Normal full stop/start retained the broker volume and passed replay. Shutdown
+released managed listeners; the second shutdown also succeeded with an
+incomplete certificate bundle. Both confirmed stopped-project resets completed.
+The two normalized 26-record outputs were byte-identical, SHA-256
+`efc3a47b9c6566ec510e5cc2e2687f78c1e5faa7f5664c18d37de2a86d4e328a`.
+
+Exit-preserving teardown and the separate always-run cleanup both succeeded.
+The artifact contained exactly `summary.md`, `versions.txt`,
+`normalized-first.json` and `normalized-second.json`; test trust, unrestricted
+logs and broker/runtime state were excluded. Existing push and PR security,
+strict-spec, complete Rust/fmt/Clippy and frontend checks also passed. The
+duplicate diagnostic PR integration was cancelled while the single push run
+completed; both triggers must pass on the final archival commit. Passing stage 1
+does not establish macOS ARM, ingestion, database recovery, live telemetry,
+Cloudflare compatibility or deployment.

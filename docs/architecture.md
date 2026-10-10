@@ -10,6 +10,12 @@ cross-owner sharing. The additive [offline pricing contract](pricing.md) calcula
 synthetic priced subtotals from versioned rate windows; it does not calculate a
 real bill, issue money owed, or certify a meter.
 
+The separate [stage-1 harness](local-development.md) now verifies synthetic
+authenticated traffic through the official receiver into Kafka on Linux x86_64.
+Its [acceptance evidence](testing.md#complete-linux-acceptance-and-warm-caches)
+covers transport, retained replay, stop/start, reset and cleanup. That traffic
+does not enter the ledger, database or dashboard.
+
 The [archived OpenSpec change](../openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md)
 retains its original review context. The accepted requirements are now in the
 [main vehicle-ledger spec](../openspec/specs/vehicle-ledger/spec.md). The contract
@@ -83,8 +89,9 @@ fixtures; its session quotes use the core. It adds no production sharing policy.
 
 ## Proposed local end-to-end flow
 
-This is the proposed next integration path, not the implemented path above or a
-completed OpenSpec change. It uses synthetic data on our local machine; it does
+This is the proposed complete integration path. Its receiver-to-Kafka stage is
+implemented and verified; durable ingestion and persisted results remain future
+work. It uses synthetic data on a supported local Linux machine; it does
 not connect a real car, Tesla account or hosted service. Cloudflare and production
 hosting are deferred.
 
@@ -100,9 +107,9 @@ our application, not a dependency to import into the pure domain core.
 ### Software ownership and local operation
 
 - **Tesla upstream:** Fleet Telemetry receiver and the original synthetic test
-  client. We would configure/run the receiver and adapt/run the client locally;
+  client. Stage 1 configures the receiver and adapts the client for local tests;
   this is not a Tesla-hosted receiver service.
-- **Apache Kafka:** third-party broker software that we would run locally. We own
+- **Apache Kafka:** third-party broker software run locally by stage 1. We own
   its configuration and integration, not Kafka itself. No managed Kafka service,
   cloud deployment or hosting purchase is selected.
 - **SQLite:** third-party embedded database software. We would own its schema,
@@ -114,17 +121,19 @@ our application, not a dependency to import into the pure domain core.
 
 ### Proposed spec boundaries
 
-The three boundaries in the diagram are suggested review/acceptance milestones,
-not one spec per box and not three specs already written or implemented. The
+The three boundaries in the diagram are review/acceptance milestones. Stage 1
+is complete; stages 2 and 3 need separate reviewed changes. The
 existing canonical contracts cover the [ledger](../openspec/specs/vehicle-ledger/spec.md),
 [pricing](../openspec/specs/session-pricing/spec.md), and
-[local dashboard](../openspec/specs/local-dashboard/spec.md).
+[local dashboard](../openspec/specs/local-dashboard/spec.md), with stage 1's
+[local development](../openspec/specs/local-development/spec.md) and
+[transport harness](../openspec/specs/synthetic-telemetry-harness/spec.md).
 New integration contracts need separate proposals, scenarios and approval before
 implementation. No upstream receiver or broker rewrite is proposed.
 
-1. **Receiver test harness:** configure the local upstream test client,
-   receiver and broker; prove the supported transport and decoded message handoff
-   with repository-safe synthetic fixtures, including rejection and failure cases.
+1. **Completed receiver test harness:** the local upstream test client,
+   receiver and broker verify transport and decoded handoff with synthetic
+   fixtures, rejection/failure cases and retained restart/reset acceptance.
 2. **Durable ingestion:** define our Rust mapping, identity
    allowlist, retained evidence, durable offsets, duplicate/late/conflicting data,
    transactional persistence and restart-safe replay into the existing core.
@@ -238,8 +247,9 @@ physically unvalidated evidence label.
 
 These counter, boundary and charge-type semantics are a fixture contract. They
 are not claims about Tesla's production counter resets, samples or session state.
-The actual Go receiver, adapter, durable ingestion and manual real-car validation
-remain separate approved future specs. No location, credentials, account IDs,
+The synthetic Go receiver-to-Kafka test is implemented. Ledger adapters, durable
+ingestion and manual real-car validation still require separate approved specs.
+No location, credentials, account IDs,
 vehicle controls, tariffs, statements or payments are implemented.
 
 ## Measurement boundary

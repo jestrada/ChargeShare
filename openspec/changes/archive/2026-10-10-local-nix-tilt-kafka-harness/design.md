@@ -3,8 +3,8 @@
 ## Outcome at a glance
 
 Pinned Nix and Tilt/Compose provide Linux x86_64 receiver-to-Kafka testing.
-Local definitions exist; full-stack acceptance is unverified. The fixture
-dashboard stays independent.
+Full transport and lifecycle acceptance passed on fresh Ubuntu 24.04 x86_64
+on 2026-10-10. The fixture dashboard stays independent.
 
 ```mermaid
 flowchart TB
@@ -47,20 +47,20 @@ test CA; the unpatched receiver retains its upstream built-in CA behavior.
 See [proposal](proposal.md) for motivation, [tasks](tasks.md) for evidence,
 [local-development](specs/local-development/spec.md) and
 [harness](specs/synthetic-telemetry-harness/spec.md) specs for acceptance, and
-[setup](../../../docs/local-development.md) for versions, commands and deadlines.
+[setup](../../../../docs/local-development.md) for versions, commands and deadlines.
 
 **Goal:** One inspectable, bounded synthetic transport test alongside the fixture
 preview, with explicit stop/reset and unchanged inward Rust dependencies.
 
 **Excluded:** Rust ingestion, SQLite, receiver-backed dashboard results, live
 Tesla setup, public ingress and production/utility-meter guarantees. Later work
-belongs to the [POC roadmap](../../../docs/plan.md).
+belongs to the [POC roadmap](../../../../docs/plan.md).
 
 | Surface | Verification boundary |
 | --- | --- |
 | Offline core / fixture preview | Existing checks pass; no receiver/Kafka coverage. |
-| Local harness | Linux x86_64 with permitted Docker; full acceptance unrun. |
-| Hosted integration | Fresh `ubuntu-24.04` x86_64; exact-commit passing run required. |
+| Local harness | Linux x86_64 with permitted Docker; complete transport/lifecycle scenarios verified on GitHub's host daemon. |
+| Hosted integration | Fresh `ubuntu-24.04` x86_64; failure proof followed by exact-commit full acceptance. |
 | Other platforms / Cloudflare | Deferred; Linux success establishes neither. |
 
 ## Decisions
@@ -236,5 +236,9 @@ Sync and archive after review and verification.
 
 Official Nix/Tilt/Tesla sources were inspected on 2026-10-03; GitHub runner/Tilt CI
 and Cloudflare guidance on 2026-10-04. They support design choices, not executed
-compatibility. This sandbox lacks a host Nix store and Docker daemon; local checks
-are not full receiver/Kafka or exact-commit hosted acceptance.
+compatibility. Hosted [run 38080880179](https://github.com/jestrada/ChargeShare/actions/runs/38080880179)
+verified the complete stage-1 contract on commit
+`8455a45e937b7f9ad7359d4fcb9b1b46a111d847`; [testing](../../../../docs/testing.md)
+records assertion failure proof, cache miss/hit, versions and lifecycle results.
+This editing host lacks a Nix store and Docker daemon and establishes no macOS
+ARM support. Final PR checks reverify the published archival commit.

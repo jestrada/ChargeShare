@@ -4,15 +4,15 @@ Build three synthetic local stages, then validate Cloudflare using Terraform.
 Each needs reviewed acceptance; this roadmap authorizes no implementation,
 deployment, credentials, spending or vehicle access.
 
-Offline ledger/pricing and fixture preview work. Stage 1 has local implementation
-but no full receiver/Kafka acceptance; stages 2–4 need separate changes.
+Offline ledger/pricing, fixture preview and stage 1's synthetic receiver/Kafka
+harness are implemented and verified. Stages 2–4 need separate changes.
 
 ## Route to a working POC
 
 ```mermaid
 flowchart LR
     baseline["Implemented baseline<br/>Offline core + fixture preview"]
-    harness["1 Receiver harness<br/>Nix + Tilt + Kafka; verification pending"]
+    harness["1 Verified receiver harness<br/>Nix + Tilt + Kafka"]
     ingestion["2 Future durable ingestion<br/>Rust adapter + SQLite"]
     results["3 Future persisted results<br/>Core + API + dashboard"]
     cloudflare["4 Future Cloudflare POC<br/>Architecture + Terraform"]
@@ -44,10 +44,13 @@ commit. Existing behavior is documented in [architecture](architecture.md),
 
 ## Stage 1 Receiver transport harness
 
-Details: active [proposal](../openspec/changes/local-nix-tilt-kafka-harness/proposal.md),
-[design](../openspec/changes/local-nix-tilt-kafka-harness/design.md),
-[tasks](../openspec/changes/local-nix-tilt-kafka-harness/tasks.md). Full integration
-is unverified.
+Completed and archived on 2026-10-10: [proposal](../openspec/changes/archive/2026-10-10-local-nix-tilt-kafka-harness/proposal.md),
+[design](../openspec/changes/archive/2026-10-10-local-nix-tilt-kafka-harness/design.md),
+[tasks and evidence](../openspec/changes/archive/2026-10-10-local-nix-tilt-kafka-harness/tasks.md).
+Canonical contracts are [local development](../openspec/specs/local-development/spec.md)
+and [synthetic telemetry harness](../openspec/specs/synthetic-telemetry-harness/spec.md).
+[Testing](testing.md) records complete fresh Linux acceptance, failure proof,
+retained restart/reset and cache timings.
 
 Pinned Nix/Tilt/Compose manages receiver, Kafka and separate fixture preview.
 **Acceptance:** Fresh Linux protocol readiness, finite mTLS WebSocket exchange,

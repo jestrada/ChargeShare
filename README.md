@@ -11,7 +11,7 @@ Owner/vehicle scope checks are not authentication or approved cross-owner sharin
 physical measurement accuracy is unvalidated. The additive offline pricing milestone
 quotes eligible counter intervals using exact versioned rates, with explicit
 holds and exact priced subtotals. Real utility calendars, bills, monthly statements,
-live collection, receiver integration, persistence and deployment remain future work.
+live collection, ledger ingestion, persistence and deployment remain future work.
 A localhost React/shadcn dashboard presents fictional battery readings and real
 core-calculated sample costs through a loopback Rust API. Its committed dated table
 contains a September public tariff sample and a separately labeled winter estimate.
@@ -40,6 +40,13 @@ are [session pricing](openspec/specs/session-pricing/spec.md) and
 [dated sample rates](openspec/changes/archive/2026-10-03-dated-rate-profiles/proposal.md).
 The archived planning artifacts retain their original review context. The earlier
 broad single-vehicle change was deleted, not marked complete.
+
+Stage 1's synthetic receiver-to-Kafka harness was implemented, verified on fresh
+Ubuntu 24.04 x86_64 and [archived](openspec/changes/archive/2026-10-10-local-nix-tilt-kafka-harness/proposal.md)
+on 2026-10-10. Its canonical contracts are [local development](openspec/specs/local-development/spec.md)
+and [synthetic telemetry verification](openspec/specs/synthetic-telemetry-harness/spec.md).
+[Testing](docs/testing.md) records transport, retention, reset, cleanup and warm
+cache evidence. Receiver traffic remains separate from the ledger and dashboard.
 
 ## Develop
 

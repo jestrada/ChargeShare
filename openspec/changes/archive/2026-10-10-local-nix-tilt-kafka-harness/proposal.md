@@ -15,10 +15,10 @@ Tesla receiver into Kafka before building ledger ingestion.
 - Run the same transport gate on fresh `ubuntu-24.04` GitHub Actions runners, with safe diagnostics and guaranteed teardown.
 - Reuse pinned Nix outputs and receiver build layers across fresh runners; verify cached image inputs and exclude runtime credentials from caches.
 
-Local implementation is in progress; full receiver/Kafka acceptance remains
-unverified. [Tasks](tasks.md) track completion. Rust ingestion, durable storage,
+Implemented and verified on fresh Ubuntu 24.04 x86_64 on 2026-10-10.
+[Tasks](tasks.md) link exact-run acceptance evidence. Rust ingestion, durable storage,
 receiver-backed results and Cloudflare/Terraform belong to later
-[roadmap stages](../../../docs/plan.md). Live Tesla setup, deployment and accuracy
+[roadmap stages](../../../../docs/plan.md). Live Tesla setup, deployment and accuracy
 claims are excluded.
 
 ## Capabilities
@@ -35,7 +35,7 @@ None; ledger, pricing and dashboard behavior stays unchanged.
 ## Impact
 
 Adds flake/lockfiles, Tilt/Compose definitions, local helpers, fixtures, CI and
-[setup documentation](../../../docs/local-development.md). The Rust core gains
+[setup documentation](../../../../docs/local-development.md). The Rust core gains
 no Tesla/Kafka dependencies or API changes.
 
 Hosts need Nix flakes, `nix-command`, permitted Linux-container Docker access
