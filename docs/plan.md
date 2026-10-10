@@ -72,10 +72,10 @@ stacked on [PR #5](https://github.com/jestrada/ChargeShare/pull/5), with a separ
 [detailed contract](../openspec/changes/durable-synthetic-ingestion/specs/durable-telemetry-ingestion/spec.md)
 and [tasks](../openspec/changes/durable-synthetic-ingestion/tasks.md) track the accepted scope. Candidate normalization,
 atomic SQLite evidence/progress and scoped replay have focused tests; see the
-[implementation guide](durable-ingestion.md). Stage 1's published branch is still
-planning-only. Its recovered `ec1c892` implementation preserves the later ACK
-fixes, but publication, broker epoch lifecycle and actual receiver acceptance
-remain prerequisites for end-to-end acceptance.
+[implementation guide](durable-ingestion.md). Stage 1's published head `33a4568`
+has verified receiver/Kafka transport, retained replay, restart/reset and cleanup.
+The owned broker epoch lifecycle and actual receiver-backed ingestion remain
+prerequisites for stage-2 end-to-end acceptance.
 
 The outer Rust consumer/normalizer implements configured synthetic identity mapping,
 evidence retention, SQLite schema, deduplication, late/conflicting messages and

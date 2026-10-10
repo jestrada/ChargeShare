@@ -29,8 +29,9 @@ calls are used in the domain suite. Dependency/tool downloads are setup only.
 
 ## Durable synthetic ingestion verification
 
-The outer crate adds 64 focused tests, for 115 workspace tests. Commands and
-limits are in [durable ingestion](durable-ingestion.md). Local checks on 2026-10-09:
+The outer crate adds 64 focused tests. Rebased onto the stage-1 harness, the
+workspace includes 125 Rust tests. Commands and limits are in
+[durable ingestion](durable-ingestion.md). Historical local checks on 2026-10-09:
 
 - Complete workspace and unchanged offline wrapper: 115 passed, zero failed/ignored/filtered
 - Focused ingestion wrapper and four failure-guard tests passed
@@ -39,13 +40,44 @@ limits are in [durable ingestion](durable-ingestion.md). Local checks on 2026-10
 - Separate verification combined recovered parent `ec1c892` with the same ingestion source: 125 Rust tests, formatting and Clippy passed; the exact parent's 51 runtime helper tests also passed
 - Candidate records match all six recovered parent fixture records; this establishes fixture provenance only
 
-The combined check used a separate detached worktree and did not rewrite either
-PR. No actual receiver/Kafka stack ran here: Docker/Nix execution was unavailable,
-the parent's published branch is still `fb6b2d3`, and its broker epoch lifecycle
-is incomplete. The focused Kafka tests use librdkafka's local mock cluster. The
-dedicated actual-receiver ingestion CI task and archive remain unchecked. Hosted
-checks must be verified on the exact published head; local or historical results
+The historical combined check used a separate detached worktree. At that time,
+the parent still published planning head `fb6b2d3`, and Docker/Nix execution was
+unavailable locally. On 2026-10-10, PR #6 was rebased onto the verified parent
+`4179906`; [stage-1 Linux acceptance](#complete-linux-acceptance-and-warm-caches)
+now passes with caches, retained restart/reset and cleanup.
+
+The focused Kafka tests use librdkafka's local mock cluster. Hosted repository
+checks run all ingestion tests through the complete workspace, but their guard
+only requires the ledger/pricing suites; the focused ingestion guard and its four
+failure tests remain local. The inherited transport workflow verifies stage 1,
+without consuming into SQLite. The owned broker epoch binding, actual receiver
+→ Kafka → ingestion → SQLite → scoped replay gate and archive remain pending.
+Hosted checks must be verified on each exact published head; historical results
 do not establish that outcome.
+
+### Stack rebase verification on 2026-10-10
+
+PR #5's ten push/PR checks passed at `4179906`. During stack verification, main
+advanced to `65613a3` with planning skills and contributor guidance. The harness
+was rebased to `33a4568` without changing its implementation; fresh hosted checks
+are required on the rebased stack.
+PR #6 combines the published harness with the existing ingestion implementation,
+retaining both crates and the exact locked dependency versions. A Linux-only
+path type is now qualified at its use sites, fixing an existing unused import on
+macOS without changing the Linux path validation.
+
+Local formatting, warnings-denied Clippy, the offline wrapper, frontend build,
+strict OpenSpec, security guards and the four ingestion-wrapper guard tests pass.
+The macOS workspace runs 105 tests: its two Linux-only CLI/Kafka suites contain
+zero tests, so the focused ingestion wrapper correctly refuses acceptance. A
+private canonical temporary directory is required for storage tests because the
+macOS default temp path traverses a symlink rejected by the ownership guard.
+The complete runtime-helper suite also requires Linux APIs and refuses this host.
+Fresh Ubuntu checks on each published head are therefore the acceptance evidence
+for the full 125-test workspace and all runtime helpers.
+
+Relative Markdown links and changed diagram structure are reviewed. Mermaid
+rendering tooling is unavailable here; no new visual verification is claimed.
 
 ## Spec 1 scenario coverage
 

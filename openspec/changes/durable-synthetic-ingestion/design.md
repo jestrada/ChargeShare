@@ -2,13 +2,13 @@
 
 ## Context
 
-See [proposal](proposal.md) for scope. Parent [PR #5](https://github.com/jestrada/ChargeShare/pull/5) at `fb6b2d3` contains transport plans. Its recovered harness implementation at `ec1c892` is absent from that published branch, and receiver/Kafka acceptance remains unverified. The approved stage-2 implementation has separate local/mocked evidence; it does not satisfy that transport gate.
+See [proposal](proposal.md) for scope. Parent [PR #5](https://github.com/jestrada/ChargeShare/pull/5) at `33a456894eefb1955a6dd28aadb997e1fc079852` publishes verified Linux receiver/Kafka transport, retained replay, restart/reset and cleanup. The approved stage-2 implementation has separate local/mocked evidence; actual receiver-backed ingestion and the owned broker epoch lifecycle remain pending.
 
 ```mermaid
 flowchart LR
-    receiver["Tesla upstream receiver<br/>Actual acceptance pending"] -.-> kafka["Apache Kafka<br/>Private parent runtime"]
+    receiver["Tesla upstream receiver<br/>Stage 1 transport verified"] --> kafka["Apache Kafka<br/>Private parent runtime"]
     kafka -.-> consumer["ChargeShare Rust Kafka driver<br/>Manual assignment; mocked tests"]
-    epoch["Owned source epoch lifecycle<br/>Parent prerequisite pending"] -.-> consumer
+    epoch["Owned source epoch lifecycle<br/>Runtime integration pending"] -.-> consumer
     mock["Local mocked Kafka"] --> consumer
     candidate["Fictional decoded fixtures"] --> adapter["ChargeShare normalization<br/>Exact observed counters"]
     consumer --> adapter
@@ -20,8 +20,9 @@ flowchart LR
     core -.-> later["Stage 3 pending<br/>Persisted pricing + API/dashboard"]
 ```
 
-Solid arrows show candidate/local/mocked data and recovery flow. Dashed arrows
-show pending actual transport/lifecycle or deferred results, not running services.
+Solid arrows show verified stage-1 transport and candidate/local/mocked ingestion
+and recovery flow. Dashed arrows show pending receiver-backed ingestion/lifecycle
+or deferred results, not running services.
 The fixture dashboard is independent. Imports point inward: ingestion imports the core; the core imports no Kafka, SQL or receiver types. Tesla/Kafka/SQLite own upstream software; ChargeShare owns normalization, schema and transactions. Stage 1 owns transport, trust and broker lifecycle.
 
 Inspected candidate receiver `V` output contains fictional key/`vin`, `createdAt`, typed fields and `isResend`. It lacks core connection/position/explicit boundary metadata. Six candidate records match recovered parent `ec1c892` fixtures exactly. Capture actual pinned receiver output before integration acceptance; fixture equivalence is not transport acceptance.

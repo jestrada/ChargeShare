@@ -1,6 +1,6 @@
 # Tasks
 
-Apply was approved on 2026-10-09. Checked tasks have independent candidate/local/mocked evidence; they do not establish actual receiver acceptance. Parent publication, verified transport/schema and runtime epoch lifecycle remain open, so integration acceptance and archive stay unchecked. See [verification](../../../docs/durable-ingestion.md).
+Apply was approved on 2026-10-09. Checked tasks have independent candidate/local/mocked evidence; they do not establish actual receiver-backed ingestion acceptance. The published parent `33a4568` now verifies receiver/Kafka transport, retained replay, restart/reset and cleanup. Stage-2 schema/lifecycle binding, integrated ingestion acceptance and archive remain unchecked. See [verification](../../../docs/durable-ingestion.md).
 
 ## 1. Verify the parent boundary and pin the input contract
 
