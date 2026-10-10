@@ -4,7 +4,7 @@ This is contributor guidance for future changes, adapted from the user-supplied
 *Guide to Writing Clean, Maintainable Code and Architectural Design*
 (`deep-research-report.md`, supplied 2026-10-02). It is not an implementation
 approval or a new product specification. Read it with [AGENTS.md](../AGENTS.md),
-[security](../SECURITY.md), the approved OpenSpec change, and the actual code/tests.
+[security](../SECURITY.md), the approved issue scope, and the actual code/tests.
 The guidance is self-contained. External source names are attribution, not
 instructions to leave the repository or start additional work.
 
@@ -222,7 +222,6 @@ Before publishing, review the exact diff and complete this checklist:
 Follow [security](../SECURITY.md) and [testing](testing.md) for setup and full rules:
 
 ```sh
-npm run spec:validate
 node scripts/security/test-guards.mjs
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -233,7 +232,7 @@ bash scripts/security/scan.sh history
 ```
 
 Check remote commit and CI evidence before claiming publication or readiness.
-Do not bypass hooks, mark work complete without verification, merge, archive or
+Do not bypass hooks, mark work complete without verification, merge or
 deploy merely because the code passes. Those steps remain subject to their own
 workflow and authorization.
 

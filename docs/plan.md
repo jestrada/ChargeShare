@@ -7,6 +7,12 @@ deployment, credentials, spending or vehicle access.
 Offline ledger/pricing, fixture preview and stage 1's synthetic receiver/Kafka
 harness are implemented and verified. Stages 2–4 need separate changes.
 
+Current planning follows the [Wayfinder map](https://github.com/jestrada/ChargeShare/issues/9).
+The [durable ingestion acceptance issue](https://github.com/jestrada/ChargeShare/issues/12)
+tracks the remaining work in the existing ingestion PR. OpenSpec is paused;
+linked artifacts below remain reference material. Track current scope, tasks and
+acceptance evidence in GitHub Issues and PRs through `gh`.
+
 ## Route to a working POC
 
 ```mermaid
@@ -111,6 +117,6 @@ reimbursement validation need separate authorization.
 
 ## Review and evidence
 
-Link future specs/PRs; record exact commits, pins, acceptance and unsupported
-cases. Review, verify, sync and archive before authorized merge. Official upstream
+Link issues and PRs; record exact commits, pins, acceptance and unsupported
+cases. Review and verify the approved acceptance before an authorized merge. Official upstream
 guidance establishes no executed compatibility or chosen Cloudflare topology.

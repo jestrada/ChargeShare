@@ -3,13 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
-  "description": "A spec-driven Tesla AC charging reimbursement proof of concept",
+  "description": "A synthetic AC charging ledger and pricing proof of concept",
   "scripts": {
     "preview:dev": "bash scripts/preview-dev.sh",
     "preview:build": "npm --prefix apps/web run build",
-    "spec:validate": "OPENSPEC_TELEMETRY=0 openspec validate --all --strict --no-interactive",
-    "spec:status": "OPENSPEC_TELEMETRY=0 openspec list --all",
-    "spec:list": "OPENSPEC_TELEMETRY=0 openspec list",
     "security:install": "bash scripts/security/install-hooks.sh",
     "security:scan": "bash scripts/security/scan.sh history",
     "security:staged": "bash scripts/security/scan.sh staged",
@@ -17,8 +14,5 @@
   },
   "engines": {
     "node": ">=24.0.0"
-  },
-  "devDependencies": {
-    "@fission-ai/openspec": "1.14.0"
   }
 }

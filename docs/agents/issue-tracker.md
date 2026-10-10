@@ -13,8 +13,18 @@ GitHub access is unavailable, report the blocker and retain any draft for later
 publication; do not establish a separate tracker.
 
 Create or update issues when requested or required by the invoked workflow,
-reusing relevant existing issues. Keep OpenSpec artifacts and implementation
-checklists in `openspec/` and link them from related issues.
+reusing relevant existing issues. Keep implementation scope, checklists and
+acceptance evidence in the owning issue and PR. Link enduring contracts and
+architecture documentation rather than duplicating them. Small changes can use
+one issue or PR without a Wayfinder map.
+
+OpenSpec is paused. Retained files in `openspec/` are reference material and
+historical evidence, not an active workflow. Do not create new OpenSpec artifacts
+or scaffold changes; record new planning and checklists in GitHub Issues instead.
+Pass this restriction to delegated agents. When continuing an existing change,
+carry its remaining behavioral acceptance into the owning GitHub issue, linking
+the original contract and evidence. Do not require OpenSpec validation, spec sync
+or archival, and do not mark historical tasks complete merely to retire the tool.
 
 ## Wayfinder trial scope
 
@@ -22,10 +32,15 @@ Invoke `$wayfinder` with the goal to explore or an existing map's issue URL.
 Agree on the destination before creating a map. If the question fits one session,
 use the skill's short path instead of creating a map and tickets unnecessarily.
 
-Wayfinder records planning decisions. The accepted contracts remain in
-`openspec/specs/`; a planning ticket is not evidence that behavior is implemented.
+Wayfinder records planning decisions. Existing domain contracts still apply;
+a planning ticket is not evidence that behavior is implemented.
 Keep implementation within the user's approved scope and follow `AGENTS.md`,
 `SECURITY.md`, and `docs/code-design.md` for code, verification and publication.
+
+Implementation issues are separate from the map's decision tickets. Link them
+from the map's Notes and their PRs; use their own checklists and acceptance
+evidence. Do not label delivery work as a Wayfinder decision merely to put it
+under the map.
 
 ## GitHub operations
 
