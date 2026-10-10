@@ -114,7 +114,9 @@ tilt down
 
 The shell launcher verifies and signals only this checkout's recorded Tilt
 process, waits for host preview listeners to close, then removes this project's
-Compose containers/network. Broker volume and local runtime state remain.
+Compose containers/network. Broker volume and local runtime state remain. Shutdown does not prepare or
+validate certificate contents, so expired or incomplete test trust cannot block
+teardown; reviewed configuration and runtime ownership checks still apply.
 Closing the browser UI does not stop anything; Ctrl-C stops Tilt and its host
 processes but leaves Compose containers. Run `tilt down` for full shutdown.
 Restarting with `tilt up` retains broker data and regenerated verifier processes
@@ -138,10 +140,9 @@ semantic results; volatile receipts/offsets are not energy evidence.
 
 ## Automated acceptance and evidence
 
-[The inactive integration workflow](workflows/telemetry-integration.yml.disabled)
-is supplied for the maintainer to activate using [these handoff steps](workflows/README.md).
-It does not run in this branch. Once activated, it is configured for every push
-and pull request using a fresh `ubuntu-24.04` x86_64 VM, its
+[The integration workflow](../.github/workflows/telemetry-integration.yml)
+is active for every push and pull request. [Verification steps](workflows/README.md)
+describe the deliberate failure proof and restored successful run. It runs using a fresh `ubuntu-24.04` x86_64 VM, its
 host Docker daemon and the same locked shell/Compose/Tilt inputs. It explicitly
 triggers `telemetry-smoke`, checks all fixture cases and negative boundaries,
 replays retained records across verifier and service restarts, and compares two

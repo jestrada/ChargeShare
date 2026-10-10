@@ -126,7 +126,14 @@ for iteration in first second; do
     bash scripts/dev/harness.sh replay
     record 'PASS: normal stop/start preserves replayable broker records'
   fi
+  if [[ "$iteration" == second ]]; then
+    stage=shutdown-with-incomplete-trust
+    mv "$CHARGESHARE_RUNTIME_DIR/certificates/client.crt" "$CHARGESHARE_RUNTIME_DIR/certificates/client.crt.saved"
+  fi
   stop_stack
+  if [[ "$iteration" == second ]]; then
+    record 'PASS: incomplete test trust did not prevent owned container shutdown'
+  fi
   stage=synthetic-reset
   python3 scripts/dev/runtime.py reset --confirm-synthetic-reset
   record "PASS: $iteration explicit stopped-project reset"

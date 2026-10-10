@@ -11,12 +11,62 @@ import subprocess
 import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.dont_write_bytecode = True
 import runtime
+
+
+class TiltfileLifecycleTests(unittest.TestCase):
+    def evaluate(self, action, certificate_failure, configuration_failure=False):
+        observed = []
+
+        def local(command, **options):
+            observed.append(command)
+            if command.endswith(" prepare"):
+                raise runtime.RuntimeFailure(certificate_failure)
+            if command.endswith(" validate-config") and configuration_failure:
+                raise runtime.RuntimeFailure("Unsafe Compose configuration")
+            return "synthetic"
+
+        def resource(*arguments, **options):
+            observed.append(arguments)
+
+        namespace = {
+            "config": SimpleNamespace(tilt_subcommand=action),
+            "os": SimpleNamespace(putenv=lambda *arguments: None),
+            "local": local,
+            "docker_compose": resource,
+            "dc_resource": resource,
+            "local_resource": resource,
+            "probe": resource,
+            "http_get_action": resource,
+            "TRIGGER_MODE_MANUAL": "manual",
+        }
+        tiltfile = Path(__file__).resolve().parents[2] / "Tiltfile"
+        exec(compile(tiltfile.read_text(), str(tiltfile), "exec"), namespace)
+        return observed
+
+    def test_shutdown_can_load_resources_with_expired_or_incomplete_trust(self):
+        for certificate_failure in ["Synthetic certificate expired", "Incomplete synthetic certificate bundle"]:
+            with self.subTest(certificate_failure=certificate_failure):
+                observed = self.evaluate("down", certificate_failure)
+                self.assertIn("python3 scripts/dev/runtime.py validate-config", observed)
+                self.assertIn(("dev/compose.yaml",), observed)
+
+    def test_startup_still_refuses_expired_or_incomplete_trust(self):
+        for action in ["up", "ci"]:
+            for certificate_failure in ["Synthetic certificate expired", "Incomplete synthetic certificate bundle"]:
+                with self.subTest(action=action, certificate_failure=certificate_failure):
+                    with self.assertRaisesRegex(runtime.RuntimeFailure, certificate_failure):
+                        self.evaluate(action, certificate_failure)
+
+    def test_shutdown_still_refuses_unsafe_configuration(self):
+        with self.assertRaisesRegex(runtime.RuntimeFailure, "Unsafe Compose configuration"):
+            self.evaluate("down", "Incomplete synthetic certificate bundle", configuration_failure=True)
 
 
 def synthetic_compose(project):

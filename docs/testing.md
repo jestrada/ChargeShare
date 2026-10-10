@@ -409,8 +409,9 @@ services. The original `npm run preview:dev` command returned successful fronten
 and Rust proxy API responses, and its shutdown released both preview ports. This editing sandbox has no host Docker daemon or installed Nix store.
 It has not run full shell entry, container builds or a receiver/Kafka round trip.
 Those acceptance claims remain pending the exact-commit
-[inactive integration workflow](workflows/telemetry-integration.yml.disabled),
-which needs [maintainer activation](workflows/README.md) before it can run.
+[integration workflow](../.github/workflows/telemetry-integration.yml).
+[Verification steps](workflows/README.md) track the deliberate failure proof and
+restored successful run; activation alone is not transport acceptance.
 No later Cloudflare, SQLite, ingestion or live dashboard coverage is implied.
 
 Rechecked on 2026-10-07 with Rust 1.99.0 on Linux x86_64: all 61 workspace

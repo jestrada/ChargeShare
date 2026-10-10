@@ -149,7 +149,10 @@ transport results establish no ledger deduplication or reimbursement calculation
 
 `tilt down` stops this checkout's containers and host processes and releases
 listeners while preserving its named broker volume. Closing the UI or exiting
-`tilt up` alone does not stop Compose services.
+`tilt up` alone does not stop Compose services. Certificate preparation is
+startup-only: `tilt down` keeps configuration/ownership validation but must work
+when test certificates are expired or incomplete. Renewing trust requires the
+existing stopped-project reset, so shutdown cannot depend on valid trust.
 
 Reset refuses active services, prints exact scope and requires confirmation.
 Remove only the project broker volume, offsets and runtime files; regenerate
