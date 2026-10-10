@@ -13,7 +13,7 @@ The receiver harness is intended to establish transport into Kafka, but an ackno
 - Rebuild the existing in-memory ledger from persisted events, proving independent 10 kWh / 4 kWh observed AC sessions without double counting across redelivery and restart.
 - Specify bounded failure, interrupted-transaction recovery, schema/configuration compatibility, private runtime state and Linux acceptance tests through the actual receiver.
 
-Implementation was approved on 2026-10-09. [PR #6](https://github.com/jestrada/ChargeShare/pull/6) remains stacked on [PR #5](https://github.com/jestrada/ChargeShare/pull/5) at published base `fb6b2d3`. The outer crate now implements candidate normalization, atomic SQLite retention and scoped replay, with local/mocked tests. Recovered parent `ec1c892` supplies matching fixture provenance, but its implementation is still absent from PR #5's published branch. Actual receiver acceptance, broker epoch lifecycle and dedicated integration CI remain unchecked prerequisites; see [verification](../../../docs/durable-ingestion.md).
+Implementation was approved on 2026-10-09. [PR #6](https://github.com/jestrada/ChargeShare/pull/6) is rebased onto [PR #5](https://github.com/jestrada/ChargeShare/pull/5) at published head `33a456894eefb1955a6dd28aadb997e1fc079852`. Stage 1 has passing Linux receiver/Kafka acceptance, retained replay, restart/reset and cleanup after its observed deliberate assertion failure. The outer ingestion crate implements candidate normalization, atomic SQLite retention and scoped replay, with local/mocked tests. Actual receiver-backed ingestion, owned broker epoch lifecycle and dedicated ingestion CI remain unfinished; see [verification](../../../docs/durable-ingestion.md).
 
 ## Capabilities
 

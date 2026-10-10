@@ -1,10 +1,10 @@
 # Durable synthetic ingestion
 
-The approved stage-2 implementation is on [PR #6](https://github.com/jestrada/ChargeShare/pull/6), stacked on [PR #5](https://github.com/jestrada/ChargeShare/pull/5). Local normalization/storage tests use candidate decoded receiver fixtures; actual receiver transport acceptance remains unrun. The existing fixture dashboard stays independent.
+The approved stage-2 implementation is on [PR #6](https://github.com/jestrada/ChargeShare/pull/6), stacked on [PR #5](https://github.com/jestrada/ChargeShare/pull/5). Local normalization/storage tests use candidate decoded receiver fixtures; actual receiver-backed ingestion acceptance remains unrun. The existing fixture dashboard stays independent.
 
 ## Input and lifecycle contract
 
-The candidate decoded `V` shape comes from fictional stage-1 fixtures at receiver revision `bd076fe1494841707528449560c4a19d0d426da4`. All six records match recovered harness commit `ec1c8922c813e8af57ea931324466ccc5afba5d5`, including its ACK-deadline fixes. PR #5's branch still publishes only `fb6b2d3`; no parent history was rewritten. A validated manifest maps fictional broker key/`vin` and exact integral UTC `createdAt` to stable vehicle-wide position, connection, event kind and charge type. Those annotations are synthetic context. Counter values come only from observed `ACChargingEnergyIn.stringValue`; missing readings remain absent and invalid readings retain safe core reasons. A charging-complete value or silence never creates an End.
+The candidate decoded `V` shape comes from fictional stage-1 fixtures at receiver revision `bd076fe1494841707528449560c4a19d0d426da4`. All six records match recovered harness commit `ec1c8922c813e8af57ea931324466ccc5afba5d5`, including its ACK-deadline fixes. PR #5 now publishes verified harness head `33a456894eefb1955a6dd28aadb997e1fc079852`, with passing Linux transport, retained replay, restart/reset and cleanup. PR #6 is rebased onto that head. A validated manifest maps fictional broker key/`vin` and exact integral UTC `createdAt` to stable vehicle-wide position, connection, event kind and charge type. Those annotations are synthetic context. Counter values come only from observed `ACChargingEnergyIn.stringValue`; missing readings remain absent and invalid readings retain safe core reasons. A charging-complete value or silence never creates an End.
 
 Mappings, annotations, time conversion and normalization versions are frozen with the database. Accepted storage is curated; arbitrary raw JSON, vehicle names, location fields and rejected text are never retained. Exact counters and full-range unsigned positions use canonical decimal TEXT. Replays return the current core's scoped synthetic, physically unvalidated sessions, with Unconfirmed classification.
 
@@ -18,9 +18,9 @@ The versioned parser accepts only the inspected typed candidate fields, with `De
 
 ## Broker runtime epoch prerequisite
 
-The verified stage-1 lifecycle must supply an owned `source-epoch.json` marker in its private `.local-runtime` directory. Before ingestion starts, that marker identifies a new fictional epoch for the broker dataset, the fixed `chargeshare_synthetic_V` topic, actual cluster identity where available and explicit initial partition offsets. Broker reset must generate a new epoch; routine process restart must preserve it. Ingestion refuses a missing/mismatched marker, changed frozen configuration or retained-offset gap without deleting the database or seeking newest input.
+Stage-2 runtime integration must add an owned `source-epoch.json` marker in its private `.local-runtime` directory. Before ingestion starts, that marker identifies a new fictional epoch for the broker dataset, the fixed `chargeshare_synthetic_V` topic, actual cluster identity where available and explicit initial partition offsets. Broker reset must generate a new epoch; routine process restart must preserve it. Ingestion refuses a missing/mismatched marker, changed frozen configuration or retained-offset gap without deleting the database or seeking newest input.
 
-This minimal lifecycle addition is specified here before implementation. The published parent branch does not yet provide it. Generating a standalone epoch for a focused fixture test is not proof that a real broker lifecycle preserves this binding. Parent publication and actual receiver/Kafka verification remain prerequisites for end-to-end ingestion acceptance.
+This minimal lifecycle addition is specified here before implementation. The published parent branch does not yet provide it. Generating a standalone epoch for a focused fixture test is not proof that a real broker lifecycle preserves this binding. The published parent now passes receiver/Kafka acceptance; actual receiver-backed ingestion acceptance still requires this binding.
 
 For the eventual verified private runtime, the bounded commands are:
 
@@ -41,13 +41,13 @@ On Linux, no-follow directory/file handles and inode checks reject symlinks, har
 
 ## Focused verification
 
-The complete workspace has 115 passing Rust tests, including 64 ingestion tests: 20 normalization, nine persistence, eight recovery, ten mocked Kafka, ten CLI and seven unit tests. Child-process tests interrupt before/after commit and in a large commit window, checking consistent old-or-new evidence/progress. They do not prove the kill occurred inside SQLite's commit instruction. Repeated parallel recovery runs pass after explicit writer-lock release.
+The rebased workspace includes 125 Rust tests, including 64 ingestion tests: 20 normalization, nine persistence, eight recovery, ten mocked Kafka, ten CLI and seven unit tests. Child-process tests interrupt before/after commit and in a large commit window, checking consistent old-or-new evidence/progress. They do not prove the kill occurred inside SQLite's commit instruction. Repeated parallel recovery runs pass after explicit writer-lock release.
 
 Run `bash scripts/testing/ingestion-suite.sh` for the complete workspace and a guarded, allowlisted focused summary. `python3 scripts/testing/test_ingestion_guard.py` proves missing/reduced/failed/ignored/filtered suites fail and Cargo failure status is preserved. This local wrapper is not yet a dedicated hosted receiver integration gate. See [testing](testing.md) for publication checks.
 
 ## Remaining verification
 
-- Publish and verify the exact parent harness implementation/schema/lifecycle without losing its later ACK-deadline fixes
+- Bind the verified parent harness schema and owned broker epoch lifecycle to ingestion
 - Run the actual pinned receiver → Kafka → ingestion → SQLite → scoped replay path on permitted Linux x86_64/Docker
 - Add and prove a dedicated ingestion CI gate, with safe summaries and teardown on failure
 - Review, then sync/archive this change only after its implementation acceptance is complete

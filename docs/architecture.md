@@ -83,7 +83,7 @@ these guarantees; they do not establish backup or cloud durability.
 ## Pending all-services integration
 
 [PR #5](https://github.com/jestrada/ChargeShare/pull/5) publishes the verified stage-1
-harness at `4179906`. Its Linux receiver/Kafka acceptance passes after an observed
+harness at `33a4568`. Its Linux receiver/Kafka acceptance passes after an observed
 deliberate assertion failure and cleanup; deliberate-failure mode is removed.
 [The recorded evidence](testing.md#complete-linux-acceptance-and-warm-caches)
 covers transport, retained replay, stop/start, reset and cleanup.

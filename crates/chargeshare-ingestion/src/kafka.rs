@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rdkafka::client::ClientContext;
@@ -353,8 +353,8 @@ fn open_source_marker(path: &Path) -> Result<fs::File, IngestionError> {
         .components()
     {
         match component {
-            Component::RootDir | Component::CurDir => {}
-            Component::Normal(name) => {
+            std::path::Component::RootDir | std::path::Component::CurDir => {}
+            std::path::Component::Normal(name) => {
                 directory = fs::File::from(
                     openat(&directory, name, directory_flags, Mode::empty())
                         .map_err(|_| IngestionError::SourceMismatch)?,
