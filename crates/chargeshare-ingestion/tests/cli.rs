@@ -311,3 +311,96 @@ fn candidate_demo_refuses_differing_existing_fixture_without_overwrite() {
     );
     assert_eq!(fs::read(marker).unwrap(), differing);
 }
+
+#[test]
+fn reread_requires_finite_explicit_committed_range_and_never_initializes_missing_database() {
+    let fixture = Fixture::new();
+    for (start, end, seconds) in [
+        ("-1", "1", "1"),
+        ("0", "0", "1"),
+        ("1", "0", "1"),
+        ("0", "1", "0"),
+        ("0", "1", "121"),
+    ] {
+        assert_safe_failure(
+            &fixture.command(&[
+                "reread",
+                fixture.runtime.to_str().unwrap(),
+                "127.0.0.1:1",
+                "0",
+                start,
+                end,
+                seconds,
+            ]),
+            "command: invalid bounded synthetic invocation",
+        );
+    }
+    assert_safe_failure(
+        &fixture.command(&[
+            "reread",
+            fixture.runtime.to_str().unwrap(),
+            "127.0.0.1:1",
+            "0",
+            "0",
+            "1",
+            "1",
+        ]),
+        "storage: unavailable or bounded write failed",
+    );
+    assert!(!fixture.runtime.join("ingestion.sqlite3").exists());
+}
+
+#[test]
+fn decoded_verification_requires_real_capture_provenance_and_complete_associations() {
+    let fixture = Fixture::new();
+    let capture = fixture.runtime.join("decoded-capture.json");
+    let candidate: serde_json::Value =
+        serde_json::from_slice(include_bytes!("fixtures/candidate-v.json")).unwrap();
+    for (verified, records, succeeds) in [
+        (false, candidate["records"].clone(), false),
+        (true, serde_json::json!([]), false),
+        (true, candidate["records"].clone(), true),
+    ] {
+        private_file(
+            &capture,
+            &serde_json::to_vec(&serde_json::json!({
+                "receiver_revision": "bd076fe1494841707528449560c4a19d0d426da4",
+                "actual_receiver_transport_verified": verified,
+                "topic": SYNTHETIC_TOPIC,
+                "records": records,
+            }))
+            .unwrap(),
+        );
+        let output = fixture.command(&["verify-decoded", fixture.runtime.to_str().unwrap()]);
+        if succeeds {
+            assert!(output.status.success());
+            assert!(output.stderr.is_empty());
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("decoded contract: records=6")
+            );
+        } else {
+            assert_safe_failure(&output, "configuration: invalid synthetic contract");
+        }
+        fs::remove_file(&capture).unwrap();
+    }
+    assert!(!fixture.runtime.join("ingestion.sqlite3").exists());
+}
+
+#[test]
+fn acceptance_status_and_crash_probe_refuse_missing_database_and_unknown_boundary() {
+    let fixture = Fixture::new();
+    assert_safe_failure(
+        &fixture.command(&["acceptance-status", fixture.runtime.to_str().unwrap()]),
+        "storage: unavailable or bounded write failed",
+    );
+    assert_safe_failure(
+        &fixture.command(&[
+            "consume-probe",
+            fixture.runtime.to_str().unwrap(),
+            "127.0.0.1:1",
+            "unknown",
+        ]),
+        "command: invalid bounded synthetic invocation",
+    );
+    assert!(!fixture.runtime.join("ingestion.sqlite3").exists());
+}

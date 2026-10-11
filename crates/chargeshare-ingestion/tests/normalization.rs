@@ -151,6 +151,35 @@ fn candidate_golden_records_equal_direct_core_events_with_separate_provenance() 
 }
 
 #[test]
+fn runtime_manifest_and_inspected_receiver_shape_bind_the_existing_normalizer_contract() {
+    let runtime_manifest =
+        Manifest::from_json(include_bytes!("../../../dev/ingestion-manifest.json")).unwrap();
+    assert_eq!(runtime_manifest.config(), manifest().config());
+    let receiver: Value =
+        serde_json::from_slice(include_bytes!("../../../dev/fixtures.json")).unwrap();
+    let records = receiver["scenarios"]["complete"]["expected"]
+        .as_array()
+        .unwrap();
+    assert_eq!(records.len(), 6);
+    for record in records {
+        let key = record["key"].as_str().unwrap();
+        let accepted = normalize(
+            &runtime_manifest,
+            Some(key.as_bytes()),
+            &serde_json::to_vec(&record["payload"]).unwrap(),
+        )
+        .unwrap();
+        assert!(accepted.event.time >= 1_788_264_000);
+        assert_eq!(accepted.event.connection, "connection-1");
+        assert_eq!(accepted.event.charge_type, NormalizedChargeType::Ac);
+        assert_eq!(
+            accepted.provenance.created_at,
+            record["payload"]["createdAt"].as_str().unwrap()
+        );
+    }
+}
+
+#[test]
 fn fictional_mapping_aliases_versions_and_full_u64_positions_are_validated() {
     for field in [
         "device",

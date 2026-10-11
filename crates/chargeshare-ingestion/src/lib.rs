@@ -23,7 +23,12 @@ mod replay;
 mod schema;
 mod store;
 
-pub use store::{CommitOutcome, PartitionPosition, RecordDisposition, Store, StoreStatistics};
+pub use store::{
+    CommitBoundary, CommitOutcome, PartitionPosition, RecordDisposition, Store, StoreStatistics,
+};
 mod kafka;
 
-pub use kafka::{ConsumeReport, KafkaConfig, consume_bounded, read_source_marker};
+pub use kafka::{
+    ConsumeReport, KafkaConfig, RereadRange, RereadReport, consume_bounded,
+    consume_bounded_observed, read_source_marker, reread_bounded,
+};
