@@ -42,6 +42,44 @@ from the map's Notes and their PRs; use their own checklists and acceptance
 evidence. Do not label delivery work as a Wayfinder decision merely to put it
 under the map.
 
+## Human-readable change reviews
+
+Every PR has an owning GitHub issue with a current review summary in its body or
+a clearly identified comment. Link directly to that summary from the PR, and
+link back to the PR from the summary. A reviewer should understand the change
+without reading the source diff or prior chat. For a small change, a few short
+paragraphs are enough; an existing issue can be reused.
+
+Include:
+
+- The problem, what changed and why, with a concrete before/after example where
+  useful. Distinguish implemented behavior from proposals and future work.
+- The PR link and the scope of this increment. If multiple PRs share an issue,
+  give each PR its own identified summary and verification evidence.
+- Links to updated documentation, diagrams and relevant review artifacts.
+- Checks performed and their results, reproducible review steps where relevant,
+  and links to available CI or other acceptance evidence. State unrun checks,
+  known limitations and remaining work explicitly.
+
+Review the documentation impact of every PR and update affected `docs/` files,
+README sections and other relevant guides in that same PR. Keep enduring
+contracts in repository documentation; the issue explains the change and links
+to those contracts. If no documentation update is needed, record why in the
+summary rather than making unrelated edits.
+
+For architecture, dependency, data-flow or user-flow changes, update the relevant
+diagram or add a small Markdown/Mermaid diagram in the appropriate repository
+guide, then link it from the summary. Label proposed and implemented parts
+clearly and explain what the arrows mean. If no diagram is affected or useful,
+state why. Screenshots or other visual evidence may supplement the summary when
+they help demonstrate a visible change. Video demonstrations are deferred and
+are not required for completion. All artifacts must respect SECURITY.md.
+
+Refresh the summary and evidence after material scope or implementation changes
+and before requesting final review. Never present an earlier passing run as
+verification of a later commit. This is a contributor review requirement, not
+an automated CI enforcement claim.
+
 ## GitHub operations
 
 - Read an issue with `gh issue view <number> --json number,title,body,labels,assignees,comments,url`.
