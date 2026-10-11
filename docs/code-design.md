@@ -196,8 +196,9 @@ conversation or the approved planning artifact (within its authorized edit scope
 4. Public API/data/dependency impact and what remains deferred
 5. Tests proving the invariant, failure behavior and any affected boundary
 
-For a local helper or rename, a brief PR explanation is enough; do not create an
-architecture record for every function. Capture enduring architectural choices
+For a local helper or rename, a brief owning-issue summary linked from the PR
+is enough; follow the [change review guidance](agents/issue-tracker.md#human-readable-change-reviews).
+Do not create an architecture record for every function. Capture enduring architectural choices
 in the approved design or relevant repository documentation. Ask before departing
 from the approved plan or broadening a behavior/API change.
 
@@ -218,6 +219,8 @@ Before publishing, review the exact diff and complete this checklist:
 - [ ] Changed behavior has readable tests, including failures and deterministic replay.
 - [ ] Applicable checks below pass; blocked or unrun checks are disclosed explicitly.
 - [ ] Documentation and public examples use only synthetic data and match current behavior.
+- [ ] The owning issue has a current human-readable summary linked from the PR, with verification evidence and documentation links.
+- [ ] Affected guides and diagrams are updated in this PR, or the issue summary explains why no update is needed.
 
 Follow [security](../SECURITY.md) and [testing](testing.md) for setup and full rules:
 
