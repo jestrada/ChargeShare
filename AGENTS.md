@@ -10,7 +10,7 @@ Do not add comments to authored code, including Rust doc comments. Make intent c
 
 ## Working rules
 
-- Create or switch to a dedicated branch before editing, and commit and push that branch. Do not commit or push directly to `main` unless the user explicitly authorizes an exception for the current change.
+- Use `gh stack` for every repository change and pull request, following the stacked workflow below. Create or switch to a dedicated stack branch before editing, then commit and publish through that workflow. Do not commit or push directly to `main` unless the user explicitly authorizes an exception for the current change.
 - Keep domain logic and backend source in Rust. The user-authorized localhost preview uses React/TypeScript and shadcn in `apps/web`; Node.js/npm runs its build/dev tooling. Keep money calculations in the Rust core.
 - Read [docs/code-design.md](docs/code-design.md) before code or architecture changes. Keep `lib.rs` a small public facade, use cohesive modules and inward domain dependencies, and follow the guide's required decision/review workflow within the approved scope.
 - Keep changes inside this repository. Do not import private repositories, personal correspondence or live vehicle data.
@@ -20,6 +20,24 @@ Do not add comments to authored code, including Rust doc comments. Make intent c
 - Establish the problem, approved scope and observable acceptance criteria in the relevant issue before implementing new behavior. Use Wayfinder for large planning efforts with unresolved decisions; small changes do not need a map.
 - Run the applicable checks described in docs/testing.md and the security checks described in SECURITY.md before a commit. Review the exact staged diff and paths as well as scanner output. Do not bypass failing hooks.
 - Treat every energy total as a measured or estimated quantity with a stated boundary and quality. Never advertise utility-meter accuracy without evidence.
+
+## Branches and stacked pull requests
+
+All agents and repository skills use the official
+[`gh stack` extension](https://github.com/github/gh-stack) for branch and PR
+management. Independent work starts its own stack rooted at `main`; small work
+can use a single branch. Dependent increments extend an existing stack, with
+each PR targeting the branch immediately below it and the bottom PR targeting
+`main`.
+
+- If the extension is missing, install it with `gh extension install github/gh-stack` and verify `gh stack --version`. Read the relevant command's `--help` before using unfamiliar flags. Report a tooling blocker instead of silently replacing the stack workflow with manual PR management.
+- Before editing, fetch current remote refs and inspect open PRs with `gh pr list --repo jestrada/ChargeShare`. Inspect a tracked stack with `gh stack view --json`; continue existing work with `gh stack checkout <PR-or-branch>`. Adopt an existing manual PR chain with `gh stack link <bottom-PR> <next-PR> ...`, then check it out through `gh stack`.
+- Start independent work from current `main` with `gh stack init --base main <branch>`. Add dependent work from the existing stack's top with `gh stack add <branch>`. Keep each layer cohesive and independently reviewable.
+- Stage only reviewed paths and commit normally after the applicable checks and security scans. Keep hooks enabled; avoid the stack command's automatic stage-all shortcuts.
+- After changing a lower layer or updating `main`, restack affected descendants with `gh stack rebase`. Resolve conflicts in the reported worktree, stage the reviewed resolutions and use `gh stack rebase --continue`; use `gh stack rebase --abort` to restore the stack when necessary.
+- Publish new PRs with `gh stack submit --auto`, which creates drafts. Update existing branches with `gh stack push`; use `gh stack submit --auto` when PR bases or stack membership also need updating. These commands use explicit lease protection for rewritten history. Never use unconditional force pushes or bypass a rejected lease.
+- After a parent PR merges, reconcile the remaining stack with `gh stack sync`. Preserve existing implementation and acceptance status, inspect every affected diff/base, and rerun applicable checks on the resulting commits.
+- Verify every affected remote head, PR base and terminal hosted check before reporting completion. Stack pushes can partially succeed; resolve any rejected branch and verify the whole stack. Keep stack metadata local, and pass this workflow to delegated agents.
 
 ## Issue tracking
 
