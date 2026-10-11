@@ -53,6 +53,9 @@ acceptance evidence in the owning issues and PRs. Keep enduring domain contracts
 and architecture decisions in repository documentation, linking rather than
 duplicating them.
 
+Specs for new work are published as GitHub issues through the repository-local
+`to-spec` skill, following the tracker conventions.
+
 OpenSpec is paused. Do not invoke its workflow or require proposal, validation,
 sync or archive steps. Do not create new OpenSpec change scaffolds, proposals,
 designs, specs, task lists or archive copies, including through delegated agents
