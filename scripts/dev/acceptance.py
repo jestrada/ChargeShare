@@ -65,7 +65,7 @@ class Acceptance:
         try:
             result = subprocess.run(command, cwd=self.runtime.checkout, env=self.runtime.environment(), capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
-            raise AcceptanceFailure("timeout") from None
+            raise AcceptanceFailure("refusal" if expected_reason is not None else "timeout") from None
         except OSError:
             raise AcceptanceFailure("setup") from None
         self.private.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -257,6 +257,13 @@ class Acceptance:
             raise AcceptanceFailure("frozen-configuration")
         self.record("PASS: incompatible frozen manifest refused; SQLite evidence and progress preserved")
 
+    def prove_timeout(self, before):
+        self.stage = "timeout"
+        self.ingest(["consume", "/run/.local-runtime", "kafka:9092", "1", "1"], expected_reason="ingestion: bounded deadline exceeded")
+        if self.status() != before:
+            raise AcceptanceFailure("timeout-progress")
+        raise AcceptanceFailure("timeout")
+
     def execute(self):
         preflight(self.runtime)
         if self.runtime.directory.exists() or project_broker_volume(self.runtime, run_command) is not None:
@@ -296,6 +303,8 @@ class Acceptance:
         assert_complete(complete, self.prove_failure == "assertion")
         self.record("PASS: real consumer kills before/after commit recovered atomic old/new state without duplicated energy")
         self.record("PASS: vehicle-a=0.500000 kWh vehicle-b=0.250000 kWh observed AC; both Unconfirmed; eligible=0.000000 kWh")
+        if self.prove_failure == "timeout":
+            self.prove_timeout(complete)
         self.stage = "duplicate-out-of-order"
         self.checked(["bash", "scripts/dev/harness.sh", "adverse"], 300)
         self.ingest(["consume", "/run/.local-runtime", "kafka:9092", "14", "30"])
@@ -318,10 +327,6 @@ class Acceptance:
             raise AcceptanceFailure("restart-preservation")
         self.ingest(["reread", "/run/.local-runtime", "kafka:9092", "0", "0", "20", "30"])
         self.record("PASS: ordinary Tilt stop/start preserved epoch, retained input, SQLite progress and energy")
-        if self.prove_failure == "timeout":
-            self.stage = "timeout"
-            self.ingest(["consume", "/run/.local-runtime", "kafka:9092", "1", "1"])
-            raise AcceptanceFailure("timeout-probe-unexpected-success")
         self.retention_gap(gap_directory, gap_before, 20)
         self.ingest(["reread", "/run/.local-runtime", "kafka:9092", "0", "0", "20", "10"], expected_reason="source: durable position outside retained input")
         if self.status() != complete:

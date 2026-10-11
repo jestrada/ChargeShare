@@ -35,7 +35,7 @@ and PR; preserve the existing behavioral scenarios and tests.
 ## Durable synthetic ingestion verification
 
 The original outer crate added 64 focused tests and the rebased stage-1 workspace
-included 125 Rust tests. Issue #27 adds nine Rust tests, for 134 total. Commands and limits are in
+included 125 Rust tests. Issue #27 adds ten Rust tests, for 135 total. Commands and limits are in
 [durable ingestion](durable-ingestion.md). Historical local checks on 2026-10-09:
 
 - Complete workspace and unchanged offline wrapper: 115 passed, zero failed/ignored/filtered
@@ -96,10 +96,10 @@ On 2026-10-11 in the implementation sandbox:
 - Pinned Rust 1.99.0 formatting and warnings-denied workspace Clippy passed.
 - Workspace tests and the focused ingestion wrapper passed in a disposable
   Bubblewrap user/filesystem namespace, with the repository mounted unchanged:
-  134 Rust tests, zero failed/ignored/filtered. The original sandbox root has
+  135 Rust tests, zero failed/ignored/filtered. The original sandbox root has
   unmapped UID 65534; direct tests refused it with `StorageUnavailable` as intended.
   The namespace supplies a private trusted root. No storage guard was weakened.
-- Python runtime/epoch/acceptance checks passed: 91 tests. The four focused
+- Python runtime/epoch/acceptance checks passed: 99 tests. The four focused
   ingestion wrapper failure tests passed, including the increased reread/CLI
   minimums. Setup, assertion, timeout and cleanup failure paths are local proofs;
   they do not establish hosted failures.
@@ -125,6 +125,17 @@ hosted run. Locally, the equivalent explicit failure command is
 substitute `setup` or `timeout` for those proofs. Do not wrap expected failures
 as passing hosted jobs. Artifact uploads list summaries/versions only and exclude
 payloads, databases, unrestricted logs and test trust.
+
+The timeout proof now runs at committed topic end immediately after complete
+ingestion, ahead of duplicate and refusal phases. It requires the actual CLI's
+one-second deadline reason, then verifies unchanged state and reports
+`FAIL: timeout`. A focused child-process test establishes that CLI behavior
+against a mocked broker; Python tests require exact refusal reasons, restored
+inputs, independent preservation checks and proof-mode reachability. The separate
+manifest probe establishes incompatible frozen configuration refusal. The
+supervisor reported real execution on `df81b92` through stable reread followed
+by the incorrect epoch-reason expectation; that partial result is not a full
+acceptance pass and does not verify these follow-up commits.
 
 Actual acceptance, reviewed captured golden normalization/rejection tests,
 workflow activation, deliberate hosted failures, separate restored pass and

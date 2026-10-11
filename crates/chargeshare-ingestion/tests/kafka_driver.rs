@@ -5,6 +5,7 @@ use std::io::Write;
 use std::net::TcpListener;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -402,6 +403,82 @@ fn unavailable_broker_is_bounded_and_preserves_progress() {
     ));
     assert!(start.elapsed() < Duration::from_secs(2));
     assert_eq!(store.positions().unwrap()[0].next_offset, 0);
+}
+
+#[test]
+fn cli_at_committed_topic_end_fails_with_exact_deadline_and_preserves_scoped_replay() {
+    let (cluster, fixture) = mock_fixture();
+    publish(&cluster.bootstrap_servers(), &records());
+    let runtime = fixture.directory.join(".local-runtime");
+    fs::DirBuilder::new().mode(0o700).create(&runtime).unwrap();
+    for (name, bytes) in [
+        (
+            "source-epoch.json",
+            serde_json::to_vec(&fixture.source).unwrap(),
+        ),
+        (
+            "manifest.json",
+            include_bytes!("fixtures/manifest-v1.json").to_vec(),
+        ),
+        (
+            "synthetic-runtime.json",
+            br#"{"project_name":"chargeshare-local-0123456789ab","synthetic_only":true}"#.to_vec(),
+        ),
+    ] {
+        OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(runtime.join(name))
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
+    }
+    let database = runtime.join("ingestion.sqlite3");
+    let mut store = Store::open(&database, &fixture.manifest, &fixture.source).unwrap();
+    let mut config = fixture.config(cluster.bootstrap_servers(), 6);
+    config.source_epoch_path = runtime.join("source-epoch.json");
+    consume_bounded(&config, &fixture.source, &fixture.manifest, &mut store).unwrap();
+    let positions = store.positions().unwrap();
+    let statistics = store.statistics().unwrap();
+    let scopes = [
+        (
+            OwnerId::new("owner-a").unwrap(),
+            VehicleId::new("vehicle-a").unwrap(),
+        ),
+        (
+            OwnerId::new("owner-b").unwrap(),
+            VehicleId::new("vehicle-b").unwrap(),
+        ),
+    ];
+    let sessions: Vec<_> = scopes
+        .iter()
+        .map(|(owner, vehicle)| store.sessions(owner, vehicle).unwrap())
+        .collect();
+    assert_eq!(positions[0].next_offset, 6);
+    drop(store);
+    let start = Instant::now();
+    let output = Command::new(env!("CARGO_BIN_EXE_chargeshare-ingestion"))
+        .args([
+            "consume",
+            runtime.to_str().unwrap(),
+            &cluster.bootstrap_servers(),
+            "1",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(start.elapsed() >= Duration::from_millis(900));
+    assert!(start.elapsed() < Duration::from_secs(2));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, b"ingestion: bounded deadline exceeded\n");
+    let recovered = Store::open(&database, &fixture.manifest, &fixture.source).unwrap();
+    assert_eq!(recovered.positions().unwrap(), positions);
+    assert_eq!(recovered.statistics().unwrap(), statistics);
+    for ((owner, vehicle), before) in scopes.iter().zip(sessions) {
+        assert_eq!(recovered.sessions(owner, vehicle).unwrap(), before);
+    }
 }
 
 #[test]

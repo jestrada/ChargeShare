@@ -22,7 +22,7 @@ if ! awk '
     exit !(valid["normalization"] && count["normalization"] >= 21 &&
        valid["persistence"] && count["persistence"] >= 9 &&
        valid["recovery"] && count["recovery"] >= 8 &&
-       valid["kafka_driver"] && count["kafka_driver"] >= 15 &&
+       valid["kafka_driver"] && count["kafka_driver"] >= 16 &&
        valid["cli"] && count["cli"] >= 13)
   }
 ' "$output/workspace-tests.txt" \

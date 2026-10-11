@@ -174,7 +174,7 @@ class RefusalScenarioTests(unittest.TestCase):
         patches = contextlib.ExitStack()
         self.addCleanup(patches.close)
         patches.enter_context(mock.patch.object(acceptance, "verify_source_epoch", side_effect=lambda project: verify_source_epoch(project, self.docker)))
-        patches.enter_context(mock.patch.object(acceptance, "runner_command", return_value=["synthetic-consumer"]))
+        self.runner = patches.enter_context(mock.patch.object(acceptance, "runner_command", return_value=["synthetic-consumer"]))
         patches.enter_context(mock.patch.object(self.driver, "remove_runner", side_effect=self.driver.runners.discard))
         self.status = patches.enter_context(mock.patch.object(self.driver, "status", return_value=self.before))
         self.process = patches.enter_context(mock.patch.object(acceptance.subprocess, "run"))
@@ -242,6 +242,86 @@ class RefusalScenarioTests(unittest.TestCase):
                 with self.assertRaisesRegex(acceptance.AcceptanceFailure, reason):
                     self.driver.frozen_configuration(self.before)
                 self.assert_restored()
+
+    def test_timeout_proof_requires_the_exact_consumer_deadline_and_preserves_state(self):
+        self.process.return_value = subprocess.CompletedProcess([], 2, "", "ingestion: bounded deadline exceeded\n")
+        with self.assertRaisesRegex(acceptance.AcceptanceFailure, "^timeout$"):
+            self.driver.prove_timeout(self.before)
+        self.assertEqual(self.runner.call_args.args[3], ["consume", "/run/.local-runtime", "kafka:9092", "1", "1"])
+        self.status.assert_called_once()
+        self.assert_restored()
+
+    def test_timeout_proof_rejects_success_wrong_failure_runner_timeout_and_changed_state(self):
+        for result, status, reason in [
+            (subprocess.CompletedProcess([], 0, "", ""), self.before, "refusal"),
+            (subprocess.CompletedProcess([], 2, "", "source: broker operation failed\n"), self.before, "refusal"),
+            (subprocess.TimeoutExpired([], 45), self.before, "refusal"),
+            (subprocess.CompletedProcess([], 2, "", "ingestion: bounded deadline exceeded\n"), dict(self.before, accepted=7), "timeout-progress"),
+        ]:
+            with self.subTest(reason=reason):
+                self.process.side_effect = result if isinstance(result, Exception) else None
+                self.process.return_value = result
+                self.status.return_value = status
+                with self.assertRaisesRegex(acceptance.AcceptanceFailure, "^" + reason + "$"):
+                    self.driver.prove_timeout(self.before)
+                self.assert_restored()
+
+
+class ExecutionProofTests(unittest.TestCase):
+    def test_each_proof_mode_reaches_its_own_injection_before_later_refusals(self):
+        for mode in ("setup", "assertion", "timeout"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary, contextlib.ExitStack() as patches:
+                runtime = ProjectRuntime.at(temporary)
+                driver = acceptance.Acceptance(runtime, mode)
+                driver.private.mkdir(parents=True)
+                progress = 0
+
+                def start():
+                    runtime.directory.mkdir(mode=0o700)
+                    write_private_json(runtime.directory / "last-run.json", {"starting_offsets": {"0": 0}})
+                    write_private_json(runtime.directory / "decoded-capture.json", {"fictional": True})
+
+                def checked(command, timeout=30, expected_reason=None):
+                    if command == ["bash", "-c", "exit 7"]:
+                        raise acceptance.AcceptanceFailure("setup")
+                    return "f" * 40 if command == ["git", "rev-parse", "HEAD"] else ""
+
+                def ingest(arguments, directory=None, expected_reason=None):
+                    nonlocal progress
+                    if arguments[0] == "consume" and expected_reason is None:
+                        progress += int(arguments[3])
+                    return ""
+
+                def crash(boundary):
+                    nonlocal progress
+                    progress += int(boundary == "after")
+
+                def status(directory=None):
+                    return dict(complete_status(), accepted=progress, variants=min(progress, 6), positions=[{"partition": 0, "next_offset": progress}])
+
+                patches.enter_context(mock.patch.object(acceptance, "preflight"))
+                patches.enter_context(mock.patch.object(acceptance, "project_broker_volume", return_value=None))
+                patches.enter_context(mock.patch.object(acceptance, "verify_source_epoch", return_value={"epoch": "synthetic-" + "a" * 32}))
+                patches.enter_context(mock.patch.object(acceptance.ProjectRuntime, "at", return_value=runtime))
+                patches.enter_context(mock.patch.object(acceptance, "Acceptance", return_value=driver))
+                patches.enter_context(mock.patch.object(driver, "start", side_effect=start))
+                patches.enter_context(mock.patch.object(driver, "checked", side_effect=checked))
+                consumer = patches.enter_context(mock.patch.object(driver, "ingest", side_effect=ingest))
+                patches.enter_context(mock.patch.object(driver, "crash", side_effect=crash))
+                patches.enter_context(mock.patch.object(driver, "backup_gap"))
+                patches.enter_context(mock.patch.object(driver, "status", side_effect=status))
+                mismatch = patches.enter_context(mock.patch.object(driver, "mismatch", side_effect=acceptance.AcceptanceFailure("unexpected-refusal")))
+                frozen = patches.enter_context(mock.patch.object(driver, "frozen_configuration"))
+                cleanup = patches.enter_context(mock.patch.object(driver, "cleanup"))
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(acceptance.main(["all", "--prove-failure", mode]), 1)
+                self.assertIn("FAIL: " + mode + "\n", output.getvalue())
+                self.assertIn("Result: FAIL", output.getvalue())
+                mismatch.assert_not_called()
+                frozen.assert_not_called()
+                cleanup.assert_called_once()
+                if mode == "timeout":
+                    consumer.assert_called_with(["consume", "/run/.local-runtime", "kafka:9092", "1", "1"], expected_reason="ingestion: bounded deadline exceeded")
 
 
 if __name__ == "__main__":

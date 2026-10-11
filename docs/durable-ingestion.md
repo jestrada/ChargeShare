@@ -105,6 +105,14 @@ configuration mismatch`. Each refusal requires exit 2, empty stdout and the exac
 stderr line. The command restores the input and independently checks scoped
 results, evidence counts and SQLite progress after each case.
 
+`--prove-failure timeout` runs immediately after complete-fixture ingestion,
+before duplicate traffic or refusal phases. It requests one new record at the
+committed topic end with a one-second CLI deadline. Exit 2, empty stdout and
+exact `ingestion: bounded deadline exceeded` stderr are required; success,
+another reason or the outer runner timeout cannot establish this proof. After
+checking unchanged state, the command deliberately exits with `FAIL: timeout`
+and `Result: FAIL`. Setup and assertion modes fail at their own earlier points.
+
 The outer deadline is 40 minutes with 60 seconds for exit handling. Startup is
 bounded by 90-second Tilt API and 900-second protocol readiness deadlines;
 consumers have CLI watchdogs and 45-second runner limits. Receiver ACK remains
@@ -145,11 +153,13 @@ On Linux, no-follow directory/file handles and inode checks reject symlinks, har
 
 ## Focused verification
 
-The workspace includes 134 Rust tests, including 73 ingestion tests: 21
-normalization, nine persistence, eight recovery, fifteen mocked Kafka, thirteen
+The workspace includes 135 Rust tests, including 74 ingestion tests: 21
+normalization, nine persistence, eight recovery, sixteen mocked Kafka, thirteen
 CLI and seven unit tests. Focused reread checks verify stable results/progress,
 fixed rejections and refusal of changed/uncommitted input. Child-process tests
-interrupt before/after commit and in a large commit window, checking consistent
+also run the actual CLI against a mocked broker at committed topic end and
+require its exact one-second deadline error with unchanged scoped replay.
+Recovery tests interrupt before/after commit and in a large commit window, checking consistent
 old-or-new evidence/progress. They do not prove the kill occurred inside SQLite's
 commit instruction. See [current verification](testing.md#issue-27-local-verification).
 
