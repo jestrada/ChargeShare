@@ -73,10 +73,12 @@ outside stage 1.
 ## Stage 2 Durable Rust ingestion
 
 **Status:** Approved and partially applied in [draft PR #6](https://github.com/jestrada/ChargeShare/pull/6),
-stacked on [PR #5](https://github.com/jestrada/ChargeShare/pull/5), with a separate
-[durable ingestion change](../openspec/changes/durable-synthetic-ingestion/proposal.md). Its [design](../openspec/changes/durable-synthetic-ingestion/design.md),
+targeting `main` after [PR #5](https://github.com/jestrada/ChargeShare/pull/5) merged.
+The retained [durable ingestion proposal](../openspec/changes/durable-synthetic-ingestion/proposal.md), [design](../openspec/changes/durable-synthetic-ingestion/design.md),
 [detailed contract](../openspec/changes/durable-synthetic-ingestion/specs/durable-telemetry-ingestion/spec.md)
-and [tasks](../openspec/changes/durable-synthetic-ingestion/tasks.md) track the accepted scope. Candidate normalization,
+and [tasks](../openspec/changes/durable-synthetic-ingestion/tasks.md) preserve the original approved scope and recorded status.
+The [ingestion acceptance issue](https://github.com/jestrada/ChargeShare/issues/12)
+owns the current checklist and evidence. Candidate normalization,
 atomic SQLite evidence/progress and scoped replay have focused tests; see the
 [implementation guide](durable-ingestion.md). Stage 1's published head `33a4568`
 has verified receiver/Kafka transport, retained replay, restart/reset and cleanup.

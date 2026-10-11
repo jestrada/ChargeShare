@@ -217,9 +217,10 @@ from the approved plan or broadening a behavior/API change.
 When a change affects components, ownership, data flow, persistence or dependencies,
 update affected diagrams in [architecture](architecture.md) and the relevant
 repository documentation in the same PR. Shared guides describe current code and
-verification; retained OpenSpec designs preserve historical context. Label arrow meanings and distinguish
-implemented/tested paths from proposed or unrun integrations. Render changed
-Mermaid when tooling is available and disclose any validation limitation.
+verification; retained OpenSpec designs preserve historical context. Label arrow
+meanings and distinguish implemented/tested paths from proposed or unrun
+integrations. Render changed Mermaid when tooling is available and disclose any
+validation limitation.
 Record current scope and acceptance evidence in the owning GitHub issue and PR.
 
 Use a focused failing regression test before a bug fix where practical, then the

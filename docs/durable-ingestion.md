@@ -1,10 +1,10 @@
 # Durable synthetic ingestion
 
-The approved stage-2 implementation is on [PR #6](https://github.com/jestrada/ChargeShare/pull/6), stacked on [PR #5](https://github.com/jestrada/ChargeShare/pull/5). Local normalization/storage tests use candidate decoded receiver fixtures; actual receiver-backed ingestion acceptance remains unrun. The existing fixture dashboard stays independent.
+The approved stage-2 implementation is on [PR #6](https://github.com/jestrada/ChargeShare/pull/6), targeting `main` after [PR #5](https://github.com/jestrada/ChargeShare/pull/5) merged. Local normalization/storage tests use candidate decoded receiver fixtures; actual receiver-backed ingestion acceptance remains unrun. The existing fixture dashboard stays independent. [The ingestion acceptance issue](https://github.com/jestrada/ChargeShare/issues/12) owns the current checklist and evidence; OpenSpec is paused.
 
 ## Input and lifecycle contract
 
-The candidate decoded `V` shape comes from fictional stage-1 fixtures at receiver revision `bd076fe1494841707528449560c4a19d0d426da4`. All six records match recovered harness commit `ec1c8922c813e8af57ea931324466ccc5afba5d5`, including its ACK-deadline fixes. PR #5 now publishes verified harness head `33a456894eefb1955a6dd28aadb997e1fc079852`, with passing Linux transport, retained replay, restart/reset and cleanup. PR #6 is rebased onto that head. A validated manifest maps fictional broker key/`vin` and exact integral UTC `createdAt` to stable vehicle-wide position, connection, event kind and charge type. Those annotations are synthetic context. Counter values come only from observed `ACChargingEnergyIn.stringValue`; missing readings remain absent and invalid readings retain safe core reasons. A charging-complete value or silence never creates an End.
+The candidate decoded `V` shape comes from fictional stage-1 fixtures at receiver revision `bd076fe1494841707528449560c4a19d0d426da4`. All six records match recovered harness commit `ec1c8922c813e8af57ea931324466ccc5afba5d5`, including its ACK-deadline fixes. PR #5 merged verified harness head `33a456894eefb1955a6dd28aadb997e1fc079852`, with passing Linux transport, retained replay, restart/reset and cleanup. PR #6 is rebased onto `main`, which includes that implementation. A validated manifest maps fictional broker key/`vin` and exact integral UTC `createdAt` to stable vehicle-wide position, connection, event kind and charge type. Those annotations are synthetic context. Counter values come only from observed `ACChargingEnergyIn.stringValue`; missing readings remain absent and invalid readings retain safe core reasons. A charging-complete value or silence never creates an End.
 
 Mappings, annotations, time conversion and normalization versions are frozen with the database. Accepted storage is curated; arbitrary raw JSON, vehicle names, location fields and rejected text are never retained. Exact counters and full-range unsigned positions use canonical decimal TEXT. Replays return the current core's scoped synthetic, physically unvalidated sessions, with Unconfirmed classification.
 
@@ -50,6 +50,6 @@ Run `bash scripts/testing/ingestion-suite.sh` for the complete workspace and a g
 - Bind the verified parent harness schema and owned broker epoch lifecycle to ingestion
 - Run the actual pinned receiver → Kafka → ingestion → SQLite → scoped replay path on permitted Linux x86_64/Docker
 - Add and prove a dedicated ingestion CI gate, with safe summaries and teardown on failure
-- Review, then sync/archive this change only after its implementation acceptance is complete
+- Review and record acceptance evidence in the owning issue and PR before marking the work complete
 
 Live Tesla access, persistent reviews, priced/API/dashboard results, deployment and Cloudflare remain separate work.

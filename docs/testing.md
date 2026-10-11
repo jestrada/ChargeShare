@@ -2,7 +2,7 @@
 
 Spec 1 has been approved for implementation and now has an offline Rust suite.
 The verified receiver-to-Kafka harness is described in [local development](local-development.md).
-The [stage-2 ingestion change](../openspec/changes/durable-synthetic-ingestion/proposal.md)
+The [stage-2 ingestion work](https://github.com/jestrada/ChargeShare/issues/12)
 is approved and partially applied; actual receiver-backed ingestion acceptance
 remains pending. Persisted results/API/dashboard reads remain stage 3.
 
@@ -56,7 +56,8 @@ checks run all ingestion tests through the complete workspace, but their guard
 only requires the ledger/pricing suites; the focused ingestion guard and its four
 failure tests remain local. The inherited transport workflow verifies stage 1,
 without consuming into SQLite. The owned broker epoch binding, actual receiver
-→ Kafka → ingestion → SQLite → scoped replay gate and archive remain pending.
+→ Kafka → ingestion → SQLite → scoped replay gate remain pending in the
+[ingestion acceptance issue](https://github.com/jestrada/ChargeShare/issues/12).
 Hosted checks must be verified on each exact published head; historical results
 do not establish that outcome.
 
