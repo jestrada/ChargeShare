@@ -113,9 +113,12 @@ copying it neither creates credentials nor authorizes live operation.
 3. Run all applicable tests and [publication safeguards](SECURITY.md#before-every-publication).
    Stage only intended files and review the complete staged diff and commit author
    metadata. Stop on scanner findings or unexpected files; never bypass hooks.
-4. Publish only to the authorized repository/branch with a normal fast-forward
-   push. If the remote changed, integrate deliberately and repeat checks; never
-   force-push or replace Git history as a shortcut.
+4. Use the [stacked PR workflow](AGENTS.md#branches-and-stacked-pull-requests)
+   for every change. Publish new PRs with `gh stack submit --auto` and update
+   existing branches with `gh stack push`. Restack after parent changes with
+   `gh stack rebase`; publish rewritten branches through the tool's explicit
+   lease protection. If a lease is rejected, resolve the remote changes and
+   repeat applicable checks before retrying. Never use unconditional force pushes.
 5. Verify the exact remote commit and terminal hosted checks before claiming
    completion. Close implementation issues only after their acceptance is verified. Passing checks
    do not authorize merging, deployment, Tesla registration, OAuth/key pairing,
