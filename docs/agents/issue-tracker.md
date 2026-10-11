@@ -118,10 +118,25 @@ On resolution, post the answer as a comment, close the ticket, then add a linked
 one-line pointer to the map. Follow Wayfinder's limit of one resolved decision
 ticket per session, except research tickets.
 
+## Specs
+
+Publish new specs as GitHub issues in `jestrada/ChargeShare` through `$to-spec`,
+and invoke the skill only when the user asks. Follow the
+[human-readable change review rules](#human-readable-change-reviews). OpenSpec
+is not used for new work; existing `openspec/` files remain reference material
+and must not be deleted or moved. This guide supplies the issue tracker and
+triage vocabulary, so `/setup-matt-pocock-skills` is not needed.
+
+## Triage labels
+
+This repository has no `ready-for-agent` label; agents must not create it. When
+`to-spec` asks for the `ready-for-agent` triage label, apply the existing
+`enhancement` label instead. Do not apply another triage label.
+
 ## Skill provenance
 
-The trial installs `wayfinder` and its supporting `grilling`, `domain-modeling`,
-`research`, and `prototype` skills from the public
+The trial installs the `wayfinder`, `grilling`, `domain-modeling`, `research`,
+`prototype`, and `to-spec` skills from the public
 [mattpocock/skills repository](https://github.com/mattpocock/skills/tree/49dd158d1076134a641b33efb035946536778336),
 pinned at commit `49dd158d1076134a641b33efb035946536778336`.
 Their source files are copied unchanged into `.agents/skills/`, including the
