@@ -93,10 +93,17 @@ of 0.500000/0.250000 kWh, one Unconfirmed session per vehicle and zero eligible
 energy. It resumes between independent consumers, kills actual consumers at
 explicit before/after-commit barriers, recovers old/new state, then processes
 actual duplicate/out-of-order receiver traffic without duplicating energy.
-It forces retained rereads, checks missing/mismatched identity, restarts Tilt,
+It forces retained rereads, checks missing/mismatched identity and an incompatible
+frozen manifest, restarts Tilt,
 deletes only this disposable broker's retained records to verify a real gap
 against a private progress-3 snapshot, checks that expired reread refuses, and
 performs an explicit stopped reset followed by new-epoch initialization.
+
+Changed epochs and missing markers must return `source: broker runtime identity
+mismatch`; a valid manifest with a changed version must return `storage: frozen
+configuration mismatch`. Each refusal requires exit 2, empty stdout and the exact
+stderr line. The command restores the input and independently checks scoped
+results, evidence counts and SQLite progress after each case.
 
 The outer deadline is 40 minutes with 60 seconds for exit handling. Startup is
 bounded by 90-second Tilt API and 900-second protocol readiness deadlines;

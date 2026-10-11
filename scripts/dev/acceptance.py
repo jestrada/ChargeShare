@@ -72,7 +72,7 @@ class Acceptance:
         with (self.private / "commands-local.log").open("a", encoding="utf-8") as output:
             output.write(result.stdout + result.stderr)
         if expected_reason is not None:
-            if result.returncode != 2 or result.stdout.strip() or result.stderr.strip() != expected_reason:
+            if result.returncode != 2 or result.stdout or result.stderr != expected_reason + "\n":
                 raise AcceptanceFailure("refusal")
         elif result.returncode != 0:
             raise AcceptanceFailure(self.stage)
@@ -211,11 +211,14 @@ class Acceptance:
             command = runner_command(self.runtime, name, self.run_id, ["consume", "/run/.local-runtime", "kafka:9092", "1", "10"])
             write_private_json(marker, changed)
             self.runners.add(name)
-            self.checked(command, 15, "storage: frozen configuration mismatch")
+            self.checked(command, 15, "source: broker runtime identity mismatch")
         finally:
             write_private_json(marker, source)
             for name in list(self.runners):
                 self.remove_runner(name)
+        if self.status() != before:
+            raise AcceptanceFailure("source-mismatch")
+        self.record("PASS: changed source epoch refused; SQLite evidence and progress preserved")
         saved = marker.with_name("source-epoch.saved.json")
         name = runner_name(self.runtime)
         command = runner_command(self.runtime, name, self.run_id, ["consume", "/run/.local-runtime", "kafka:9092", "1", "10"])
@@ -234,7 +237,25 @@ class Acceptance:
             self.remove_runner(name)
         if self.status() != before:
             raise AcceptanceFailure("source-mismatch")
-        self.record("PASS: missing and mismatched source identity refused; SQLite preserved")
+        self.record("PASS: missing source marker refused; SQLite evidence and progress preserved")
+
+    def frozen_configuration(self, before):
+        self.stage = "frozen-configuration"
+        path = self.runtime.directory / "manifest.json"
+        manifest = json.loads(path.read_bytes())
+        changed = dict(manifest, manifest_version=manifest["manifest_version"] + "-incompatible")
+        name = runner_name(self.runtime)
+        command = runner_command(self.runtime, name, self.run_id, ["consume", "/run/.local-runtime", "kafka:9092", "1", "10"])
+        try:
+            write_private_json(path, changed)
+            self.runners.add(name)
+            self.checked(command, 15, "storage: frozen configuration mismatch")
+        finally:
+            write_private_json(path, manifest)
+            self.remove_runner(name)
+        if self.status() != before:
+            raise AcceptanceFailure("frozen-configuration")
+        self.record("PASS: incompatible frozen manifest refused; SQLite evidence and progress preserved")
 
     def execute(self):
         preflight(self.runtime)
@@ -290,6 +311,7 @@ class Acceptance:
                 raise AcceptanceFailure("reread")
         self.record("PASS: bounded committed-offset reread left results, evidence and SQLite next position unchanged")
         self.mismatch(complete)
+        self.frozen_configuration(complete)
         self.stop()
         self.start()
         if verify_source_epoch(self.runtime)["epoch"] != first_epoch or self.status() != complete:

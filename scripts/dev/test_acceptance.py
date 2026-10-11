@@ -5,11 +5,14 @@ import os
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import acceptance
 import ingestion_runner
 from runtime import ProjectRuntime, RuntimeFailure, SYNTHETIC_LABEL
+from source_epoch import ensure_source_epoch, verify_source_epoch, write_private_json
+from test_source_epoch import EpochDocker
 
 
 def complete_status():
@@ -126,10 +129,10 @@ class CommandAndCleanupTests(unittest.TestCase):
 
     def test_expected_refusal_requires_specific_safe_reason_and_nonzero_exit(self):
         reason = "source: durable position outside retained input"
-        for result in [subprocess.CompletedProcess([], 0, "", reason), subprocess.CompletedProcess([], 2, "payload", reason), subprocess.CompletedProcess([], 2, "", "unrelated failure")]:
+        for result in [subprocess.CompletedProcess([], 0, "", reason + "\n"), subprocess.CompletedProcess([], 2, "payload", reason + "\n"), subprocess.CompletedProcess([], 2, " \n", reason + "\n"), subprocess.CompletedProcess([], 2, "", "unrelated failure\n"), subprocess.CompletedProcess([], 2, "", reason + " \n")]:
             with mock.patch.object(acceptance.subprocess, "run", return_value=result), self.assertRaises(acceptance.AcceptanceFailure):
                 self.driver.checked(["synthetic-command"], expected_reason=reason)
-        with mock.patch.object(acceptance.subprocess, "run", return_value=subprocess.CompletedProcess([], 2, "", reason)):
+        with mock.patch.object(acceptance.subprocess, "run", return_value=subprocess.CompletedProcess([], 2, "", reason + "\n")):
             self.driver.checked(["synthetic-command"], expected_reason=reason)
 
     def test_main_preserves_setup_assertion_and_timeout_failure_and_always_tears_down_owned_run(self):
@@ -151,6 +154,94 @@ class CommandAndCleanupTests(unittest.TestCase):
         with mock.patch.object(acceptance.ProjectRuntime, "at", return_value=self.runtime), mock.patch.object(acceptance.Acceptance, "execute", side_effect=acceptance.AcceptanceFailure("fresh-owned-runtime-required")), mock.patch.object(acceptance.Acceptance, "cleanup") as cleanup, contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(acceptance.main(["all"]), 1)
             cleanup.assert_not_called()
+
+
+class RefusalScenarioTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.runtime = ProjectRuntime.at(temporary.name)
+        self.docker = EpochDocker(self.runtime)
+        self.source = ensure_source_epoch(self.runtime, self.docker)
+        self.marker = self.runtime.directory / "source-epoch.json"
+        self.manifest_path = self.runtime.directory / "manifest.json"
+        self.manifest = json.loads((Path(__file__).resolve().parents[2] / "dev/ingestion-manifest.json").read_bytes())
+        write_private_json(self.manifest_path, self.manifest)
+        self.database = self.runtime.directory / "ingestion.sqlite3"
+        self.database.write_bytes(b"fictional-retained-sqlite-evidence")
+        self.before = complete_status()
+        self.driver = acceptance.Acceptance(self.runtime)
+        patches = contextlib.ExitStack()
+        self.addCleanup(patches.close)
+        patches.enter_context(mock.patch.object(acceptance, "verify_source_epoch", side_effect=lambda project: verify_source_epoch(project, self.docker)))
+        patches.enter_context(mock.patch.object(acceptance, "runner_command", return_value=["synthetic-consumer"]))
+        patches.enter_context(mock.patch.object(self.driver, "remove_runner", side_effect=self.driver.runners.discard))
+        self.status = patches.enter_context(mock.patch.object(self.driver, "status", return_value=self.before))
+        self.process = patches.enter_context(mock.patch.object(acceptance.subprocess, "run"))
+
+    def assert_restored(self):
+        self.assertEqual(json.loads(self.marker.read_bytes()), self.source)
+        self.assertEqual(json.loads(self.manifest_path.read_bytes()), self.manifest)
+        self.assertEqual(self.database.read_bytes(), b"fictional-retained-sqlite-evidence")
+        self.assertEqual(self.driver.runners, set())
+
+    def test_changed_epoch_and_missing_marker_require_source_reason_and_independent_preservation_checks(self):
+        observed = []
+
+        def refuse(command, **arguments):
+            observed.append(json.loads(self.marker.read_bytes()) if self.marker.exists() else None)
+            return subprocess.CompletedProcess(command, 2, "", "source: broker runtime identity mismatch\n")
+
+        self.process.side_effect = refuse
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.driver.mismatch(self.before)
+        self.assertNotEqual(observed[0]["epoch"], self.source["epoch"])
+        self.assertIsNone(observed[1])
+        self.assertEqual(self.status.call_count, 2)
+        self.assert_restored()
+
+    def test_each_source_refusal_fails_if_replay_evidence_or_progress_changes(self):
+        self.process.return_value = subprocess.CompletedProcess([], 2, "", "source: broker runtime identity mismatch\n")
+        for changed_at in (0, 1):
+            with self.subTest(changed_at=changed_at):
+                self.status.side_effect = [self.before] * changed_at + [dict(self.before, accepted=7)]
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(acceptance.AcceptanceFailure, "source-mismatch"):
+                    self.driver.mismatch(self.before)
+                self.assert_restored()
+
+    def test_wrong_epoch_reason_fails_and_restores_the_marker(self):
+        self.process.return_value = subprocess.CompletedProcess([], 2, "", "storage: frozen configuration mismatch\n")
+        with self.assertRaisesRegex(acceptance.AcceptanceFailure, "refusal"):
+            self.driver.mismatch(self.before)
+        self.assertEqual(self.process.call_count, 1)
+        self.status.assert_not_called()
+        self.assert_restored()
+
+    def test_changed_manifest_requires_frozen_configuration_reason_and_preserves_sqlite(self):
+        def refuse(command, **arguments):
+            changed = json.loads(self.manifest_path.read_bytes())
+            self.assertNotEqual(changed["manifest_version"], self.manifest["manifest_version"])
+            self.assertEqual(changed["mappings"], self.manifest["mappings"])
+            self.assertEqual(json.loads(self.marker.read_bytes()), self.source)
+            return subprocess.CompletedProcess(command, 2, "", "storage: frozen configuration mismatch\n")
+
+        self.process.side_effect = refuse
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.driver.frozen_configuration(self.before)
+        self.status.assert_called_once()
+        self.assert_restored()
+
+    def test_changed_manifest_restores_configuration_on_wrong_reason_or_changed_progress(self):
+        for result, status, reason in [
+            (subprocess.CompletedProcess([], 2, "", "source: broker runtime identity mismatch\n"), self.before, "refusal"),
+            (subprocess.CompletedProcess([], 2, "", "storage: frozen configuration mismatch\n"), dict(self.before, positions=[{"partition": 0, "next_offset": 7}]), "frozen-configuration"),
+        ]:
+            with self.subTest(reason=reason):
+                self.process.return_value = result
+                self.status.return_value = status
+                with self.assertRaisesRegex(acceptance.AcceptanceFailure, reason):
+                    self.driver.frozen_configuration(self.before)
+                self.assert_restored()
 
 
 if __name__ == "__main__":
