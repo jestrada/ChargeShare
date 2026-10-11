@@ -15,7 +15,10 @@ verification described in [local preview](local-preview.md).
 
 [Repository checks](../.github/workflows/security.yml) runs security guard
 tests/history scans, the frontend build, Rust formatting, clippy and the
-complete `cargo test --workspace --locked` on every push and pull request. The
+complete `cargo test --workspace --locked` on every pull request
+and every push to `main`, with manual dispatch also available. It allows one
+active run per PR, cancels superseded PR runs and never cancels main runs.
+Branches without an open PR get no hosted checks. The
 pinned Rust 1.99.0 toolchain and Cargo.lock are used on clean hosted runners.
 The wrapper `bash scripts/testing/offline-suite.sh` preserves Cargo's exit status,
 fails on absent/ignored/filtered acceptance tests, fewer than 17 ledger scenarios

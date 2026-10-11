@@ -152,7 +152,9 @@ semantic results; volatile receipts/offsets are not energy evidence.
 ## Automated acceptance and evidence
 
 [The integration workflow](../.github/workflows/telemetry-integration.yml)
-is active for every push and pull request. [Verification steps](workflows/README.md)
+runs on every pull request and every push to `main`. It allows one active run
+per PR, cancels superseded PR runs and never cancels main runs; branches without
+an open PR get no hosted checks. [Verification steps](workflows/README.md)
 describe the deliberate failure proof and restored successful run. It runs using a fresh `ubuntu-24.04` x86_64 VM, its
 host Docker daemon and the same locked shell/Compose/Tilt inputs. It explicitly
 triggers `telemetry-smoke`, checks all fixture cases and negative boundaries,
