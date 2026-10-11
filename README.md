@@ -32,7 +32,7 @@ The guides in `docs/` are:
 - [Local preview](docs/local-preview.md): launch, interactions and demo limits
 - [Local development](docs/local-development.md): pinned Nix/Tilt synthetic receiver-to-Kafka harness and isolated lifecycle
 - [POC plan](docs/plan.md): three local integration stages, then Cloudflare architecture and Terraform deployment
-- [Durable synthetic ingestion](docs/durable-ingestion.md): candidate normalization, local SQLite recovery and scoped replay; actual receiver integration remains unverified
+- [Durable synthetic ingestion](docs/durable-ingestion.md): normalization, local SQLite recovery, owned source epochs, bounded reread and the shared acceptance command; actual receiver-backed verification remains pending
 - [Issue tracking](docs/agents/issue-tracker.md): Wayfinder decisions and implementation work through GitHub Issues
 
 Current planning and implementation tracking use GitHub Issues through `gh`.

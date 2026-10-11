@@ -2,8 +2,10 @@
 
 The local harness exercises a finite synthetic mTLS WebSocket exchange through
 Tesla's external Go receiver and its Kafka dispatcher. ChargeShare's outer driver
-is Rust. The ledger, pricing core and fixture dashboard do not consume this
-traffic. These fixtures contain only fictional `device-1` and `device-2`
+is Rust. Ordinary transport checks do not consume this traffic into SQLite;
+the separate ingestion acceptance command is implemented but its actual run
+remains unverified. The pricing preview/dashboard stays independent. These
+fixtures contain only fictional `device-1` and `device-2`
 identities, fixed counter/state values and fixed source timestamps. They are not
 vehicle measurements, utility-meter evidence or reimbursement calculations.
 
@@ -166,3 +168,32 @@ new decoded Kafka records. ACK alone, a listening socket, direct Kafka fixture
 production or successful fixture generation cannot pass that boundary. The test
 makes no ledger deduplication, normalization, persistence, cost, production
 reliability or receiver-backed dashboard claim.
+
+## Decoded ingestion capture
+
+Issue #27 binds the inspected receiver V shape to the existing normalizer and
+`dev/ingestion-manifest.json`. The allowlist accepts the four named fields above,
+typed symbolic charge states and only `data`, `createdAt`, `vin`, `isResend` in
+the envelope. Integral UTC `createdAt` converts to signed Unix seconds; Kafka's
+zero timestamp header is ignored. Device/key identity must agree. Associations
+fix owners, vehicles, matching connection aliases, positions and explicit AC
+Start/Sample/End annotations at the three received source times. They contain
+no expected energy counters. Missing counters remain absent, unsupported shapes
+and duplicate fields reject safely, and complete state does not invent an End.
+
+`bash scripts/dev/acceptance.sh all` first sends the complete fixture through the
+actual pinned receiver and verifies the full Kafka multiset after run-start
+offsets. Only then does the harness write private `decoded-capture.json` with
+actual observed records, pinned revision and topic. The ephemeral ingestion
+runner normalizes that capture and checks it against the candidate contract.
+After successful capture verification, a private copy remains at
+`.cache/ingestion-acceptance/decoded-capture.json` after owned teardown.
+
+No actual receiver output could be captured in the implementation sandbox;
+the candidate fixture's provenance is unchanged and no manufactured golden is
+committed. After a successful real run, review the private capture against the
+exact pinned schema and commit a fictional decoded golden under
+`crates/chargeshare-ingestion/tests/fixtures/`, with a normalization/rejection
+regression using that actual capture. This remaining step and hosted evidence
+are required before issue #27 can be called complete. The CI artifact allowlist
+excludes the capture, payloads, databases, local logs, keys and certificates.
