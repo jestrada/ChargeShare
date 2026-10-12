@@ -15,7 +15,7 @@ from pathlib import Path
 from ingestion_runner import owned_runner, runner_command, runner_name
 from runtime import ProjectRuntime, RuntimeFailure, check_ports_available, compose_command, exclusive_synthetic_run_lock, preflight, project_broker_volume, run_command
 from source_epoch import TOPIC, read_marker, verify_source_epoch, write_private_json
-from viewing import SCOPES, assert_http_scopes, http_document, owning_runtime_command, runtime_name, scoped_results, wait_http_scopes
+from viewing import PRICING_GOLDEN, SCOPES, assert_http_scopes, http_document, owning_runtime_command, runtime_name, scoped_results, wait_http_scopes
 
 
 class AcceptanceFailure(Exception):
@@ -44,13 +44,19 @@ def assert_coordinate_privacy(text, checkout):
 
 
 def assert_location_sessions(result, expected, eligible):
-    if set(result) != {"owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "provenance", "revision"} or result["owner"] != "owner-a" or result["vehicle"] != "vehicle-a" or result["state"] != "held" or result["observed_ac_kwh"] != "3.500000" or result["eligible_shared_charger_kwh"] != eligible or len(result["sessions"]) != len(expected):
+    if set(result) != {"owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "provenance", "revision", "pricing"} or result["owner"] != "owner-a" or result["vehicle"] != "vehicle-a" or result["state"] != "held" or result["observed_ac_kwh"] != "3.500000" or result["eligible_shared_charger_kwh"] != eligible or len(result["sessions"]) != len(expected):
         raise AcceptanceFailure("location-classification")
     sessions = {session["connection"]: session for session in result["sessions"]}
     for connection, (classification, reason) in expected.items():
         exclusions = [] if classification == "SharedCharger" else ["OtherCharger" if classification == "OtherCharger" else reason]
         session = {"vehicle": "vehicle-a", "connection": connection, "classification": classification, "classification_reason": reason, "evidence_state": "complete", "observed_ac_kwh": "0.500000", "eligible_shared_charger_kwh": "0.500000" if classification == "SharedCharger" else "0.000000", "quality_flags": [], "exclusion_reasons": exclusions}
-        if sessions.get(connection) != session:
+        actual = sessions.get(connection, {})
+        if {key: value for key, value in actual.items() if key != "pricing"} != session:
+            raise AcceptanceFailure("location-classification")
+        price = actual["pricing"]
+        if classification != "SharedCharger" and price != {"state": "ineligible", "hold_reason": "IneligibleSession", "quote": None}:
+            raise AcceptanceFailure("location-classification")
+        if classification == "SharedCharger" and (price["state"] != "quoted" or price["quote"] is None):
             raise AcceptanceFailure("location-classification")
 
 
@@ -59,14 +65,23 @@ def fail_at_deadline(signum, frame):
 
 
 def assert_complete(document, wrong_expectation=False):
-    expected = ["0.600000 kWh" if wrong_expectation else "0.500000 kWh", "0.250000 kWh"]
-    if set(document) != {"scopes", "positions", "accepted", "rejected", "variants"} or document["accepted"] != 6 or document["rejected"] != 0 or document["variants"] != 6 or document["positions"] != [{"partition": 0, "next_offset": 6}]:
+    expected = ["0.500000 kWh", "0.250000 kWh"]
+    golden = PRICING_GOLDEN
+    if set(document) != {"scopes", "positions", "accepted", "rejected", "variants", "golden_reference", "actual_exact_subtotal", "actual_rounded_subtotal"} or document["accepted"] != 6 or document["rejected"] != 0 or document["variants"] != 6 or document["positions"] != [{"partition": 0, "next_offset": 6}]:
+        raise AcceptanceFailure("assertion")
+    reference = {"exact_costs": golden["exact_costs"], "exact_subtotal": golden["exact_subtotal"], "rounded_subtotal": golden["rounded_subtotal"]}
+    if document["golden_reference"] != reference or document["actual_exact_subtotal"] != golden["exact_subtotal"] or document["actual_rounded_subtotal"] != golden["rounded_subtotal"]:
         raise AcceptanceFailure("assertion")
     scopes = document["scopes"]
     if len(scopes) != 2:
         raise AcceptanceFailure("assertion")
     for index, scope in enumerate(scopes):
-        if scope != {"vehicle": ("vehicle-a", "vehicle-b")[index], "observed_ac": expected[index], "eligible": expected[index] if index == 0 else "0.000000 kWh", "sessions": 1, "classifications": ["SharedCharger" if index == 0 else "OtherCharger"], "classification_reasons": ["InsideGeofence" if index == 0 else "OutsideGeofence"], "quality_flags": 0}:
+        evidence = {key: value for key, value in scope.items() if key not in ("pricing", "session_prices")}
+        if evidence != {"vehicle": ("vehicle-a", "vehicle-b")[index], "observed_ac": expected[index], "eligible": expected[index], "sessions": 1, "classifications": ["SharedCharger"], "classification_reasons": ["InsideGeofence"], "quality_flags": 0}:
+            raise AcceptanceFailure("assertion")
+        expected_cost = "0.9990000000000000 USD" if wrong_expectation and index == 0 else golden["exact_costs"][index]
+        prices = scope["session_prices"]
+        if scope["pricing"]["exact_subtotal"] != expected_cost or scope["pricing"]["display_subtotal"] != golden["display_costs"][index] or len(prices) != 1 or prices[0]["quote"]["exact_cost"] != expected_cost:
             raise AcceptanceFailure("assertion")
 
 
@@ -341,7 +356,7 @@ class Acceptance:
             complete = wait_http_scopes()
             if any(before["revision"] == after["revision"] for before, after in zip(empty, complete)):
                 raise AcceptanceFailure("viewing-revision")
-            self.record("PASS: owning runtime ingested fresh official receiver output; HTTP scopes A=0.500000/B=0.250000 kWh; automatic SharedCharger/OtherCharger; eligible A=0.500000/B=0.000000 kWh; mismatched scope refused; semantic revision stable")
+            self.record("PASS: owning runtime ingested fresh official receiver output; HTTP scopes A=0.500000/B=0.250000 kWh; automatic SharedCharger; eligible A=0.500000/B=0.250000 kWh; EV2-A exact 0.11279/0.056395 USD; mismatched scope refused; semantic revision stable")
             self.stage = "viewing-concurrent-replay"
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=4) as readers:
@@ -369,11 +384,57 @@ class Acceptance:
             if "/src/persisted-main.tsx" not in html:
                 raise AcceptanceFailure("viewing-dashboard-entry")
             self.record("PASS: separate persisted dashboard listener ready on IPv4 loopback 5174; browser screenshots remain manual")
+            self.pricing_configuration(complete)
             self.location_classification()
         except RuntimeFailure:
             raise AcceptanceFailure(self.stage) from None
         finally:
             self.stop_viewing()
+
+    def pricing_configuration(self, complete):
+        self.stage = "pricing-configuration"
+        path = self.runtime.directory / "manifest.json"
+        original = json.loads(path.read_bytes())
+        changed = json.loads(json.dumps(original))
+        model = changed["rate_models"][0]
+        model["id"] = "pge-ev2-a-rate-gap-v1"
+        model["effective_from"] = "2026-09-02"
+        for charger in changed["owner_chargers"]:
+            charger["rate_model_versions"] = [model["id"]]
+        self.stop_viewing()
+        try:
+            write_private_json(path, changed)
+            self.start_viewing()
+            held = [scoped_results(owner, vehicle) for owner, vehicle, energy in SCOPES]
+            for before, after in zip(complete, held):
+                before_evidence = [{key: value for key, value in session.items() if key != "pricing"} for session in before["sessions"]]
+                after_evidence = [{key: value for key, value in session.items() if key != "pricing"} for session in after["sessions"]]
+                price = after["pricing"]
+                if before_evidence != after_evidence or before["eligible_shared_charger_kwh"] != after["eligible_shared_charger_kwh"] or before["revision"] == after["revision"] or price["state"] != "held" or price["exact_subtotal"] is not None or price["display_subtotal"] is not None or price["rate_held_session_count"] != 1 or after["sessions"][0]["pricing"] != {"state": "rate_held", "hold_reason": PRICING_GOLDEN["missing_rate_hold"], "quote": None}:
+                    raise AcceptanceFailure("pricing-rate-hold")
+            self.stop_viewing()
+            self.start_viewing()
+            if [scoped_results(owner, vehicle) for owner, vehicle, energy in SCOPES] != held:
+                raise AcceptanceFailure("pricing-held-restart")
+            self.checked(["bash", "scripts/dev/harness.sh", "adverse"], 300)
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                with contextlib.closing(sqlite3.connect("file:" + str(self.runtime.directory / "ingestion.sqlite3") + "?mode=ro", uri=True)) as database:
+                    if database.execute("SELECT next_offset FROM partition_progress WHERE partition=0").fetchone() == (34,):
+                        break
+                time.sleep(0.1)
+            else:
+                raise AcceptanceFailure("pricing-held-replay")
+            if [scoped_results(owner, vehicle) for owner, vehicle, energy in SCOPES] != held:
+                raise AcceptanceFailure("pricing-held-replay")
+            self.record("PASS: missing selected EV2-A coverage held whole sessions without quotes; observed and eligible energy unchanged; held reasons, provenance and revisions stable after owner restart and real receiver replay")
+        finally:
+            self.stop_viewing()
+            write_private_json(path, original)
+        self.start_viewing()
+        if assert_http_scopes() != complete:
+            raise AcceptanceFailure("pricing-restoration")
+        self.record("PASS: restoring immutable selected EV2-A version restored exact scoped quotes and revisions without changing evidence")
 
     def wait_locations(self, expected, eligible):
         deadline = time.monotonic() + 30
@@ -420,7 +481,7 @@ class Acceptance:
         fixture = json.loads((self.runtime.checkout / "dev/fixtures/location.json").read_bytes())
         fields = fixture["expected"][0]["payload"]["data"]
         point = next(field["value"]["locationValue"] for field in fields if field["key"] == "Location")
-        geofence = next(geofence for geofence in changed["geofences"] if geofence["owner"] == "owner-a")
+        geofence = next(charger["geofence"] for charger in changed["owner_chargers"] if charger["owner_id"] == "owner-a")
         geofence["center"] = dict(status="valid", **{key: str(value) for key, value in point.items()})
         self.stop_viewing()
         try:
@@ -486,7 +547,8 @@ class Acceptance:
         complete = self.status()
         assert_complete(complete, self.prove_failure == "assertion")
         self.record("PASS: real consumer kills before/after commit recovered atomic old/new state without duplicated energy")
-        self.record("PASS: vehicle-a=0.500000 kWh vehicle-b=0.250000 kWh observed AC; both automatic SharedCharger/OtherCharger; eligible A=0.500000/B=0.000000 kWh")
+        self.record("PASS: receiver-backed EV2-A off-peak quote exact costs 0.1127900000000000/0.0563950000000000 USD agree with independent core reference; exact acceptance subtotal 0.1691850000000000 USD rounds once to $0.17")
+        self.record("PASS: vehicle-a=0.500000 kWh vehicle-b=0.250000 kWh observed AC; both automatic SharedCharger; eligible A=0.500000/B=0.250000 kWh; EV2-A exact 0.11279/0.056395 USD")
         if self.prove_failure == "timeout":
             self.prove_timeout(complete)
         self.stage = "duplicate-out-of-order"

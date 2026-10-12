@@ -7,6 +7,9 @@ pub use stream::{
     DeliveryCoordinate, PartitionRange, PartitionStart, SYNTHETIC_TOPIC, SourceBinding,
 };
 
+mod rates;
+pub use rates::{ChargerGeofenceConfig, OwnerChargerConfig, RateModelConfig, RatePeriodConfig};
+
 mod manifest;
 mod model;
 mod normalize;
@@ -36,5 +39,8 @@ pub use kafka::{
 mod results;
 mod viewing;
 
-pub use results::{ResultProvenance, ScopedResults, SessionResult};
+pub use results::{
+    PRICING_BOUNDARY, PricingResult, QuoteResult, ResultProvenance, ScopedResults, SessionPrice,
+    SessionResult, SliceResult,
+};
 pub use viewing::serve_results;

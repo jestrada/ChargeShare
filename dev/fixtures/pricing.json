@@ -1,0 +1,13 @@
+{
+  "boundary": "Synthetic acceptance expectations for PG&E bundled EV2-A energy only; not a bill",
+  "model_version": "pge-ev2-a-2026-03-v1",
+  "local_date": "2026-09-01",
+  "season": "Summer",
+  "period": "off_peak",
+  "usd_per_kwh": "0.2255800000 USD/kWh",
+  "exact_costs": ["0.1127900000000000 USD", "0.0563950000000000 USD"],
+  "display_costs": ["$0.11", "$0.06"],
+  "exact_subtotal": "0.1691850000000000 USD",
+  "rounded_subtotal": "0.17 USD",
+  "missing_rate_hold": "MissingRate"
+}

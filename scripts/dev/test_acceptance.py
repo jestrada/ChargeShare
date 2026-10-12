@@ -16,12 +16,16 @@ from test_source_epoch import EpochDocker
 
 
 def complete_status():
-    return {
-        "accepted": 6, "rejected": 0, "variants": 6,
-        "positions": [{"partition": 0, "next_offset": 6}],
-        "scopes": [{"vehicle": vehicle, "observed_ac": energy, "eligible": energy if vehicle == "vehicle-a" else "0.000000 kWh", "sessions": 1, "classifications": ["SharedCharger" if vehicle == "vehicle-a" else "OtherCharger"], "classification_reasons": ["InsideGeofence" if vehicle == "vehicle-a" else "OutsideGeofence"], "quality_flags": 0}
-                   for vehicle, energy in [("vehicle-a", "0.500000 kWh"), ("vehicle-b", "0.250000 kWh")]],
-    }
+    from test_viewing import complete_results
+    golden = acceptance.PRICING_GOLDEN
+    scopes = []
+    for suffix, energy in [("a", "0.500000"), ("b", "0.250000")]:
+        result = complete_results("owner-" + suffix, "vehicle-" + suffix, energy)
+        scopes.append({"vehicle": "vehicle-" + suffix, "observed_ac": energy + " kWh", "eligible": energy + " kWh", "sessions": 1, "classifications": ["SharedCharger"], "classification_reasons": ["InsideGeofence"], "quality_flags": 0, "pricing": result["pricing"], "session_prices": [result["sessions"][0]["pricing"]]})
+    return {"accepted": 6, "rejected": 0, "variants": 6, "positions": [{"partition": 0, "next_offset": 6}], "scopes": scopes,
+        "golden_reference": {"exact_costs": golden["exact_costs"], "exact_subtotal": golden["exact_subtotal"], "rounded_subtotal": golden["rounded_subtotal"]},
+        "actual_exact_subtotal": golden["exact_subtotal"], "actual_rounded_subtotal": golden["rounded_subtotal"]}
+
 
 
 class AssertionTests(unittest.TestCase):
@@ -31,10 +35,10 @@ class AssertionTests(unittest.TestCase):
                    lambda value: value.update(rejected=1), lambda value: value.update(positions=[{"partition": 0, "next_offset": 7}]),
                    lambda value: value["scopes"][0].update(observed_ac="0.600000 kWh"),
                    lambda value: value["scopes"][1].update(vehicle="vehicle-a"),
-                   lambda value: value["scopes"][1].update(eligible="0.250000 kWh"),
+                   lambda value: value["scopes"][1].update(eligible="0.000000 kWh"),
                    lambda value: value["scopes"][0].update(classifications=["Held"]),
                    lambda value: value["scopes"][0].update(sessions=2),
-                   lambda value: value["scopes"][0].update(quality_flags=1)]
+                   lambda value: value["scopes"][0].update(quality_flags=1), lambda value: value["scopes"][0]["pricing"].update(exact_subtotal="0.1997000000000000 USD"), lambda value: value.update(actual_exact_subtotal="0.2995500000000000 USD")]
         for change in changes:
             value = complete_status()
             change(value)
@@ -74,9 +78,12 @@ class AssertionTests(unittest.TestCase):
         sessions = []
         for connection, (classification, reason) in expected.items():
             sessions.append({"vehicle":"vehicle-a", "connection":connection, "classification":classification, "classification_reason":reason, "evidence_state":"complete", "observed_ac_kwh":"0.500000", "eligible_shared_charger_kwh":"0.500000" if classification == "SharedCharger" else "0.000000", "quality_flags":[], "exclusion_reasons":[] if classification == "SharedCharger" else ["OtherCharger" if classification == "OtherCharger" else reason]})
-        result = {"owner":"owner-a", "vehicle":"vehicle-a", "state":"held", "observed_ac_kwh":"3.500000", "eligible_shared_charger_kwh":"1.000000", "evidence_boundary":"synthetic", "revision":"synthetic", "provenance":{}, "sessions":sessions}
+        from test_viewing import complete_results
+        for session in sessions:
+            session["pricing"] = complete_results()["sessions"][0]["pricing"] if session["classification"] == "SharedCharger" else {"state": "ineligible", "hold_reason": "IneligibleSession", "quote": None}
+        result = {"pricing": {}, "owner":"owner-a", "vehicle":"vehicle-a", "state":"held", "observed_ac_kwh":"3.500000", "eligible_shared_charger_kwh":"1.000000", "evidence_boundary":"synthetic", "revision":"synthetic", "provenance":{}, "sessions":sessions}
         acceptance.assert_location_sessions(result, expected, "1.000000")
-        for change in [lambda value: value.update(eligible_shared_charger_kwh="0.000000"), lambda value: value["sessions"][0].update(classification="OtherCharger"), lambda value: value["sessions"][0].update(classification_reason="LocationUnavailable"), lambda value: value["sessions"][0].update(latitude=12.3456789), lambda value: value["sessions"][0].update(quality_flags=["ConflictingEvidence"])]:
+        for change in [lambda value: value.update(eligible_shared_charger_kwh="0.000000"), lambda value: value["sessions"][0].update(classification="OtherCharger"), lambda value: value["sessions"][0].update(classification_reason="LocationUnavailable"), lambda value: value["sessions"][0].update(latitude=12.3456789), lambda value: value["sessions"][0].update(quality_flags=["ConflictingEvidence"]), lambda value: value["sessions"][2].update(pricing={"state": "quoted", "hold_reason": None, "quote": {"exact_cost": "0.1 USD"}})]:
             changed = json.loads(json.dumps(result))
             change(changed)
             with self.assertRaisesRegex(acceptance.AcceptanceFailure, "location-classification"):

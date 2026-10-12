@@ -2,7 +2,7 @@ use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, pa
 
 use crate::{IngestionError, Manifest, SourceBinding};
 
-pub(crate) const SCHEMA_VERSION: i64 = 2;
+pub(crate) const SCHEMA_VERSION: i64 = 3;
 pub(crate) const APPLICATION_ID: i64 = 0x4353_494e;
 
 pub(crate) fn storage_error(error: rusqlite::Error) -> IngestionError {
@@ -36,7 +36,7 @@ pub(crate) fn inspect_version(connection: &Connection) -> Result<bool, Ingestion
     if version == 0 && application == 0 && objects == 0 {
         return Ok(true);
     }
-    if ![1, SCHEMA_VERSION].contains(&version) || application != APPLICATION_ID {
+    if ![1, 2, SCHEMA_VERSION].contains(&version) || application != APPLICATION_ID {
         return Err(IngestionError::SchemaMismatch);
     }
     Ok(false)
@@ -81,7 +81,7 @@ pub(crate) fn initialize(
         .execute_batch(
             "CREATE TABLE runtime_metadata (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-                schema_version INTEGER NOT NULL CHECK (schema_version = 2),
+                schema_version INTEGER NOT NULL CHECK (schema_version = 3),
                 manifest_json TEXT NOT NULL,
                 source_json TEXT NOT NULL
             ) STRICT;
@@ -89,6 +89,7 @@ pub(crate) fn initialize(
                 version TEXT PRIMARY KEY,
                 config_json TEXT NOT NULL
             ) STRICT;
+            CREATE TABLE rate_model_versions (id TEXT PRIMARY KEY, config_json TEXT NOT NULL) STRICT;
             CREATE TABLE registrations (
                 device TEXT PRIMARY KEY,
                 vehicle TEXT NOT NULL UNIQUE,
@@ -124,7 +125,7 @@ pub(crate) fn initialize(
                     OR (variant_id IS NULL AND provenance_json IS NULL AND rejection_reason IS NOT NULL)
                 )
             ) STRICT;
-            PRAGMA user_version = 2;
+            PRAGMA user_version = 3;
             PRAGMA application_id = 1129531726;",
         )
         .map_err(storage_error)?;
@@ -140,6 +141,7 @@ pub(crate) fn initialize(
             params![manifest.config().geofence_version, geofence_json(manifest)?],
         )
         .map_err(storage_error)?;
+    record_rate_versions(&transaction, manifest)?;
     for mapping in &manifest.config().mappings {
         transaction
             .execute(
@@ -190,7 +192,7 @@ pub(crate) fn verify_configuration(
     let database_version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(storage_error)?;
-    if stored_version != database_version || ![1, SCHEMA_VERSION].contains(&stored_version) {
+    if stored_version != database_version || ![1, 2, SCHEMA_VERSION].contains(&stored_version) {
         return Err(IngestionError::SchemaMismatch);
     }
     let retained = Manifest::from_json(stored_manifest.as_bytes())
@@ -198,6 +200,8 @@ pub(crate) fn verify_configuration(
     let mut frozen = retained.config().clone();
     frozen.geofence_version = manifest.config().geofence_version.clone();
     frozen.geofences = manifest.config().geofences.clone();
+    frozen.owner_chargers = manifest.config().owner_chargers.clone();
+    frozen.rate_models = manifest.config().rate_models.clone();
     if frozen != *manifest.config() {
         return Err(IngestionError::ConfigurationMismatch);
     }
@@ -206,11 +210,11 @@ pub(crate) fn verify_configuration(
         .is_string();
     if explicit_version
         && retained.config().geofence_version == manifest.config().geofence_version
-        && retained.config().geofences != manifest.config().geofences
+        && geofence_json(&retained)? != geofence_json(manifest)?
     {
         return Err(IngestionError::ConfigurationMismatch);
     }
-    if stored_version == SCHEMA_VERSION {
+    if stored_version >= 2 {
         let retained_config: Option<String> = connection
             .query_row(
                 "SELECT config_json FROM geofence_versions WHERE version = ?1",
@@ -233,6 +237,10 @@ pub(crate) fn verify_configuration(
         if recorded.is_some_and(|recorded| geofence_json(manifest).as_ref() != Ok(&recorded)) {
             return Err(IngestionError::ConfigurationMismatch);
         }
+    }
+    if stored_version == SCHEMA_VERSION {
+        verify_rate_versions(connection, &retained, true)?;
+        verify_rate_versions(connection, manifest, false)?;
     }
     if serde_json::to_string(manifest.config()).map_err(|_| IngestionError::InvalidConfiguration)?
         != manifest_json
@@ -312,8 +320,21 @@ pub(crate) fn verify_configuration(
 }
 
 fn geofence_json(manifest: &Manifest) -> Result<String, IngestionError> {
-    serde_json::to_string(&manifest.config().geofences)
-        .map_err(|_| IngestionError::InvalidConfiguration)
+    let config = manifest.config();
+    if config.owner_chargers.is_empty() {
+        return serde_json::to_string(&config.geofences)
+            .map_err(|_| IngestionError::InvalidConfiguration);
+    }
+    let geofences: Vec<_> = config
+        .owner_chargers
+        .iter()
+        .map(|charger| crate::OwnerGeofence {
+            owner: charger.owner_id.clone(),
+            center: charger.geofence.center.clone(),
+            radius_meters: charger.geofence.radius_meters,
+        })
+        .collect();
+    serde_json::to_string(&geofences).map_err(|_| IngestionError::InvalidConfiguration)
 }
 
 pub(crate) fn load_configuration(
@@ -367,6 +388,22 @@ pub(crate) fn load_configuration(
                 .map_err(storage_error)?;
         }
     }
+    if version <= 2 {
+        transaction.execute_batch(
+            "ALTER TABLE runtime_metadata RENAME TO previous_runtime_metadata;
+            CREATE TABLE runtime_metadata (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                schema_version INTEGER NOT NULL CHECK (schema_version = 3),
+                manifest_json TEXT NOT NULL,
+                source_json TEXT NOT NULL
+            ) STRICT;
+            INSERT INTO runtime_metadata SELECT singleton, 3, manifest_json, source_json FROM previous_runtime_metadata;
+            DROP TABLE previous_runtime_metadata;
+            CREATE TABLE rate_model_versions (id TEXT PRIMARY KEY, config_json TEXT NOT NULL) STRICT;
+            PRAGMA user_version = 3;"
+        ).map_err(storage_error)?;
+    }
+    record_rate_versions(&transaction, manifest)?;
     transaction
         .execute(
             "INSERT OR IGNORE INTO geofence_versions VALUES (?1, ?2)",
@@ -380,6 +417,68 @@ pub(crate) fn load_configuration(
         )
         .map_err(storage_error)?;
     transaction.commit().map_err(storage_error)
+}
+
+fn verify_rate_versions(
+    connection: &Connection,
+    manifest: &Manifest,
+    required: bool,
+) -> Result<(), IngestionError> {
+    let mut statement = connection
+        .prepare("SELECT id, config_json FROM rate_model_versions")
+        .map_err(storage_error)?;
+    let retained = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(storage_error)?
+        .collect::<rusqlite::Result<std::collections::BTreeMap<_, _>>>()
+        .map_err(storage_error)?;
+    for (id, json) in &retained {
+        let config: crate::RateModelConfig =
+            serde_json::from_str(json).map_err(|_| IngestionError::StorageCorrupt)?;
+        if &config.id != id
+            || config.to_core().is_err()
+            || serde_json::to_string(&config).map_err(|_| IngestionError::StorageCorrupt)? != *json
+        {
+            return Err(IngestionError::StorageCorrupt);
+        }
+    }
+    for config in &manifest.config().rate_models {
+        let expected =
+            serde_json::to_string(config).map_err(|_| IngestionError::InvalidConfiguration)?;
+        match retained.get(&config.id) {
+            Some(recorded) if recorded != &expected => {
+                return Err(if required {
+                    IngestionError::StorageCorrupt
+                } else {
+                    IngestionError::ConfigurationMismatch
+                });
+            }
+            None if required => return Err(IngestionError::StorageCorrupt),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn record_rate_versions(
+    transaction: &rusqlite::Transaction<'_>,
+    manifest: &Manifest,
+) -> Result<(), IngestionError> {
+    for config in &manifest.config().rate_models {
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO rate_model_versions VALUES (?1, ?2)",
+                params![
+                    config.id,
+                    serde_json::to_string(config)
+                        .map_err(|_| IngestionError::InvalidConfiguration)?
+                ],
+            )
+            .map_err(storage_error)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -403,6 +502,8 @@ mod tests {
             timestamp_version: TIMESTAMP_VERSION.to_owned(),
             geofence_version: "fictional-geofence-v1".to_owned(),
             geofences: Vec::new(),
+            owner_chargers: Vec::new(),
+            rate_models: Vec::new(),
             mappings: vec![DeviceMapping {
                 device: "device-a".to_owned(),
                 vehicle: "vehicle-a".to_owned(),
@@ -519,7 +620,7 @@ mod tests {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 
     #[test]
@@ -560,6 +661,7 @@ mod tests {
             INSERT INTO runtime_metadata SELECT singleton, 1, manifest_json, source_json FROM current_metadata;
             DROP TABLE current_metadata;
             DROP TABLE geofence_versions;
+            DROP TABLE rate_model_versions;
             PRAGMA user_version = 1;").unwrap();
         connection
             .execute(
@@ -604,5 +706,178 @@ mod tests {
             recovered.to_core().unwrap().location,
             chargeshare_core::LocationSample::Missing
         );
+    }
+    fn priced_memory_runtime() -> (Connection, Manifest, crate::SourceBinding) {
+        let (mut connection, _, source) = memory_runtime();
+        connection.execute_batch("DROP TABLE deliveries; DROP TABLE event_variants; DROP TABLE partition_progress; DROP TABLE registrations; DROP TABLE geofence_versions; DROP TABLE rate_model_versions; DROP TABLE runtime_metadata;").unwrap();
+        let manifest =
+            Manifest::from_json(include_bytes!("../../../dev/ingestion-manifest.json")).unwrap();
+        initialize(
+            &mut connection,
+            &manifest,
+            &serde_json::to_string(manifest.config()).unwrap(),
+            &source,
+            &serde_json::to_string(&source).unwrap(),
+        )
+        .unwrap();
+        (connection, manifest, source)
+    }
+
+    #[test]
+    fn immutable_rate_versions_survive_selection_changes_and_refuse_changed_reused_ids() {
+        let (mut connection, original, source) = priced_memory_runtime();
+        let source_json = serde_json::to_string(&source).unwrap();
+        let mut revised = original.config().clone();
+        revised.rate_models[0].id = "pge-ev2-a-v2".to_owned();
+        revised.rate_models[0].periods[0].usd_per_kwh = "0.3".to_owned();
+        for charger in &mut revised.owner_chargers {
+            charger.rate_model_versions = vec!["pge-ev2-a-v2".to_owned()];
+        }
+        let revised = Manifest::new(revised).unwrap();
+        let revised_json = serde_json::to_string(revised.config()).unwrap();
+        super::verify_configuration(&connection, &revised, &revised_json, &source, &source_json)
+            .unwrap();
+        super::load_configuration(&mut connection, &revised, &revised_json).unwrap();
+        super::verify_configuration(&connection, &revised, &revised_json, &source, &source_json)
+            .unwrap();
+        let versions: i64 = connection
+            .query_row("SELECT count(*) FROM rate_model_versions", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(versions, 2);
+        let mut changed_original = original.config().clone();
+        changed_original.rate_models[0].periods[0].usd_per_kwh = "0.4".to_owned();
+        let changed_original = Manifest::new(changed_original).unwrap();
+        assert_eq!(
+            super::verify_configuration(
+                &connection,
+                &changed_original,
+                &serde_json::to_string(changed_original.config()).unwrap(),
+                &source,
+                &source_json
+            ),
+            Err(IngestionError::ConfigurationMismatch)
+        );
+        let retained: String = connection
+            .query_row("SELECT manifest_json FROM runtime_metadata", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(retained, revised_json);
+        let original_json = serde_json::to_string(original.config()).unwrap();
+        super::verify_configuration(
+            &connection,
+            &original,
+            &original_json,
+            &source,
+            &source_json,
+        )
+        .unwrap();
+        super::load_configuration(&mut connection, &original, &original_json).unwrap();
+        super::verify_configuration(
+            &connection,
+            &original,
+            &original_json,
+            &source,
+            &source_json,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn schema_two_upgrade_retains_evidence_and_records_the_selected_rate_history() {
+        let (mut connection, original, source) = memory_runtime();
+        let legacy_json = serde_json::to_string(original.config()).unwrap();
+        let raw = br#"{"data":[{"key":"ACChargingEnergyIn","value":{"stringValue":"100.00"}}],"createdAt":"2026-09-01T12:00:00Z","vin":"device-1","isResend":false}"#;
+        let evidence = crate::normalize(&original, Some(b"device-1"), raw).unwrap();
+        let event_json = serde_json::to_string(&evidence.event).unwrap();
+        let provenance_json = serde_json::to_string(&evidence.provenance).unwrap();
+        connection
+            .execute(
+                "INSERT INTO event_variants VALUES (1, ?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    evidence.event.vehicle,
+                    evidence.event.position,
+                    evidence.event.connection,
+                    evidence.event.time,
+                    event_json
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO deliveries VALUES (0, 0, 1, ?1, NULL)",
+                [&provenance_json],
+            )
+            .unwrap();
+        connection
+            .execute("UPDATE partition_progress SET next_offset = 1", [])
+            .unwrap();
+        connection.execute_batch("ALTER TABLE runtime_metadata RENAME TO current_metadata;
+            CREATE TABLE runtime_metadata (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), schema_version INTEGER NOT NULL CHECK(schema_version = 2), manifest_json TEXT NOT NULL, source_json TEXT NOT NULL) STRICT;
+            INSERT INTO runtime_metadata SELECT singleton, 2, manifest_json, source_json FROM current_metadata;
+            DROP TABLE current_metadata;
+            DROP TABLE rate_model_versions;
+            PRAGMA user_version = 2;").unwrap();
+        let mut config = original.config().clone();
+        let sample =
+            Manifest::from_json(include_bytes!("../../../dev/ingestion-manifest.json")).unwrap();
+        config.rate_models = sample.config().rate_models.clone();
+        config.owner_chargers = sample.config().owner_chargers.clone();
+        config.geofences.clear();
+        config.geofence_version = sample.config().geofence_version.clone();
+        let revised = Manifest::new(config).unwrap();
+        let revised_json = serde_json::to_string(revised.config()).unwrap();
+        super::verify_configuration(
+            &connection,
+            &revised,
+            &revised_json,
+            &source,
+            &serde_json::to_string(&source).unwrap(),
+        )
+        .unwrap();
+        super::load_configuration(&mut connection, &revised, &revised_json).unwrap();
+        let retained: String = connection
+            .query_row("SELECT manifest_json FROM runtime_metadata", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_ne!(retained, legacy_json);
+        assert_eq!(retained, revised_json);
+        let retained_event: String = connection
+            .query_row("SELECT event_json FROM event_variants", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(retained_event, event_json);
+        assert_eq!(
+            connection
+                .query_row::<i64, _, _>("SELECT next_offset FROM partition_progress", [], |row| row
+                    .get(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            connection
+                .query_row::<i64, _, _>("SELECT count(*) FROM rate_model_versions", [], |row| row
+                    .get(0))
+                .unwrap(),
+            1
+        );
+        super::verify_configuration(
+            &connection,
+            &revised,
+            &revised_json,
+            &source,
+            &serde_json::to_string(&source).unwrap(),
+        )
+        .unwrap();
     }
 }

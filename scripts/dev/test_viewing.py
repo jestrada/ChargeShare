@@ -13,21 +13,27 @@ import test_runtime as runtime_tests
 
 
 def complete_results(owner="owner-a", vehicle="vehicle-a", energy="0.500000"):
-    shared = owner == "owner-a"
+    shared = True
     eligible = energy if shared else "0.000000"
-    return {
+    result = {
         "owner": owner, "vehicle": vehicle, "state": "eligible" if shared else "held", "evidence_boundary": "Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated",
         "observed_ac_kwh": energy, "eligible_shared_charger_kwh": eligible, "revision": "results-v1-0123456789abcdef",
         "provenance": {"source": "synthetic-receiver-kafka", "source_epoch": "synthetic-epoch", "input_contract": "tesla-v-bd076fe-v1", "mapping_version": "fictional-mapping-v1", "manifest_version": "fictional-manifest-v1", "normalizer_version": "chargeshare-normalizer-v1", "calculation_version": "scoped-core-replay-v2", "geofence_version": "fictional-geofence-v1"},
         "sessions": [{"vehicle": vehicle, "connection": "connection-1", "classification": "SharedCharger" if shared else "OtherCharger", "classification_reason": "InsideGeofence" if shared else "OutsideGeofence", "evidence_state": "complete", "observed_ac_kwh": energy, "eligible_shared_charger_kwh": eligible, "quality_flags": [], "exclusion_reasons": [] if shared else ["OtherCharger"]}],
     }
+    index = 0 if owner == "owner-a" else 1
+    golden = viewing.PRICING_GOLDEN
+    result["pricing"] = {"state": "quoted", "charger_id": "fictional-shared-charger", "rate_models": [{"id": golden["model_version"], "plan": "PGE-EV2-A", "timezone": "America/Los_Angeles", "effective_from": "2026-03-01"}], "calculation_version": "tou-linear-micro-kwh-v1", "estimate_boundary": "Synthetic PG&E bundled energy-only estimate; counter energy allocated by elapsed UTC time; excludes CCA/PCIA, baseline credit, daily Base Services Charge and taxes; not a bill", "priced_ac_kwh": energy, "exact_subtotal": golden["exact_costs"][index], "display_subtotal": golden["display_costs"][index], "quoted_session_count": 1, "rate_held_session_count": 0, "ineligible_session_count": 0}
+    result["sessions"][0]["pricing"] = {"state": "quoted", "hold_reason": None, "quote": {"exact_cost": golden["exact_costs"][index], "display_cost": golden["display_costs"][index], "slices": [{"start_utc_seconds": str(1788264000 + slice_index * 300), "end_utc_seconds": str(1788264300 + slice_index * 300), "local_date": golden["local_date"], "local_start": "2026-09-01T05:" + ("00", "05")[slice_index] + ":00-07:00", "local_end": "2026-09-01T05:" + ("05", "10")[slice_index] + ":00-07:00", "utc_offset_seconds": "-25200", "season": golden["season"], "day_type": "Weekday", "period": golden["period"], "model_version": golden["model_version"], "allocated_ac_kwh": ("0.250000", "0.125000")[index], "usd_per_kwh": golden["usd_per_kwh"], "exact_cost": ("0.0563950000000000 USD", "0.0281975000000000 USD")[index]} for slice_index in range(2)]}}
+    return result
+
 
 
 class HttpAcceptanceTests(unittest.TestCase):
     def test_scope_assertion_rejects_wrong_energy_leakage_quality_and_extra_payload(self):
         result = complete_results()
         viewing.assert_scoped_result(result, "owner-a", "vehicle-a", "0.500000")
-        changes = [lambda value: value.update(observed_ac_kwh="0.600000"), lambda value: value.update(owner="owner-b"), lambda value: value.update(eligible_shared_charger_kwh="0.000000"), lambda value: value.update(raw_payload="fictional-private"), lambda value: value["sessions"][0].update(vehicle="vehicle-b"), lambda value: value["sessions"][0].update(quality_flags=["MissingBaseline"]), lambda value: value["sessions"][0].update(classification_reason="LocationUnavailable"), lambda value: value["provenance"].update(raw="fictional-private")]
+        changes = [lambda value: value.update(observed_ac_kwh="0.600000"), lambda value: value.update(owner="owner-b"), lambda value: value.update(eligible_shared_charger_kwh="0.000000"), lambda value: value.update(raw_payload="fictional-private"), lambda value: value["sessions"][0].update(vehicle="vehicle-b"), lambda value: value["sessions"][0].update(quality_flags=["MissingBaseline"]), lambda value: value["sessions"][0].update(classification_reason="LocationUnavailable"), lambda value: value["provenance"].update(raw="fictional-private"), lambda value: value["pricing"].update(exact_subtotal="0.1997000000000000 USD"), lambda value: value["sessions"][0]["pricing"]["quote"]["slices"][0].update(period="peak")]
         for change in changes:
             changed = copy.deepcopy(result)
             change(changed)

@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use chargeshare_core::{OwnerId, VehicleId};
+use chargeshare_core::{Energy, ExactUsd, OwnerId, UsdRate, VehicleId};
 use chargeshare_ingestion::{
     AcceptedEvidence, CommitBoundary, IngestionError, KafkaConfig, Store, consume_bounded_observed,
     normalize,
@@ -18,9 +18,21 @@ pub fn status(path: &str) -> Result<(), IngestionError> {
     }
     let store = Store::open(&database, &manifest, &source)?;
     let mut scopes = Vec::new();
+    let mut exact_scoped_quotes = ExactUsd::ZERO;
     for (owner, vehicle) in [("owner-a", "vehicle-a"), ("owner-b", "vehicle-b")] {
         let owner = OwnerId::new(owner).map_err(|_| IngestionError::InvalidConfiguration)?;
         let vehicle = VehicleId::new(vehicle).map_err(|_| IngestionError::InvalidConfiguration)?;
+        let results = store.results(&owner, &vehicle)?;
+        let ledger = store.replay(&owner, &vehicle)?;
+        let history = manifest
+            .rate_history(&owner)
+            .map_err(|_| IngestionError::InvalidConfiguration)?;
+        let priced = ledger
+            .time_of_use_pricing(&vehicle, &history)
+            .map_err(|_| IngestionError::PricingOverflow)?;
+        exact_scoped_quotes = exact_scoped_quotes
+            .checked_add(priced.exact_subtotal)
+            .map_err(|_| IngestionError::PricingOverflow)?;
         let summary = store.summary(&owner, &vehicle)?;
         let sessions = store.sessions(&owner, &vehicle)?;
         scopes.push(json!({
@@ -28,14 +40,25 @@ pub fn status(path: &str) -> Result<(), IngestionError> {
             "eligible": summary.eligible_shared_charger.to_string(), "sessions": sessions.len(),
             "classifications": sessions.iter().map(|session| format!("{:?}", session.classification)).collect::<Vec<_>>(),
             "classification_reasons": sessions.iter().map(|session| format!("{:?}", session.classification_reason)).collect::<Vec<_>>(),
+            "pricing": results.pricing,
+            "session_prices": results.sessions.iter().map(|session| &session.pricing).collect::<Vec<_>>(),
             "quality_flags": sessions.iter().map(|session| session.quality_flags.len()).sum::<usize>(),
         }));
     }
     let statistics = store.statistics()?;
     let positions: Vec<_> = store.positions()?.iter().map(|position| json!({"partition": position.partition, "next_offset": position.next_offset})).collect();
+    let rate =
+        UsdRate::parse_per_kwh("0.22558").map_err(|_| IngestionError::InvalidConfiguration)?;
+    let reference_costs = ["0.500000", "0.250000"]
+        .map(|kwh| rate.cost_for(Energy::parse_kwh(kwh).expect("synthetic golden energy")));
+    let reference_subtotal = reference_costs[0]
+        .checked_add(reference_costs[1])
+        .map_err(|_| IngestionError::PricingOverflow)?;
     println!(
         "{}",
-        json!({"scopes": scopes, "positions": positions, "accepted": statistics.accepted_deliveries,
+        json!({"scopes": scopes,
+        "golden_reference": {"exact_costs": reference_costs.map(|cost| cost.to_string()), "exact_subtotal": reference_subtotal.to_string(), "rounded_subtotal": reference_subtotal.round_half_up_to_cents().to_string()},
+        "actual_exact_subtotal": exact_scoped_quotes.to_string(), "actual_rounded_subtotal": exact_scoped_quotes.round_half_up_to_cents().to_string(), "positions": positions, "accepted": statistics.accepted_deliveries,
         "rejected": statistics.rejected_deliveries, "variants": statistics.event_variants})
     );
     Ok(())

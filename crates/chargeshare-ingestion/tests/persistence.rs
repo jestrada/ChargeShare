@@ -101,6 +101,8 @@ fn manifest(records: &[AcceptedEvidence]) -> Manifest {
         timestamp_version: TIMESTAMP_VERSION.to_owned(),
         geofence_version: "fictional-geofence-v1".to_owned(),
         geofences: Vec::new(),
+        owner_chargers: Vec::new(),
+        rate_models: Vec::new(),
         mappings: vec![
             DeviceMapping {
                 device: "device-a".to_owned(),
@@ -612,7 +614,7 @@ fn frozen_configuration_versions_schema_and_source_fail_without_deletion() {
             .unwrap(),
         1
     );
-    connection.pragma_update(None, "user_version", 2).unwrap();
+    connection.pragma_update(None, "user_version", 3).unwrap();
     connection
         .execute(
             "UPDATE partition_progress SET next_offset = ?1",

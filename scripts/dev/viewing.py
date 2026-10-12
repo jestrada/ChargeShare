@@ -13,6 +13,9 @@ from ingestion_runner import RUN_LABEL, owned_runner, runner_command
 from runtime import ProjectRuntime, RuntimeFailure, check_local_docker, exclusive_synthetic_run_lock, run_command, validate_runtime_directory
 
 
+PRICING_GOLDEN = json.loads((Path(__file__).resolve().parents[2] / "dev/fixtures/pricing.json").read_bytes())
+
+
 SCOPES = (("owner-a", "vehicle-a", "0.500000"), ("owner-b", "vehicle-b", "0.250000"))
 
 
@@ -40,24 +43,49 @@ def scoped_results(owner, vehicle):
 
 
 def assert_scoped_result(result, owner, vehicle, energy):
-    shared = owner == "owner-a"
+    shared = True
     eligible = energy if shared else "0.000000"
-    allowed = {"owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "provenance", "revision"}
+    allowed = {"owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "provenance", "revision", "pricing"}
     if set(result) != allowed or result["owner"] != owner or result["vehicle"] != vehicle or result["state"] != ("eligible" if shared else "held") or result["observed_ac_kwh"] != energy or result["eligible_shared_charger_kwh"] != eligible or result["evidence_boundary"] != "Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated":
         raise RuntimeFailure("Scoped persisted energy assertion failed.")
     expected = {"vehicle": vehicle, "connection": "connection-1", "classification": "SharedCharger" if shared else "OtherCharger", "classification_reason": "InsideGeofence" if shared else "OutsideGeofence", "evidence_state": "complete", "observed_ac_kwh": energy, "eligible_shared_charger_kwh": eligible, "quality_flags": [], "exclusion_reasons": [] if shared else ["OtherCharger"]}
-    if result["sessions"] != [expected]:
+    if len(result["sessions"]) != 1 or {key: value for key, value in result["sessions"][0].items() if key != "pricing"} != expected:
         raise RuntimeFailure("Scoped session identity, quality or hold assertion failed.")
     provenance = result["provenance"]
     if set(provenance) != {"source", "source_epoch", "input_contract", "mapping_version", "manifest_version", "normalizer_version", "calculation_version", "geofence_version"} or provenance["source"] != "synthetic-receiver-kafka" or provenance["calculation_version"] != "scoped-core-replay-v2" or not re.fullmatch(r"results-v1-[a-f0-9]{16}", result["revision"]) or any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value) for value in provenance.values()):
         raise RuntimeFailure("Scoped semantic revision or safe provenance assertion failed.")
+
+    assert_golden_price(result, 0 if owner == "owner-a" else 1)
+
+
+def assert_golden_price(result, index, wrong_expectation=False):
+    golden = PRICING_GOLDEN
+    expected_cost = "0.9990000000000000 USD" if wrong_expectation else golden["exact_costs"][index]
+    pricing = result["pricing"]
+    expected = {"state": "quoted", "charger_id": "fictional-shared-charger", "calculation_version": "tou-linear-micro-kwh-v1", "estimate_boundary": "Synthetic PG&E bundled energy-only estimate; counter energy allocated by elapsed UTC time; excludes CCA/PCIA, baseline credit, daily Base Services Charge and taxes; not a bill", "priced_ac_kwh": result["observed_ac_kwh"], "exact_subtotal": expected_cost, "display_subtotal": golden["display_costs"][index], "quoted_session_count": 1, "rate_held_session_count": 0, "ineligible_session_count": 0}
+    if {key: value for key, value in pricing.items() if key != "rate_models"} != expected:
+        raise RuntimeFailure("Scoped exact EV2-A pricing assertion failed.")
+    models = pricing["rate_models"]
+    if len(models) != 1 or models[0]["id"] != golden["model_version"] or models[0]["plan"] != "PGE-EV2-A" or models[0]["timezone"] != "America/Los_Angeles" or models[0]["effective_from"] != "2026-03-01":
+        raise RuntimeFailure("Scoped EV2-A model provenance assertion failed.")
+    session_price = result["sessions"][0]["pricing"]
+    quote = session_price["quote"]
+    if set(session_price) != {"state", "hold_reason", "quote"} or session_price["state"] != "quoted" or session_price["hold_reason"] is not None or set(quote) != {"exact_cost", "display_cost", "slices"} or quote["exact_cost"] != expected_cost or quote["display_cost"] != golden["display_costs"][index] or len(quote["slices"]) != 2:
+        raise RuntimeFailure("Scoped exact session quote assertion failed.")
+    slice_energy = ("0.250000", "0.125000")[index]
+    slice_cost = ("0.0563950000000000 USD", "0.0281975000000000 USD")[index]
+    for slice_index, line in enumerate(quote["slices"]):
+        expected_line = {"start_utc_seconds": str(1788264000 + slice_index * 300), "end_utc_seconds": str(1788264300 + slice_index * 300), "local_date": golden["local_date"], "local_start": "2026-09-01T05:" + ("00", "05")[slice_index] + ":00-07:00", "local_end": "2026-09-01T05:" + ("05", "10")[slice_index] + ":00-07:00", "utc_offset_seconds": "-25200", "season": golden["season"], "day_type": "Weekday", "period": golden["period"], "model_version": golden["model_version"], "allocated_ac_kwh": slice_energy, "usd_per_kwh": golden["usd_per_kwh"], "exact_cost": slice_cost}
+        if line != expected_line:
+            raise RuntimeFailure("Scoped exact interval quote assertion failed.")
 
 
 def assert_http_scopes(wrong_expectation=False):
     results = []
     for index, (owner, vehicle, energy) in enumerate(SCOPES):
         result = scoped_results(owner, vehicle)
-        assert_scoped_result(result, owner, vehicle, "0.600000" if wrong_expectation and index == 0 else energy)
+        assert_scoped_result(result, owner, vehicle, energy)
+        assert_golden_price(result, index, wrong_expectation and index == 0)
         if result != scoped_results(owner, vehicle):
             raise RuntimeFailure("Unchanged scoped HTTP results changed semantic revision.")
         results.append(result)
@@ -167,7 +195,7 @@ def check(runtime):
         if response.status != 200 or b"/src/persisted-main.tsx" not in response.read(131072):
             raise RuntimeFailure("Persisted dashboard entry is unavailable or incorrect.")
     print("PASS: fresh official receiver ACK + matching Kafka + committed SQLite + scoped HTTP + persisted dashboard")
-    print("PASS: vehicle-a=0.500000 kWh vehicle-b=0.250000 kWh observed AC; automatic SharedCharger/OtherCharger; eligible A=0.500000/B=0.000000 kWh; mismatched scope refused; revision stable")
+    print("PASS: vehicle-a=0.500000 kWh vehicle-b=0.250000 kWh observed AC; automatic SharedCharger; eligible A=0.500000/B=0.250000 kWh; EV2-A exact prices 0.11279/0.056395 USD; mismatched scope refused; revision stable")
     return results
 
 

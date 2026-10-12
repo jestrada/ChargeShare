@@ -56,6 +56,10 @@ impl Energy {
         self.0
     }
 
+    pub(crate) fn from_micro_kwh(units: u64) -> Self {
+        Self(units)
+    }
+
     pub fn checked_add(self, other: Self) -> Result<Self, CounterProblem> {
         self.0
             .checked_add(other.0)

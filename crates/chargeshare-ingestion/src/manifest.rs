@@ -59,6 +59,10 @@ pub struct ManifestConfig {
     pub geofence_version: String,
     #[serde(default)]
     pub geofences: Vec<OwnerGeofence>,
+    #[serde(default)]
+    pub owner_chargers: Vec<crate::OwnerChargerConfig>,
+    #[serde(default)]
+    pub rate_models: Vec<crate::RateModelConfig>,
 }
 
 fn default_geofence_version() -> String {
@@ -151,6 +155,7 @@ impl Manifest {
                 return Err(RejectionReason::DuplicateMapping);
             }
         }
+        crate::rates::validate_rates(&mut config)?;
         let mut annotation_indices = BTreeMap::new();
         config
             .geofences
@@ -198,6 +203,31 @@ impl Manifest {
 
     pub fn config(&self) -> &ManifestConfig {
         &self.config
+    }
+
+    pub fn rate_history(
+        &self,
+        owner: &OwnerId,
+    ) -> Result<chargeshare_core::RateModelHistory, RejectionReason> {
+        let charger = self
+            .config
+            .owner_chargers
+            .iter()
+            .find(|charger| charger.owner_id == owner.as_str());
+        let versions = charger
+            .into_iter()
+            .flat_map(|charger| &charger.rate_model_versions)
+            .map(|id| {
+                self.config
+                    .rate_models
+                    .iter()
+                    .find(|model| &model.id == id)
+                    .ok_or(RejectionReason::InvalidManifest)?
+                    .to_core()
+            })
+            .collect::<Result<_, _>>()?;
+        chargeshare_core::RateModelHistory::new(versions)
+            .map_err(|_| RejectionReason::InvalidManifest)
     }
 
     pub fn validate_evidence(&self, evidence: &AcceptedEvidence) -> Result<(), RejectionReason> {
