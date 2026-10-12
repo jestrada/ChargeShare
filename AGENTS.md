@@ -69,6 +69,13 @@ with each PR targeting the branch below and the bottom PR targeting `main`.
   reporting completion, including partial-push recovery. Keep metadata local and
   pass this workflow to delegated agents.
 
+## Agent authorship labels
+
+Every agent that opens a pull request must apply a label naming itself so Joseph
+can track authorship. Use `bot-<agent-name>` in kebab-case (for example
+`bot-chargie` or `bot-chargie-devex`). Create the label with `gh label create`
+if it does not already exist, then apply it to the PR.
+
 ## Issue tracking
 
 All agents and skills use GitHub Issues in `jestrada/ChargeShare` through `gh`.
