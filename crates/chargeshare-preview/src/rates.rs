@@ -164,8 +164,8 @@ pub(crate) fn schedule_for_days(
 mod tests {
     use super::*;
     use chargeshare_core::{
-        ChargeType, ChargerClassification, ConnectionId, CounterReading, Energy, Event, EventKind,
-        Ledger, OwnerId, PricingHold, SessionId, VehicleId,
+        ChargeType, ChargerGeofence, ConnectionId, CounterReading, Energy, Event, EventKind,
+        Ledger, LocationPoint, LocationSample, OwnerId, PricingHold, VehicleId,
     };
 
     fn date(month: u8, day: u8) -> Date {
@@ -290,19 +290,14 @@ mod tests {
                     kind,
                     charge_type: ChargeType::Ac,
                     counter: Some(CounterReading::parse_kwh(counter)),
+                    location: LocationSample::Valid(LocationPoint::new(0.0, 0.0).unwrap()),
                 })
                 .unwrap();
         }
-        ledger
-            .classify(
-                &vehicle,
-                &SessionId {
-                    vehicle: vehicle.clone(),
-                    connection,
-                },
-                ChargerClassification::SharedCharger,
-            )
-            .unwrap();
+        ledger.configure_charger(
+            OwnerId::new("sample-owner").unwrap(),
+            ChargerGeofence::new(LocationPoint::new(0.0, 0.0).unwrap(), 100).unwrap(),
+        );
         let original = schedule_for_days(SAMPLE_PUBLIC_TARIFF, [(date(9, 13), 0)]).unwrap();
         let first = ledger.pricing(&vehicle, &original).unwrap();
         assert_eq!(

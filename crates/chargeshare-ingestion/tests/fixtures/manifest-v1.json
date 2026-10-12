@@ -64,6 +64,171 @@
       "connection": "connection-1",
       "kind": "end",
       "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T13:00:00Z",
+      "position": "10",
+      "connection": "location-outside",
+      "kind": "start",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T13:05:00Z",
+      "position": "11",
+      "connection": "location-outside",
+      "kind": "sample",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T13:10:00Z",
+      "position": "12",
+      "connection": "location-outside",
+      "kind": "end",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T14:00:00Z",
+      "position": "13",
+      "connection": "location-missing",
+      "kind": "start",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T14:05:00Z",
+      "position": "14",
+      "connection": "location-missing",
+      "kind": "sample",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T14:10:00Z",
+      "position": "15",
+      "connection": "location-missing",
+      "kind": "end",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T15:00:00Z",
+      "position": "16",
+      "connection": "location-mixed",
+      "kind": "start",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T15:05:00Z",
+      "position": "17",
+      "connection": "location-mixed",
+      "kind": "sample",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T15:10:00Z",
+      "position": "18",
+      "connection": "location-mixed",
+      "kind": "end",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T16:00:00Z",
+      "position": "19",
+      "connection": "location-edge",
+      "kind": "start",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T16:05:00Z",
+      "position": "20",
+      "connection": "location-edge",
+      "kind": "sample",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T16:10:00Z",
+      "position": "21",
+      "connection": "location-edge",
+      "kind": "end",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T17:00:00Z",
+      "position": "22",
+      "connection": "location-partial",
+      "kind": "start",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T17:05:00Z",
+      "position": "23",
+      "connection": "location-partial",
+      "kind": "sample",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T17:10:00Z",
+      "position": "24",
+      "connection": "location-partial",
+      "kind": "end",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T18:00:00Z",
+      "position": "25",
+      "connection": "location-invalid",
+      "kind": "start",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T18:05:00Z",
+      "position": "26",
+      "connection": "location-invalid",
+      "kind": "sample",
+      "charge_type": "ac"
+    },
+    {
+      "device": "device-1",
+      "created_at": "2026-09-01T18:10:00Z",
+      "position": "27",
+      "connection": "location-invalid",
+      "kind": "end",
+      "charge_type": "ac"
+    }
+  ],
+  "geofence_version": "fictional-geofence-v1",
+  "geofences": [
+    {
+      "center": {
+        "latitude": "12.3456789",
+        "longitude": "45.6789123",
+        "status": "valid"
+      },
+      "owner": "owner-a",
+      "radius_meters": 100
+    },
+    {
+      "center": {
+        "latitude": "-23.4567891",
+        "longitude": "-67.8912345",
+        "status": "valid"
+      },
+      "owner": "owner-b",
+      "radius_meters": 100
     }
   ]
 }

@@ -118,5 +118,28 @@ class SourceEpochTests(unittest.TestCase):
         self.assertEqual(json.loads((self.project.directory / "manifest.json").read_bytes())["manifest_version"], "fictional-v1")
 
 
+    def test_new_geofence_version_loads_without_overwriting_frozen_settings_or_evidence(self):
+        self.initialize()
+        dev = self.project.checkout / "dev"
+        dev.mkdir()
+        path = dev / "ingestion-manifest.json"
+        original = {"manifest_version":"fictional-v1", "geofence_version":"fictional-geofence-v1", "geofences":[{"owner":"owner-a", "center":{"status":"valid", "latitude":"12.3456789", "longitude":"45.6789123"}, "radius_meters":100}]}
+        path.write_text(json.dumps(original))
+        source_epoch.ensure_manifest(self.project)
+        evidence = self.project.directory / "ingestion.sqlite3"
+        evidence.write_bytes(b"synthetic-retained-evidence")
+        changed = json.loads(json.dumps(original))
+        changed["geofences"][0]["center"]["latitude"] = "12.3556789"
+        path.write_text(json.dumps(changed))
+        with self.assertRaises(runtime.RuntimeFailure):
+            source_epoch.ensure_manifest(self.project)
+        changed["geofence_version"] = "fictional-geofence-v2"
+        path.write_text(json.dumps(changed))
+        source_epoch.ensure_manifest(self.project)
+        retained = json.loads((self.project.directory / "manifest.json").read_bytes())
+        self.assertTrue(retained == changed)
+        self.assertEqual(evidence.read_bytes(), b"synthetic-retained-evidence")
+
+
 if __name__ == "__main__":
     unittest.main()

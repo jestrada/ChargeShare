@@ -59,6 +59,16 @@ pub fn normalized(records: &[ExpectedRecord]) -> Vec<Value> {
     values
 }
 
+pub fn publication_records(records: &[ExpectedRecord]) -> Vec<Value> {
+    let mut records = records.to_vec();
+    for record in &mut records {
+        if let Some(fields) = record.payload["data"].as_array_mut() {
+            fields.retain(|field| field["key"] != "Location");
+        }
+    }
+    normalized(&records)
+}
+
 pub fn verify(expected: &[ExpectedRecord], observed: &[ExpectedRecord]) -> Result<()> {
     if normalized(expected) != normalized(observed) {
         return Err("record matching: decoded synthetic identity/source fields/values did not match the expected multiset".into());
@@ -105,5 +115,21 @@ mod tests {
         assert!(decode_hex("0").is_err());
         assert!(decode_hex("zz").is_err());
         assert_eq!(decode_hex("000aff").unwrap(), vec![0, 10, 255]);
+    }
+
+    #[test]
+    fn receiver_summaries_omit_location_values_and_fields() {
+        let scenario = load("complete").unwrap();
+        let summary = serde_json::to_string(&publication_records(&scenario.expected)).unwrap();
+        for forbidden in [
+            "latitude",
+            "longitude",
+            "locationValue",
+            "12.3456789",
+            "45.6789123",
+        ] {
+            assert!(!summary.contains(forbidden));
+        }
+        assert!(summary.contains("ACChargingEnergyIn"));
     }
 }

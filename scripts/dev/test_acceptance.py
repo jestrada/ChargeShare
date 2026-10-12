@@ -19,7 +19,7 @@ def complete_status():
     return {
         "accepted": 6, "rejected": 0, "variants": 6,
         "positions": [{"partition": 0, "next_offset": 6}],
-        "scopes": [{"vehicle": vehicle, "observed_ac": energy, "eligible": "0.000000 kWh", "sessions": 1, "unconfirmed": True, "quality_flags": 0}
+        "scopes": [{"vehicle": vehicle, "observed_ac": energy, "eligible": energy if vehicle == "vehicle-a" else "0.000000 kWh", "sessions": 1, "classifications": ["SharedCharger" if vehicle == "vehicle-a" else "OtherCharger"], "classification_reasons": ["InsideGeofence" if vehicle == "vehicle-a" else "OutsideGeofence"], "quality_flags": 0}
                    for vehicle, energy in [("vehicle-a", "0.500000 kWh"), ("vehicle-b", "0.250000 kWh")]],
     }
 
@@ -32,7 +32,7 @@ class AssertionTests(unittest.TestCase):
                    lambda value: value["scopes"][0].update(observed_ac="0.600000 kWh"),
                    lambda value: value["scopes"][1].update(vehicle="vehicle-a"),
                    lambda value: value["scopes"][1].update(eligible="0.250000 kWh"),
-                   lambda value: value["scopes"][0].update(unconfirmed=False),
+                   lambda value: value["scopes"][0].update(classifications=["Held"]),
                    lambda value: value["scopes"][0].update(sessions=2),
                    lambda value: value["scopes"][0].update(quality_flags=1)]
         for change in changes:
@@ -52,6 +52,35 @@ class AssertionTests(unittest.TestCase):
         value["accepted"] = 4
         with self.assertRaises(acceptance.AcceptanceFailure):
             acceptance.assert_progress(value, 3)
+
+
+    def test_coordinate_privacy_rejects_coordinate_values_and_location_fields(self):
+        checkout = Path(__file__).resolve().parents[2]
+        acceptance.assert_coordinate_privacy("SharedCharger InsideGeofence eligible=0.500000", checkout)
+        for text in ('"latitude":12.3456789', '"locationValue":{}', '12.3456789', '999.1234501'):
+            with self.assertRaisesRegex(acceptance.AcceptanceFailure, "coordinate-privacy"):
+                acceptance.assert_coordinate_privacy(text, checkout)
+
+    def test_location_acceptance_requires_exact_classification_reason_energy_and_safe_shape(self):
+        expected = {
+            "connection-1": ("SharedCharger", "InsideGeofence"),
+            "location-edge": ("SharedCharger", "InsideGeofence"),
+            "location-outside": ("OtherCharger", "OutsideGeofence"),
+            "location-missing": ("Held", "LocationUnavailable"),
+            "location-invalid": ("Held", "LocationUnavailable"),
+            "location-mixed": ("Held", "LocationAmbiguous"),
+            "location-partial": ("Held", "LocationAmbiguous"),
+        }
+        sessions = []
+        for connection, (classification, reason) in expected.items():
+            sessions.append({"vehicle":"vehicle-a", "connection":connection, "classification":classification, "classification_reason":reason, "evidence_state":"complete", "observed_ac_kwh":"0.500000", "eligible_shared_charger_kwh":"0.500000" if classification == "SharedCharger" else "0.000000", "quality_flags":[], "exclusion_reasons":[] if classification == "SharedCharger" else ["OtherCharger" if classification == "OtherCharger" else reason]})
+        result = {"owner":"owner-a", "vehicle":"vehicle-a", "state":"held", "observed_ac_kwh":"3.500000", "eligible_shared_charger_kwh":"1.000000", "evidence_boundary":"synthetic", "revision":"synthetic", "provenance":{}, "sessions":sessions}
+        acceptance.assert_location_sessions(result, expected, "1.000000")
+        for change in [lambda value: value.update(eligible_shared_charger_kwh="0.000000"), lambda value: value["sessions"][0].update(classification="OtherCharger"), lambda value: value["sessions"][0].update(classification_reason="LocationUnavailable"), lambda value: value["sessions"][0].update(latitude=12.3456789), lambda value: value["sessions"][0].update(quality_flags=["ConflictingEvidence"])]:
+            changed = json.loads(json.dumps(result))
+            change(changed)
+            with self.assertRaisesRegex(acceptance.AcceptanceFailure, "location-classification"):
+                acceptance.assert_location_sessions(changed, expected, "1.000000")
 
 
 class RunnerOwnershipTests(unittest.TestCase):

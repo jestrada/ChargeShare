@@ -9,7 +9,8 @@ use rustix::fs::{AtFlags, FileType, Mode, OFlags, Stat, fstat, open, openat, sta
 use rustix::process::geteuid;
 
 use crate::schema::{
-    configure_durability, initialize, inspect_version, storage_error, verify_configuration,
+    configure_durability, initialize, inspect_version, load_configuration, storage_error,
+    verify_configuration,
 };
 use crate::{
     AcceptedEvidence, DeliveryCoordinate, IngestionError, Manifest, PartitionRange,
@@ -116,6 +117,8 @@ impl Store {
                 &source,
                 &source_json,
             )?;
+        } else {
+            load_configuration(&mut connection, manifest, &manifest_json)?;
         }
         runtime.validate_files()?;
         let store = Self {
@@ -788,6 +791,8 @@ mod tests {
             manifest_version: "synthetic-manifest-v1".to_owned(),
             normalizer_version: NORMALIZER_VERSION.to_owned(),
             timestamp_version: TIMESTAMP_VERSION.to_owned(),
+            geofence_version: "fictional-geofence-v1".to_owned(),
+            geofences: Vec::new(),
             mappings: vec![DeviceMapping {
                 device: "device-a".to_owned(),
                 vehicle: "vehicle-a".to_owned(),

@@ -4,10 +4,11 @@ use crate::energy::Energy;
 use crate::error::LedgerError;
 use crate::event::Event;
 use crate::identity::{ConnectionId, OwnerId, SessionId, VehicleId};
+use crate::location::{ChargerGeofence, LocationSample};
 use crate::pricing::{PricingError, PricingSummary, summarize_pricing};
 use crate::session::{
-    ChargerClassification, ConnectionEvidence, EVIDENCE_LABEL, ExclusionReason, QualityFlag,
-    ReconstructedSession, Session, reconstruct_session,
+    ConnectionEvidence, EVIDENCE_LABEL, ExclusionReason, QualityFlag, ReconstructedSession,
+    Session, classify_location, reconstruct_session,
 };
 use crate::tariff::RateSchedule;
 
@@ -32,7 +33,7 @@ pub struct Summary {
 pub struct Ledger {
     owners: BTreeMap<VehicleId, OwnerId>,
     events: BTreeMap<VehicleId, BTreeMap<u64, BTreeSet<Event>>>,
-    reviews: BTreeMap<SessionId, ChargerClassification>,
+    geofences: BTreeMap<OwnerId, ChargerGeofence>,
 }
 
 impl Ledger {
@@ -60,21 +61,8 @@ impl Ledger {
         Ok(())
     }
 
-    pub fn classify(
-        &mut self,
-        scope: &VehicleId,
-        target: &SessionId,
-        classification: ChargerClassification,
-    ) -> Result<(), LedgerError> {
-        self.owner(scope)?;
-        if scope != &target.vehicle {
-            return Err(LedgerError::OutsideVehicleScope);
-        }
-        if !self.sessions(scope)?.iter().any(|s| &s.id == target) {
-            return Err(LedgerError::UnknownSession);
-        }
-        self.reviews.insert(target.clone(), classification);
-        Ok(())
+    pub fn configure_charger(&mut self, owner: OwnerId, geofence: ChargerGeofence) {
+        self.geofences.insert(owner, geofence);
     }
 
     pub fn sessions(&self, scope: &VehicleId) -> Result<Vec<Session>, LedgerError> {
@@ -100,13 +88,29 @@ impl Ledger {
         let mut connections: BTreeMap<ConnectionId, Vec<ConnectionEvidence<'_>>> = BTreeMap::new();
         if let Some(positions) = self.events.get(scope) {
             for values in positions.values() {
+                let measurements: BTreeSet<_> = values
+                    .iter()
+                    .map(|event| {
+                        let mut measurement = event.clone();
+                        measurement.location = LocationSample::Missing;
+                        measurement
+                    })
+                    .collect();
+                let locations: BTreeSet<_> = values
+                    .iter()
+                    .filter_map(|event| match event.location {
+                        LocationSample::Valid(point) => Some(point),
+                        _ => None,
+                    })
+                    .collect();
+                let is_conflicting = measurements.len() > 1 || locations.len() > 1;
                 for event in values {
                     connections
                         .entry(event.connection.clone())
                         .or_default()
                         .push(ConnectionEvidence {
                             event,
-                            is_conflicting: values.len() > 1,
+                            is_conflicting,
                         });
                 }
             }
@@ -118,12 +122,20 @@ impl Ledger {
                 vehicle: scope.clone(),
                 connection,
             };
-            let classification = self.reviews.get(&id).copied().unwrap_or_default();
+            let (classification, reason) =
+                classify_location(&evidence, self.geofences.get(owner).copied());
+            let mut measurements = BTreeSet::new();
+            evidence.retain(|entry| {
+                let mut measurement = entry.event.clone();
+                measurement.location = LocationSample::Missing;
+                measurements.insert(measurement)
+            });
             sessions.push(reconstruct_session(
                 id,
                 owner.clone(),
                 &evidence,
                 classification,
+                reason,
             )?);
         }
         Ok(sessions)

@@ -1,9 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::energy::{CounterProblem, Energy};
 use crate::error::LedgerError;
 use crate::event::{ChargeType, CounterReading, Event, EventKind};
 use crate::identity::{OwnerId, SessionId};
+use crate::location::{ChargerGeofence, LocationSample};
 
 pub const EVIDENCE_LABEL: &str =
     "Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated";
@@ -23,14 +24,23 @@ pub enum QualityFlag {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ChargerClassification {
     #[default]
-    Unconfirmed,
+    Held,
     SharedCharger,
     OtherCharger,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClassificationReason {
+    InsideGeofence,
+    OutsideGeofence,
+    LocationUnavailable,
+    LocationAmbiguous,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ExclusionReason {
-    UnconfirmedCharger,
+    LocationUnavailable,
+    LocationAmbiguous,
     OtherCharger,
     DcEvidence,
     AmbiguousChargeType,
@@ -47,6 +57,7 @@ pub struct Session {
     pub quality_flags: BTreeSet<QualityFlag>,
     pub exclusion_reasons: BTreeSet<ExclusionReason>,
     pub classification: ChargerClassification,
+    pub classification_reason: ClassificationReason,
 }
 impl Session {
     pub fn is_eligible(&self) -> bool {
@@ -57,6 +68,63 @@ impl Session {
 pub(crate) struct ConnectionEvidence<'a> {
     pub(crate) event: &'a Event,
     pub(crate) is_conflicting: bool,
+}
+
+#[derive(Default)]
+struct LocationCoverage {
+    inside: bool,
+    outside: bool,
+}
+
+pub(crate) fn classify_location(
+    evidence: &[ConnectionEvidence<'_>],
+    geofence: Option<ChargerGeofence>,
+) -> (ChargerClassification, ClassificationReason) {
+    let Some(geofence) = geofence else {
+        return (
+            ChargerClassification::Held,
+            ClassificationReason::LocationUnavailable,
+        );
+    };
+    let mut samples = BTreeMap::<u64, LocationCoverage>::new();
+    let mut conflicting = false;
+    for entry in evidence {
+        let sample = samples.entry(entry.event.position).or_default();
+        if let LocationSample::Valid(point) = entry.event.location {
+            if geofence.contains(point) {
+                sample.inside = true;
+            } else {
+                sample.outside = true;
+            }
+        }
+        conflicting |= entry.is_conflicting;
+    }
+    let inside = samples.values().any(|sample| sample.inside);
+    let outside = samples.values().any(|sample| sample.outside);
+    let unavailable = samples
+        .values()
+        .any(|sample| !sample.inside && !sample.outside);
+    if !inside && !outside {
+        (
+            ChargerClassification::Held,
+            ClassificationReason::LocationUnavailable,
+        )
+    } else if conflicting || unavailable || (inside && outside) {
+        (
+            ChargerClassification::Held,
+            ClassificationReason::LocationAmbiguous,
+        )
+    } else if inside {
+        (
+            ChargerClassification::SharedCharger,
+            ClassificationReason::InsideGeofence,
+        )
+    } else {
+        (
+            ChargerClassification::OtherCharger,
+            ClassificationReason::OutsideGeofence,
+        )
+    }
 }
 
 pub(crate) struct CounterSegment {
@@ -75,6 +143,7 @@ pub(crate) fn reconstruct_session(
     owner: OwnerId,
     evidence: &[ConnectionEvidence<'_>],
     classification: ChargerClassification,
+    classification_reason: ClassificationReason,
 ) -> Result<ReconstructedSession, LedgerError> {
     let mut session = Session {
         evidence_label: EVIDENCE_LABEL,
@@ -86,12 +155,16 @@ pub(crate) fn reconstruct_session(
         quality_flags: BTreeSet::new(),
         exclusion_reasons: BTreeSet::new(),
         classification,
+        classification_reason,
     };
     match classification {
-        ChargerClassification::Unconfirmed => {
+        ChargerClassification::Held => {
             session
                 .exclusion_reasons
-                .insert(ExclusionReason::UnconfirmedCharger);
+                .insert(match classification_reason {
+                    ClassificationReason::LocationAmbiguous => ExclusionReason::LocationAmbiguous,
+                    _ => ExclusionReason::LocationUnavailable,
+                });
         }
         ChargerClassification::OtherCharger => {
             session

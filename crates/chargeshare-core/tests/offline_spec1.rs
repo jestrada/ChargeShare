@@ -38,6 +38,7 @@ fn event(
         kind,
         charge_type: ChargeType::Ac,
         counter: counter.map(CounterReading::parse_kwh),
+        location: LocationSample::Valid(LocationPoint::new(0.0, 0.0).unwrap()),
     }
 }
 fn complete(v: &str, c: &str, position: u64, start: &str, end: &str) -> Vec<Event> {
@@ -51,23 +52,24 @@ fn ingest(ledger: &mut Ledger, events: impl IntoIterator<Item = Event>) {
         ledger.ingest(event).unwrap();
     }
 }
-fn id(v: &str, c: &str) -> SessionId {
-    SessionId {
-        vehicle: vehicle(v),
-        connection: connection(c),
-    }
-}
-fn confirm(ledger: &mut Ledger, v: &str, c: &str) {
-    ledger
-        .classify(&vehicle(v), &id(v, c), ChargerClassification::SharedCharger)
-        .unwrap();
+fn configure_shared_charger(ledger: &mut Ledger, car: &str) {
+    let owner = OwnerId::new(if car == "vehicle-a" {
+        "owner-a"
+    } else {
+        "owner-b"
+    })
+    .unwrap();
+    ledger.configure_charger(
+        owner,
+        ChargerGeofence::new(LocationPoint::new(0.0, 0.0).unwrap(), 100).unwrap(),
+    );
 }
 fn session(ledger: &Ledger, v: &str) -> Session {
     ledger.sessions(&vehicle(v)).unwrap().remove(0)
 }
 
 #[test]
-fn interleaved_ten_and_four_are_separate_and_independently_confirmed() {
+fn interleaved_ten_and_four_are_separate_and_independently_classified() {
     let mut ledger = configured();
     let a = complete("vehicle-a", "connection-1", 1, "0", "10");
     let b = complete("vehicle-b", "connection-1", 1, "0", "4");
@@ -86,7 +88,7 @@ fn interleaved_ten_and_four_are_separate_and_independently_confirmed() {
     assert_eq!(session(&ledger, "vehicle-a").evidence_label, EVIDENCE_LABEL);
     assert!(a_summary.evidence_label.contains("Synthetic review"));
     assert!(a_summary.evidence_label.contains("accuracy unvalidated"));
-    confirm(&mut ledger, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut ledger, "vehicle-a");
     assert_eq!(
         ledger
             .summary(&vehicle("vehicle-a"))
@@ -101,7 +103,7 @@ fn interleaved_ten_and_four_are_separate_and_independently_confirmed() {
             .eligible_shared_charger,
         Energy::ZERO
     );
-    confirm(&mut ledger, "vehicle-b", "connection-1");
+    configure_shared_charger(&mut ledger, "vehicle-b");
     assert_eq!(
         ledger
             .summary(&vehicle("vehicle-b"))
@@ -187,7 +189,7 @@ fn energy_parsing_is_exact_checked_and_never_rounds() {
 }
 
 #[test]
-fn scoped_reads_and_cross_vehicle_review_never_mutate_other_vehicle() {
+fn scoped_reads_never_mutate_other_vehicle() {
     let mut ledger = configured();
     ingest(
         &mut ledger,
@@ -198,22 +200,6 @@ fn scoped_reads_and_cross_vehicle_review_never_mutate_other_vehicle() {
         complete("vehicle-b", "connection-1", 1, "0", "4"),
     );
     let before = ledger.clone();
-    assert_eq!(
-        ledger.classify(
-            &vehicle("vehicle-a"),
-            &id("vehicle-b", "connection-1"),
-            ChargerClassification::SharedCharger
-        ),
-        Err(LedgerError::OutsideVehicleScope)
-    );
-    assert_eq!(
-        ledger.classify(
-            &vehicle("vehicle-a"),
-            &id("vehicle-a", "unknown"),
-            ChargerClassification::SharedCharger
-        ),
-        Err(LedgerError::UnknownSession)
-    );
     assert_eq!(
         ledger.sessions(&vehicle("unknown")),
         Err(LedgerError::UnknownVehicle)
@@ -240,7 +226,7 @@ fn scoped_reads_and_cross_vehicle_review_never_mutate_other_vehicle() {
 }
 
 #[test]
-fn shuffled_duplicates_and_late_evidence_preserve_ids_reviews_flags_and_totals() {
+fn shuffled_duplicates_and_late_evidence_preserve_ids_classifications_flags_and_totals() {
     let events = vec![
         event(
             "vehicle-a",
@@ -285,11 +271,11 @@ fn shuffled_duplicates_and_late_evidence_preserve_ids_reviews_flags_and_totals()
     ];
     let mut ordered = configured();
     ingest(&mut ordered, events.clone());
-    confirm(&mut ordered, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut ordered, "vehicle-a");
     let mut late = configured();
     ingest(&mut late, [events[3].clone()]);
     let stable_id = session(&late, "vehicle-a").id;
-    confirm(&mut late, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut late, "vehicle-a");
     ingest(
         &mut late,
         events.iter().rev().cloned().chain(events.clone()),
@@ -346,7 +332,7 @@ fn same_position_conflicts_hold_all_affected_connections_independent_of_arrival(
     let mut reverse = configured();
     ingest(&mut reverse, evidence.into_iter().rev());
     for ledger in [&mut forward, &mut reverse] {
-        confirm(ledger, "vehicle-a", "connection-1");
+        configure_shared_charger(ledger, "vehicle-a");
     }
     assert_eq!(forward, reverse);
     assert_eq!(
@@ -433,7 +419,7 @@ fn dc_ambiguous_and_mixed_type_evidence_is_explicitly_excluded() {
             event.charge_type = kind;
         }
         ingest(&mut ledger, events);
-        confirm(&mut ledger, "vehicle-a", "connection-1");
+        configure_shared_charger(&mut ledger, "vehicle-a");
         let s = session(&ledger, "vehicle-a");
         assert!(s.exclusion_reasons.contains(&reason));
         assert_eq!(s.observed_ac, Energy::ZERO);
@@ -454,13 +440,13 @@ fn dc_ambiguous_and_mixed_type_evidence_is_explicitly_excluded() {
             })
             .chain([marker]),
     );
-    confirm(&mut ledger, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut ledger, "vehicle-a");
     assert_eq!(session(&ledger, "vehicle-a").observed_ac, Energy::ZERO);
     assert!(!session(&ledger, "vehicle-a").is_eligible());
 }
 
 #[test]
-fn rollback_counts_only_valid_positive_deltas_and_confirmation_cannot_clear_flags() {
+fn rollback_counts_only_valid_positive_deltas_and_classification_cannot_clear_flags() {
     let mut ledger = configured();
     ingest(
         &mut ledger,
@@ -493,7 +479,7 @@ fn rollback_counts_only_valid_positive_deltas_and_confirmation_cannot_clear_flag
         ],
     );
     let flags = session(&ledger, "vehicle-a").quality_flags;
-    confirm(&mut ledger, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut ledger, "vehicle-a");
     let s = session(&ledger, "vehicle-a");
     assert_eq!(s.quality_flags, flags);
     assert!(flags.contains(&QualityFlag::CounterRollback));
@@ -546,7 +532,7 @@ fn invalid_negative_precision_and_overflow_counters_retain_safe_flags_no_invente
                 event("vehicle-a", "connection-1", 4, 4, EventKind::End, Some("6")),
             ],
         );
-        confirm(&mut ledger, "vehicle-a", "connection-1");
+        configure_shared_charger(&mut ledger, "vehicle-a");
         let s = session(&ledger, "vehicle-a");
         assert!(
             s.quality_flags
@@ -621,7 +607,7 @@ fn missing_baseline_terminal_and_boundaries_stay_visible() {
     for (events, flag) in cases {
         let mut ledger = configured();
         ingest(&mut ledger, events);
-        confirm(&mut ledger, "vehicle-a", "connection-1");
+        configure_shared_charger(&mut ledger, "vehicle-a");
         assert!(session(&ledger, "vehicle-a").quality_flags.contains(&flag));
         assert_eq!(
             ledger
@@ -741,13 +727,10 @@ fn aggregate_overflow_is_explicit_and_other_charger_is_excluded() {
         &mut ledger,
         complete("vehicle-a", "connection-1", 1, "0", "18446744073709.551615"),
     );
-    ledger
-        .classify(
-            &vehicle("vehicle-a"),
-            &id("vehicle-a", "connection-1"),
-            ChargerClassification::OtherCharger,
-        )
-        .unwrap();
+    ledger.configure_charger(
+        owner("owner-a"),
+        ChargerGeofence::new(LocationPoint::new(1.0, 1.0).unwrap(), 100).unwrap(),
+    );
     assert!(
         session(&ledger, "vehicle-a")
             .exclusion_reasons
@@ -867,8 +850,8 @@ fn interior_conflicts_break_counter_chain_and_retain_all_safe_evidence_reasons()
         ingest(&mut forward, evidence.clone());
         let mut reverse = configured();
         ingest(&mut reverse, evidence.into_iter().rev());
-        confirm(&mut forward, "vehicle-a", "connection-1");
-        confirm(&mut reverse, "vehicle-a", "connection-1");
+        configure_shared_charger(&mut forward, "vehicle-a");
+        configure_shared_charger(&mut reverse, "vehicle-a");
         assert_eq!(
             forward.sessions(&vehicle("vehicle-a")),
             reverse.sessions(&vehicle("vehicle-a"))
@@ -886,4 +869,210 @@ fn interior_conflicts_break_counter_chain_and_retain_all_safe_evidence_reasons()
         }
         assert!(!s.is_eligible());
     }
+}
+
+fn fictional_geofence(latitude: f64, longitude: f64) -> ChargerGeofence {
+    ChargerGeofence::new(LocationPoint::new(latitude, longitude).unwrap(), 100).unwrap()
+}
+
+#[test]
+fn automatic_location_uses_every_sample_and_preserves_inclusive_radius() {
+    let inside = LocationSample::Valid(LocationPoint::new(12.3456789, 45.6789123).unwrap());
+    let outside = LocationSample::Valid(LocationPoint::new(12.3556789, 45.6789123).unwrap());
+    let edge = LocationSample::Valid(
+        LocationPoint::new(
+            12.3456789 + (100.0_f64 / 6_371_008.8).to_degrees(),
+            45.6789123,
+        )
+        .unwrap(),
+    );
+    for (locations, classification, reason, eligible) in [
+        (
+            [inside, inside, inside],
+            ChargerClassification::SharedCharger,
+            ClassificationReason::InsideGeofence,
+            "10",
+        ),
+        (
+            [outside, outside, outside],
+            ChargerClassification::OtherCharger,
+            ClassificationReason::OutsideGeofence,
+            "0",
+        ),
+        (
+            [edge, edge, edge],
+            ChargerClassification::SharedCharger,
+            ClassificationReason::InsideGeofence,
+            "10",
+        ),
+        (
+            [LocationSample::Missing; 3],
+            ChargerClassification::Held,
+            ClassificationReason::LocationUnavailable,
+            "0",
+        ),
+        (
+            [LocationSample::Invalid; 3],
+            ChargerClassification::Held,
+            ClassificationReason::LocationUnavailable,
+            "0",
+        ),
+        (
+            [inside, LocationSample::Missing, inside],
+            ChargerClassification::Held,
+            ClassificationReason::LocationAmbiguous,
+            "0",
+        ),
+        (
+            [inside, LocationSample::Invalid, inside],
+            ChargerClassification::Held,
+            ClassificationReason::LocationAmbiguous,
+            "0",
+        ),
+        (
+            [inside, outside, inside],
+            ChargerClassification::Held,
+            ClassificationReason::LocationAmbiguous,
+            "0",
+        ),
+    ] {
+        let mut ledger = configured();
+        ledger.configure_charger(owner("owner-a"), fictional_geofence(12.3456789, 45.6789123));
+        for (index, location) in locations.into_iter().enumerate() {
+            let mut sample = event(
+                "vehicle-a",
+                "location-session",
+                index as u64,
+                index as i64,
+                [EventKind::Start, EventKind::Sample, EventKind::End][index],
+                Some(["0", "4", "10"][index]),
+            );
+            sample.location = location;
+            ledger.ingest(sample).unwrap();
+        }
+        let result = session(&ledger, "vehicle-a");
+        assert_eq!(result.classification, classification);
+        assert_eq!(result.classification_reason, reason);
+        assert!(result.quality_flags.is_empty());
+        assert_eq!(
+            ledger
+                .summary(&vehicle("vehicle-a"))
+                .unwrap()
+                .eligible_shared_charger,
+            energy(eligible)
+        );
+    }
+    let fence = fictional_geofence(12.3456789, 45.6789123);
+    assert!(
+        !fence.contains(
+            LocationPoint::new(
+                12.3456789 + (100.001_f64 / 6_371_008.8).to_degrees(),
+                45.6789123
+            )
+            .unwrap()
+        )
+    );
+    for (latitude, longitude) in [
+        (f64::NAN, 0.0),
+        (0.0, f64::INFINITY),
+        (90.1, 0.0),
+        (0.0, -180.1),
+    ] {
+        assert!(LocationPoint::new(latitude, longitude).is_none());
+    }
+}
+
+#[test]
+fn later_location_enrichment_settles_holds_without_duplicating_energy_or_boundaries() {
+    for unavailable in [LocationSample::Missing, LocationSample::Invalid] {
+        let mut ledger = configured();
+        ledger.configure_charger(owner("owner-a"), fictional_geofence(0.0, 0.0));
+        let valid = complete("vehicle-a", "location-session", 1, "0", "10");
+        for mut sample in valid.clone() {
+            sample.location = unavailable;
+            ledger.ingest(sample).unwrap();
+        }
+        assert_eq!(
+            session(&ledger, "vehicle-a").classification_reason,
+            ClassificationReason::LocationUnavailable
+        );
+        ledger.ingest(valid[0].clone()).unwrap();
+        assert_eq!(
+            session(&ledger, "vehicle-a").classification_reason,
+            ClassificationReason::LocationAmbiguous
+        );
+        ledger.ingest(valid[1].clone()).unwrap();
+        let settled = ledger.summary(&vehicle("vehicle-a")).unwrap();
+        assert_eq!(settled.eligible_shared_charger, energy("10"));
+        ingest(&mut ledger, valid.into_iter().rev());
+        assert_eq!(ledger.summary(&vehicle("vehicle-a")).unwrap(), settled);
+        assert!(session(&ledger, "vehicle-a").quality_flags.is_empty());
+    }
+}
+
+#[test]
+fn automatic_classification_preserves_conflict_dc_and_ambiguous_charge_exclusions() {
+    for charge_type in [ChargeType::Dc, ChargeType::Ambiguous] {
+        let mut ledger = configured();
+        ledger.configure_charger(owner("owner-a"), fictional_geofence(0.0, 0.0));
+        let mut input = complete("vehicle-a", "location-session", 1, "0", "10");
+        for event in &mut input {
+            event.charge_type = charge_type;
+        }
+        ingest(&mut ledger, input);
+        assert_eq!(
+            session(&ledger, "vehicle-a").classification,
+            ChargerClassification::SharedCharger
+        );
+        assert!(!session(&ledger, "vehicle-a").is_eligible());
+    }
+    let mut ledger = configured();
+    ledger.configure_charger(owner("owner-a"), fictional_geofence(0.0, 0.0));
+    let input = complete("vehicle-a", "location-session", 1, "0", "10");
+    ingest(&mut ledger, input.clone());
+    let mut conflicting = input[1].clone();
+    conflicting.location = LocationSample::Valid(LocationPoint::new(0.0001, 0.0001).unwrap());
+    ledger.ingest(conflicting).unwrap();
+    let result = session(&ledger, "vehicle-a");
+    assert_eq!(
+        result.classification_reason,
+        ClassificationReason::LocationAmbiguous
+    );
+    assert!(
+        result
+            .quality_flags
+            .contains(&QualityFlag::ConflictingEvidence)
+    );
+    assert!(!result.is_eligible());
+}
+
+#[test]
+fn owner_geofence_changes_reclassify_all_owned_vehicles_and_leave_other_owners_isolated() {
+    let mut ledger = configured();
+    ledger
+        .register(vehicle("vehicle-a2"), owner("owner-a"))
+        .unwrap();
+    ledger.configure_charger(owner("owner-a"), fictional_geofence(0.0, 0.0));
+    ledger.configure_charger(owner("owner-b"), fictional_geofence(1.0, 1.0));
+    for car in ["vehicle-a", "vehicle-a2", "vehicle-b"] {
+        ingest(&mut ledger, complete(car, "location-session", 1, "0", "10"));
+    }
+    let other = ledger.summary(&vehicle("vehicle-b")).unwrap();
+    for car in ["vehicle-a", "vehicle-a2"] {
+        assert_eq!(
+            ledger
+                .summary(&vehicle(car))
+                .unwrap()
+                .eligible_shared_charger,
+            energy("10")
+        );
+    }
+    ledger.configure_charger(owner("owner-a"), fictional_geofence(2.0, 2.0));
+    for car in ["vehicle-a", "vehicle-a2"] {
+        assert_eq!(
+            session(&ledger, car).classification,
+            ChargerClassification::OtherCharger
+        );
+    }
+    assert_eq!(ledger.summary(&vehicle("vehicle-b")).unwrap(), other);
 }

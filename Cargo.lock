@@ -59,6 +59,7 @@ version = "0.1.0"
 name = "chargeshare-harness"
 version = "0.1.0"
 dependencies = [
+ "chargeshare-ingestion",
  "fs2",
  "native-tls",
  "serde",

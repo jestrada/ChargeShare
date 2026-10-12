@@ -100,9 +100,15 @@ def ensure_manifest(runtime):
     path = runtime.directory / "manifest.json"
     expected = json.loads((runtime.checkout / "dev" / "ingestion-manifest.json").read_bytes())
     if path.exists():
-        metadata = path.stat()
-        if stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_uid != os.getuid() or json.loads(path.read_bytes()) != expected:
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_uid != os.getuid():
             raise RuntimeFailure("Frozen ingestion manifest differs; retained evidence was preserved.")
+        retained = json.loads(path.read_bytes())
+        frozen = lambda config: {key: value for key, value in config.items() if key not in ("geofence_version", "geofences")}
+        if frozen(retained) != frozen(expected) or (retained.get("geofence_version") == expected.get("geofence_version") and retained.get("geofences") != expected.get("geofences")):
+            raise RuntimeFailure("Frozen ingestion manifest differs; retained evidence was preserved.")
+        if retained != expected:
+            write_private_json(path, expected)
     else:
         if any(runtime.directory.glob("ingestion.sqlite3*")):
             raise RuntimeFailure("Retained evidence has no frozen manifest; explicit stopped owned reset is required.")

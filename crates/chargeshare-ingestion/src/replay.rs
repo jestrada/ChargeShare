@@ -16,6 +16,20 @@ impl Store {
         ledger
             .register(vehicle.clone(), owner.clone())
             .map_err(|_| IngestionError::DomainReplay)?;
+        if let Some(geofence) = self
+            .manifest
+            .config()
+            .geofences
+            .iter()
+            .find(|geofence| geofence.owner == owner.as_str())
+        {
+            ledger.configure_charger(
+                owner.clone(),
+                geofence
+                    .to_core()
+                    .map_err(|_| IngestionError::StorageCorrupt)?,
+            );
+        }
         let mut statement = self
             .connection
             .prepare("SELECT event_json FROM event_variants WHERE vehicle = ?1 ORDER BY event_json")

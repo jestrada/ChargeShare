@@ -21,6 +21,7 @@ pub struct SessionResult {
     pub vehicle: String,
     pub connection: String,
     pub classification: &'static str,
+    pub classification_reason: String,
     pub evidence_state: &'static str,
     pub observed_ac_kwh: String,
     pub eligible_shared_charger_kwh: String,
@@ -37,6 +38,7 @@ pub struct ResultProvenance {
     pub manifest_version: String,
     pub normalizer_version: String,
     pub calculation_version: &'static str,
+    pub geofence_version: String,
 }
 
 impl Store {
@@ -64,7 +66,13 @@ impl Store {
         let mut result = ScopedResults {
             owner: owner.as_str().to_owned(),
             vehicle: vehicle.as_str().to_owned(),
-            state: if sessions.is_empty() { "empty" } else { "held" },
+            state: if sessions.is_empty() {
+                "empty"
+            } else if summary.held_or_excluded.is_empty() {
+                "eligible"
+            } else {
+                "held"
+            },
             evidence_boundary: summary.evidence_label,
             observed_ac_kwh: kwh(summary.observed_ac),
             eligible_shared_charger_kwh: kwh(summary.eligible_shared_charger),
@@ -76,7 +84,8 @@ impl Store {
                 mapping_version: config.mapping_version.clone(),
                 manifest_version: config.manifest_version.clone(),
                 normalizer_version: config.normalizer_version.clone(),
-                calculation_version: "scoped-core-replay-v1",
+                calculation_version: "scoped-core-replay-v2",
+                geofence_version: config.geofence_version.clone(),
             },
             revision: String::new(),
         };
@@ -100,10 +109,11 @@ impl From<Session> for SessionResult {
             vehicle: session.id.vehicle.as_str().to_owned(),
             connection: session.id.connection.as_str().to_owned(),
             classification: match session.classification {
-                ChargerClassification::Unconfirmed => "Unconfirmed",
+                ChargerClassification::Held => "Held",
                 ChargerClassification::SharedCharger => "SharedCharger",
                 ChargerClassification::OtherCharger => "OtherCharger",
             },
+            classification_reason: format!("{:?}", session.classification_reason),
             evidence_state: if !session.quality_flags.is_empty() {
                 "incomplete"
             } else if session.observed_ac == Energy::ZERO {

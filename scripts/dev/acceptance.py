@@ -22,6 +22,39 @@ class AcceptanceFailure(Exception):
     pass
 
 
+def assert_coordinate_privacy(text, checkout):
+    coordinates = set()
+    for name in ("dev/fixtures.json", "dev/ingestion-manifest.json"):
+        path = checkout / name
+        if not path.is_file():
+            continue
+        def collect(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key in ("latitude", "longitude"):
+                        coordinates.add(str(item))
+                        coordinates.add(format(float(item), ".15g"))
+                    else:
+                        collect(item)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+        collect(json.loads(path.read_bytes()))
+    if any(coordinate in text for coordinate in coordinates) or any(key in text for key in ('"latitude"', '"longitude"', '"locationValue"')):
+        raise AcceptanceFailure("coordinate-privacy")
+
+
+def assert_location_sessions(result, expected, eligible):
+    if set(result) != {"owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "provenance", "revision"} or result["owner"] != "owner-a" or result["vehicle"] != "vehicle-a" or result["state"] != "held" or result["observed_ac_kwh"] != "3.500000" or result["eligible_shared_charger_kwh"] != eligible or len(result["sessions"]) != len(expected):
+        raise AcceptanceFailure("location-classification")
+    sessions = {session["connection"]: session for session in result["sessions"]}
+    for connection, (classification, reason) in expected.items():
+        exclusions = [] if classification == "SharedCharger" else ["OtherCharger" if classification == "OtherCharger" else reason]
+        session = {"vehicle": "vehicle-a", "connection": connection, "classification": classification, "classification_reason": reason, "evidence_state": "complete", "observed_ac_kwh": "0.500000", "eligible_shared_charger_kwh": "0.500000" if classification == "SharedCharger" else "0.000000", "quality_flags": [], "exclusion_reasons": exclusions}
+        if sessions.get(connection) != session:
+            raise AcceptanceFailure("location-classification")
+
+
 def fail_at_deadline(signum, frame):
     raise AcceptanceFailure("timeout")
 
@@ -34,7 +67,7 @@ def assert_complete(document, wrong_expectation=False):
     if len(scopes) != 2:
         raise AcceptanceFailure("assertion")
     for index, scope in enumerate(scopes):
-        if scope != {"vehicle": ("vehicle-a", "vehicle-b")[index], "observed_ac": expected[index], "eligible": "0.000000 kWh", "sessions": 1, "unconfirmed": True, "quality_flags": 0}:
+        if scope != {"vehicle": ("vehicle-a", "vehicle-b")[index], "observed_ac": expected[index], "eligible": expected[index] if index == 0 else "0.000000 kWh", "sessions": 1, "classifications": ["SharedCharger" if index == 0 else "OtherCharger"], "classification_reasons": ["InsideGeofence" if index == 0 else "OutsideGeofence"], "quality_flags": 0}:
             raise AcceptanceFailure("assertion")
 
 
@@ -70,6 +103,7 @@ class Acceptance:
             raise AcceptanceFailure("refusal" if expected_reason is not None else "timeout") from None
         except OSError:
             raise AcceptanceFailure("setup") from None
+        assert_coordinate_privacy(result.stdout + result.stderr, self.runtime.checkout)
         self.private.mkdir(mode=0o700, parents=True, exist_ok=True)
         with (self.private / "commands-local.log").open("a", encoding="utf-8") as output:
             output.write(result.stdout + result.stderr)
@@ -308,7 +342,7 @@ class Acceptance:
             complete = wait_http_scopes()
             if any(before["revision"] == after["revision"] for before, after in zip(empty, complete)):
                 raise AcceptanceFailure("viewing-revision")
-            self.record("PASS: owning runtime ingested fresh official receiver output; HTTP scopes A=0.500000/B=0.250000 kWh; Unconfirmed; eligible=0.000000 kWh; mismatched scope refused; semantic revision stable")
+            self.record("PASS: owning runtime ingested fresh official receiver output; HTTP scopes A=0.500000/B=0.250000 kWh; automatic SharedCharger/OtherCharger; eligible A=0.500000/B=0.000000 kWh; mismatched scope refused; semantic revision stable")
             self.stage = "viewing-concurrent-replay"
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=4) as readers:
@@ -336,10 +370,84 @@ class Acceptance:
             if "/src/persisted-main.tsx" not in html:
                 raise AcceptanceFailure("viewing-dashboard-entry")
             self.record("PASS: separate persisted dashboard listener ready on IPv4 loopback 5174; browser screenshots remain manual")
+            self.location_classification()
         except RuntimeFailure:
             raise AcceptanceFailure(self.stage) from None
         finally:
             self.stop_viewing()
+
+    def wait_locations(self, expected, eligible):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            try:
+                result = scoped_results("owner-a", "vehicle-a")
+                assert_coordinate_privacy(json.dumps(result), self.runtime.checkout)
+                assert_location_sessions(result, expected, eligible)
+                return result
+            except (RuntimeFailure, AcceptanceFailure) as failure:
+                if isinstance(failure, AcceptanceFailure) and str(failure) == "coordinate-privacy":
+                    raise
+                time.sleep(0.1)
+        raise AcceptanceFailure("location-classification")
+
+    def location_classification(self):
+        self.stage = "location-classification"
+        expected = {
+            "connection-1": ("SharedCharger", "InsideGeofence"),
+            "location-outside": ("OtherCharger", "OutsideGeofence"),
+            "location-missing": ("Held", "LocationUnavailable"),
+            "location-mixed": ("Held", "LocationAmbiguous"),
+            "location-edge": ("SharedCharger", "InsideGeofence"),
+            "location-partial": ("Held", "LocationAmbiguous"),
+            "location-invalid": ("Held", "LocationUnavailable"),
+        }
+        other = scoped_results("owner-b", "vehicle-b")
+        self.checked(["bash", "scripts/dev/harness.sh", "location"], 180)
+        self.wait_locations(expected, "1.000000")
+        self.record("PASS: receiver location classified inside/edge as SharedCharger, outside as OtherCharger, missing/invalid as LocationUnavailable and mixed/partial as LocationAmbiguous; only eligible AC energy counted")
+        self.checked(["bash", "scripts/dev/harness.sh", "location-recovery"], 180)
+        for connection in ("location-missing", "location-partial"):
+            expected[connection] = ("SharedCharger", "InsideGeofence")
+        settled = self.wait_locations(expected, "2.000000")
+        self.stop_viewing()
+        self.start_viewing()
+        if self.wait_locations(expected, "2.000000") != settled or scoped_results("owner-b", "vehicle-b") != other:
+            raise AcceptanceFailure("location-recovery")
+        self.record("PASS: new receiver location settled held sessions automatically; restart preserved classification, energy and revision; owner B remained isolated")
+        path = self.runtime.directory / "manifest.json"
+        original = json.loads(path.read_bytes())
+        changed = json.loads(json.dumps(original))
+        changed["geofence_version"] = "fictional-geofence-v2"
+        fixture = json.loads((self.runtime.checkout / "dev/fixtures.json").read_bytes())
+        fields = fixture["scenarios"]["location"]["expected"][0]["payload"]["data"]
+        point = next(field["value"]["locationValue"] for field in fields if field["key"] == "Location")
+        geofence = next(geofence for geofence in changed["geofences"] if geofence["owner"] == "owner-a")
+        geofence["center"] = dict(status="valid", **{key: str(value) for key, value in point.items()})
+        self.stop_viewing()
+        try:
+            write_private_json(path, changed)
+            self.start_viewing()
+            reclassified = dict(expected)
+            for connection in ("connection-1", "location-edge", "location-missing", "location-partial"):
+                reclassified[connection] = ("OtherCharger", "OutsideGeofence")
+            reclassified["location-outside"] = ("SharedCharger", "InsideGeofence")
+            result = self.wait_locations(reclassified, "0.500000")
+            unchanged = scoped_results("owner-b", "vehicle-b")
+            if result["revision"] == settled["revision"] or result["provenance"]["geofence_version"] != changed["geofence_version"] or unchanged["sessions"] != other["sessions"] or unchanged["eligible_shared_charger_kwh"] != other["eligible_shared_charger_kwh"]:
+                raise AcceptanceFailure("geofence-reclassification")
+            assert_coordinate_privacy(json.dumps(unchanged), self.runtime.checkout)
+            self.record("PASS: a newly loaded geofence version automatically reclassified retained owner A sessions; owner B classification and energy stayed isolated")
+        finally:
+            self.stop_viewing()
+            write_private_json(path, original)
+        self.start_viewing()
+        if self.wait_locations(expected, "2.000000") != settled:
+            raise AcceptanceFailure("geofence-restoration")
+        self.checked(compose_command(self.runtime, "logs", "--no-color", "receiver", "kafka"), 30)
+        for directory in (self.private, self.runtime.directory):
+            for path in directory.glob("*.log"):
+                assert_coordinate_privacy(path.read_text(encoding="utf-8", errors="replace"), self.runtime.checkout)
+        self.record("PASS: API responses and receiver, Kafka, owner and command logs contain no coordinate values; config restoration preserved evidence")
 
     def execute(self):
         preflight(self.runtime)
@@ -362,7 +470,7 @@ class Acceptance:
         self.ingest(["verify-decoded", "/run/.local-runtime"])
         shutil.copyfile(self.runtime.directory / "decoded-capture.json", self.private / "decoded-capture.json")
         (self.private / "decoded-capture.json").chmod(0o600)
-        self.record("PASS: actual decoded records match allowlist, UTC source times and manifest associations; private capture retained for golden review")
+        self.record("PASS: actual decoded records match allowlist, UTC source times and manifest associations; private normalized evidence retained for golden review")
         self.stage = "consume-restart"
         self.ingest(["consume", "/run/.local-runtime", "kafka:9092", "2", "30"])
         assert_progress(self.status(), 2)
@@ -379,7 +487,7 @@ class Acceptance:
         complete = self.status()
         assert_complete(complete, self.prove_failure == "assertion")
         self.record("PASS: real consumer kills before/after commit recovered atomic old/new state without duplicated energy")
-        self.record("PASS: vehicle-a=0.500000 kWh vehicle-b=0.250000 kWh observed AC; both Unconfirmed; eligible=0.000000 kWh")
+        self.record("PASS: vehicle-a=0.500000 kWh vehicle-b=0.250000 kWh observed AC; both automatic SharedCharger/OtherCharger; eligible A=0.500000/B=0.000000 kWh")
         if self.prove_failure == "timeout":
             self.prove_timeout(complete)
         self.stage = "duplicate-out-of-order"
