@@ -10,6 +10,8 @@ export CHARGESHARE_RUNTIME_DIR="$(python3 scripts/dev/runtime.py runtime-dir)"
 export CHARGESHARE_BROKER_VOLUME="${CHARGESHARE_PROJECT_NAME}_kafka-data"
 export CHARGESHARE_UID="$(id -u)"
 export CHARGESHARE_GID="$(id -g)"
+compose_environment=$(python3 scripts/dev/runtime.py compose-environment)
+eval "$compose_environment"
 compose=(docker compose --project-name "$CHARGESHARE_PROJECT_NAME" --file dev/compose.yaml)
 stage=setup
 

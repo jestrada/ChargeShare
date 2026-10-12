@@ -1,5 +1,5 @@
 {
-  description = "Pinned Linux x86_64 tools for ChargeShare synthetic local development";
+  description = "Pinned Linux x86_64 and aarch64 tools for ChargeShare synthetic local development";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/a7868a727837f3c09cee2ce0ca671c76b1589fed";
@@ -9,9 +9,9 @@
     };
   };
 
-  outputs = { nixpkgs, rust-overlay, ... }:
+  outputs = { nixpkgs, rust-overlay, ... }: {
+    devShells = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system:
     let
-      system = "x86_64-linux";
       pkgs = import nixpkgs {
         inherit system;
         overlays = [ rust-overlay.overlays.default ];
@@ -67,7 +67,7 @@
       '';
     in
     {
-      devShells.${system}.default = pkgs.mkShell {
+      default = pkgs.mkShell {
         name = "chargeshare-local-development";
         packages = [
           rustToolchain
@@ -96,5 +96,6 @@
         ];
         buildInputs = [ pkgs.openssl.dev ];
       };
-    };
+    });
+  };
 }

@@ -3,6 +3,7 @@ import io
 import json
 import os
 import queue
+import shlex
 import shutil
 import socket
 import ssl
@@ -88,23 +89,37 @@ class TiltfileLifecycleTests(unittest.TestCase):
         self.assertIn("--service-health --timeout 180 kafka", resources["broker-ready"]["cmd"])
 
 
+def synthetic_pins():
+    go_image = "docker.io/library/golang:synthetic@sha256:"
+    return {
+        "receiver_source": {"repository": "https://github.com/teslamotors/fleet-telemetry", "revision": "a" * 40},
+        "kafka_image": {"reference": "apache/kafka:synthetic@sha256:" + "b" * 64, "arm64_reference": "apache/kafka:synthetic@sha256:" + "c" * 64},
+        "receiver_build_image": {"reference": go_image + "d" * 64, "arm64_reference": go_image + "e" * 64},
+        "receiver_runtime_image": {"reference": go_image + "d" * 64, "arm64_reference": go_image + "e" * 64},
+    }
+
+
 def synthetic_compose(project):
     labels = {runtime.SYNTHETIC_LABEL: "true"}
+    pins = synthetic_pins()
     return {
         "name": project.project_name,
         "services": {
             "kafka": {
                 "labels": dict(labels),
-                "image": "apache/kafka:synthetic@sha256:" + "b" * 64,
-                "platform": "linux/amd64",
+                "image": runtime.pinned_image(pins, "kafka_image"),
+                "platform": runtime.host_platform(),
                 "tmpfs": sorted(runtime.KAFKA_TMPFS),
                 "volumes": [{"type": "volume", "source": "kafka-data", "target": "/var/lib/kafka/data"}],
             },
             "receiver": {
                 "labels": dict(labels),
                 "image": project.project_name + "-receiver:aaaaaaa",
-                "build": {"context": str(project.checkout / "dev"), "dockerfile": "receiver.Dockerfile"},
-                "platform": "linux/amd64",
+                "build": {"context": str(project.checkout / "dev"), "dockerfile": "receiver.Dockerfile", "args": {
+                    "RECEIVER_BUILD_IMAGE": runtime.pinned_image(pins, "receiver_build_image"),
+                    "RECEIVER_RUNTIME_IMAGE": runtime.pinned_image(pins, "receiver_runtime_image"),
+                }},
+                "platform": runtime.host_platform(),
                 "user": str(os.getuid()) + ":" + str(os.getgid()),
                 "command": ["-config", "/etc/chargeshare/receiver.json"],
                 "ports": [{"host_ip": "127.0.0.1", "published": "8443", "target": 4443, "protocol": "tcp"}],
@@ -143,7 +158,7 @@ class FakeDocker:
     def __init__(self, project):
         self.project = project
         self.commands = []
-        self.daemon = {"OSType": "linux", "Architecture": "x86_64", "ServerVersion": "synthetic-test-version"}
+        self.daemon = {"OSType": "linux", "Architecture": runtime.host_platform().split("/")[1], "ServerVersion": "synthetic-test-version"}
         self.context = [{"Endpoints": {"docker": {"Host": "unix:///var/run/docker.sock"}}}]
         self.configuration = synthetic_compose(project)
         self.containers = [stopped_container(project)]
@@ -196,10 +211,7 @@ class RuntimeGuardTests(unittest.TestCase):
         self.project = runtime.ProjectRuntime.at(self.temporary.name)
         self.project.receiver_configuration_file.parent.mkdir()
         self.project.receiver_configuration_file.write_text(json.dumps(runtime.RECEIVER_CONFIGURATION), encoding="utf-8")
-        (self.project.checkout / "dev" / "upstream-pins.json").write_text(json.dumps({
-            "receiver_source": {"repository": "https://github.com/teslamotors/fleet-telemetry", "revision": "a" * 40},
-            "kafka_image": {"reference": "apache/kafka:synthetic@sha256:" + "b" * 64},
-        }), encoding="utf-8")
+        (self.project.checkout / "dev" / "upstream-pins.json").write_text(json.dumps(synthetic_pins()), encoding="utf-8")
         self.docker = FakeDocker(self.project)
         self.no_ports = mock.Mock()
         self.environment = mock.patch.dict(os.environ, {"DOCKER_HOST": "", "DOCKER_CONTEXT": ""})
@@ -246,7 +258,7 @@ class RuntimeGuardTests(unittest.TestCase):
         self.assertEqual(self.docker.mutations(), [])
 
     def test_unsupported_host_is_rejected_before_docker(self):
-        for system, machine in [("Darwin", "x86_64"), ("Linux", "aarch64"), ("Windows", "AMD64")]:
+        for system, machine in [("Darwin", "x86_64"), ("Darwin", "aarch64"), ("Linux", "riscv64"), ("Linux", "armv7l"), ("Windows", "AMD64")]:
             with self.subTest(system=system, machine=machine):
                 with self.assertRaisesRegex(runtime.RuntimeFailure, "requires Linux x86_64"):
                     runtime.check_supported_platform(system, machine)
@@ -255,12 +267,94 @@ class RuntimeGuardTests(unittest.TestCase):
                 runtime.preflight(self.project, self.docker, self.no_ports)
         self.assertEqual(self.docker.commands, [])
 
-    def test_non_linux_or_non_x86_64_daemon_is_rejected(self):
-        for operating_system, architecture in [("windows", "x86_64"), ("linux", "aarch64")]:
+    def test_supported_host_aliases_select_native_container_platform(self):
+        for machine, expected in (("x86_64", "linux/amd64"), ("AMD64", "linux/amd64"), ("aarch64", "linux/arm64"), ("arm64", "linux/arm64")):
+            with self.subTest(machine=machine):
+                self.assertEqual(runtime.check_supported_platform("Linux", machine), expected)
+
+    def test_supported_host_and_daemon_architectures_use_exact_native_pins(self):
+        for machine, architectures in (("x86_64", ("x86_64", "amd64")), ("aarch64", ("aarch64", "arm64"))):
+            with mock.patch.object(runtime.platform, "machine", return_value=machine):
+                self.docker.configuration = synthetic_compose(self.project)
+                for architecture in architectures:
+                    with self.subTest(machine=machine, architecture=architecture):
+                        self.docker.daemon["Architecture"] = architecture
+                        result = runtime.preflight(self.project, self.docker, self.no_ports)
+                        self.assertEqual(result["host"], "Linux " + machine)
+                        environment = self.project.environment()
+                        self.assertEqual(environment["CHARGESHARE_PLATFORM"], runtime.host_platform())
+                        self.assertEqual(environment["CHARGESHARE_KAFKA_IMAGE"], self.docker.configuration["services"]["kafka"]["image"])
+                        build = self.docker.configuration["services"]["receiver"]["build"]["args"]
+                        self.assertEqual(environment["CHARGESHARE_RECEIVER_BUILD_IMAGE"], build["RECEIVER_BUILD_IMAGE"])
+                        self.assertEqual(environment["CHARGESHARE_RECEIVER_RUNTIME_IMAGE"], build["RECEIVER_RUNTIME_IMAGE"])
+
+    def test_non_linux_or_unsupported_daemon_architecture_is_rejected(self):
+        for operating_system, architecture in [("windows", "x86_64"), ("linux", "riscv64"), ("linux", "armv7l")]:
             with self.subTest(operating_system=operating_system, architecture=architecture):
                 self.docker.daemon.update({"OSType": operating_system, "Architecture": architecture})
-                with self.assertRaisesRegex(runtime.RuntimeFailure, "requires Linux x86_64 containers"):
+                with self.assertRaisesRegex(runtime.RuntimeFailure, "requires Linux x86_64 or aarch64 containers"):
                     runtime.preflight(self.project, self.docker, self.no_ports)
+
+    def test_daemon_architecture_must_match_host_before_compose(self):
+        for machine, architecture in (("x86_64", "arm64"), ("aarch64", "amd64")):
+            with self.subTest(machine=machine), mock.patch.object(runtime.platform, "machine", return_value=machine):
+                self.docker.daemon["Architecture"] = architecture
+                with self.assertRaisesRegex(runtime.RuntimeFailure, "must match the host platform"):
+                    runtime.preflight(self.project, self.docker, self.no_ports)
+        self.assertFalse(any(command[:2] == ["docker", "compose"] for command in self.docker.commands))
+
+    def test_compose_platform_and_immutable_images_must_match_host(self):
+        for machine, wrong_platform in (("x86_64", "linux/arm64"), ("aarch64", "linux/amd64")):
+            with mock.patch.object(runtime.platform, "machine", return_value=machine):
+                for service in ("kafka", "receiver"):
+                    with self.subTest(machine=machine, service=service):
+                        configuration = synthetic_compose(self.project)
+                        configuration["services"][service]["platform"] = wrong_platform
+                        with self.assertRaisesRegex(runtime.RuntimeFailure, "must match the host platform"):
+                            runtime.validate_compose_configuration(self.project, configuration)
+                configuration = synthetic_compose(self.project)
+                field = "reference" if wrong_platform == "linux/amd64" else "arm64_reference"
+                configuration["services"]["kafka"]["image"] = synthetic_pins()["kafka_image"][field]
+                with self.assertRaisesRegex(runtime.RuntimeFailure, "exact reviewed immutable image"):
+                    runtime.validate_compose_configuration(self.project, configuration)
+                for argument, pin in (("RECEIVER_BUILD_IMAGE", "receiver_build_image"), ("RECEIVER_RUNTIME_IMAGE", "receiver_runtime_image")):
+                    configuration = synthetic_compose(self.project)
+                    configuration["services"]["receiver"]["build"]["args"][argument] = synthetic_pins()[pin][field]
+                    with self.assertRaisesRegex(runtime.RuntimeFailure, "reviewed project-local build inputs"):
+                        runtime.validate_compose_configuration(self.project, configuration)
+
+    def test_pin_selection_overrides_environment_and_rejects_missing_or_mutable_inputs(self):
+        for machine in ("x86_64", "aarch64"):
+            with mock.patch.object(runtime.platform, "machine", return_value=machine):
+                with mock.patch.dict(os.environ, {"CHARGESHARE_PLATFORM": "linux/riscv64", "CHARGESHARE_KAFKA_IMAGE": "apache/kafka:latest"}):
+                    self.assertEqual(self.project.environment()["CHARGESHARE_KAFKA_IMAGE"], runtime.pinned_image(synthetic_pins(), "kafka_image"))
+                    self.assertEqual(self.project.environment()["CHARGESHARE_PLATFORM"], runtime.host_platform())
+                field = "reference" if machine == "x86_64" else "arm64_reference"
+                for pin in ("kafka_image", "receiver_build_image", "receiver_runtime_image"):
+                    for value in (None, "apache/kafka:latest", "synthetic.invalid/image@sha256:" + "a" * 64):
+                        pins = synthetic_pins()
+                        if value is None:
+                            del pins[pin][field]
+                        else:
+                            pins[pin][field] = value
+                        with self.subTest(machine=machine, pin=pin, value=value), self.assertRaises(runtime.RuntimeFailure):
+                            runtime.pinned_image(pins, pin)
+
+    def test_compose_environment_exports_only_selected_platform_and_reviewed_images(self):
+        for machine in ("x86_64", "aarch64"):
+            with self.subTest(machine=machine), mock.patch.object(runtime.platform, "machine", return_value=machine):
+                output = io.StringIO()
+                with mock.patch.object(runtime.ProjectRuntime, "at", return_value=self.project), contextlib.redirect_stdout(output):
+                    self.assertEqual(runtime.main(["compose-environment"]), 0)
+                exports = {}
+                for line in output.getvalue().splitlines():
+                    command, assignment = shlex.split(line)
+                    self.assertEqual(command, "export")
+                    name, value = assignment.split("=", 1)
+                    exports[name] = value
+                self.assertEqual(exports, {name: value for name, value in self.project.environment().items() if name in {
+                    "CHARGESHARE_PLATFORM", "CHARGESHARE_KAFKA_IMAGE", "CHARGESHARE_RECEIVER_BUILD_IMAGE", "CHARGESHARE_RECEIVER_RUNTIME_IMAGE",
+                }})
 
     def test_remote_docker_context_or_host_is_rejected(self):
         self.docker.context[0]["Endpoints"]["docker"]["Host"] = "ssh://synthetic.invalid"

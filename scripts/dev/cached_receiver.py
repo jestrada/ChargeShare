@@ -7,7 +7,7 @@ import re
 import sys
 from pathlib import Path
 
-from runtime import ProjectRuntime, RuntimeFailure, read_json_file, resolved_compose_configuration, run_command
+from runtime import ProjectRuntime, RuntimeFailure, host_platform, read_json_file, resolved_compose_configuration, run_command
 
 
 BUILD_INPUTS = ("dev/receiver.Dockerfile", "dev/upstream-pins.json", "dev/.dockerignore")
@@ -27,7 +27,7 @@ def build_identity(runtime):
         "tag": runtime.project_name + "-receiver:" + revision[:7],
         "revision": revision,
         "inputs_sha": digest.hexdigest(),
-        "cache_scope": "receiver-v1-linux-amd64-" + digest.hexdigest(),
+        "cache_scope": "receiver-v1-" + host_platform().replace("/", "-") + "-" + digest.hexdigest(),
     }
 
 
@@ -38,7 +38,7 @@ def validate_loaded_image(identity, images, expected_id):
         raise RuntimeFailure("Cached receiver image inspection is invalid.")
     image = images[0]
     labels = image.get("Config", {}).get("Labels") or {}
-    if image.get("Id") != expected_id or image.get("Os") != "linux" or image.get("Architecture") != "amd64" or labels.get(BUILD_LABEL) != identity["inputs_sha"] or labels.get(REVISION_LABEL) != identity["revision"]:
+    if image.get("Id") != expected_id or image.get("Os") != "linux" or image.get("Architecture") != host_platform().split("/")[1] or labels.get(BUILD_LABEL) != identity["inputs_sha"] or labels.get(REVISION_LABEL) != identity["revision"]:
         raise RuntimeFailure("Cached receiver does not match this job's reviewed Linux build inputs.")
 
 

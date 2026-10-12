@@ -1,4 +1,6 @@
-FROM docker.io/library/golang:1.27.1-bookworm@sha256:966278043a40889499db9b0cd196fc789c37c385d41bd9a10cb1e7764af60cdc AS receiver-build
+ARG RECEIVER_BUILD_IMAGE=docker.io/library/golang:1.27.1-bookworm@sha256:966278043a40889499db9b0cd196fc789c37c385d41bd9a10cb1e7764af60cdc
+ARG RECEIVER_RUNTIME_IMAGE=docker.io/library/golang:1.27.1-bookworm@sha256:966278043a40889499db9b0cd196fc789c37c385d41bd9a10cb1e7764af60cdc
+FROM ${RECEIVER_BUILD_IMAGE} AS receiver-build
 
 WORKDIR /build
 ADD --checksum=sha256:018d79fe0a045cca07331d37bd0cb57b2e838c51bc48fd837a1472e50068bbea https://github.com/jedisct1/libsodium/releases/download/1.0.19-RELEASE/libsodium-1.0.19.tar.gz /build/libsodium.tar.gz
@@ -14,7 +16,7 @@ WORKDIR /build/fleet-telemetry
 ENV GOTOOLCHAIN=local CGO_ENABLED=1 CGO_LDFLAGS="-lstdc++"
 RUN go mod download && go mod verify && go build -mod=readonly --ldflags 'extldflags="-static"' -o /fleet-telemetry cmd/main.go
 
-FROM docker.io/library/golang:1.27.1-bookworm@sha256:966278043a40889499db9b0cd196fc789c37c385d41bd9a10cb1e7764af60cdc
+FROM ${RECEIVER_RUNTIME_IMAGE}
 WORKDIR /
 COPY --from=receiver-build /fleet-telemetry /fleet-telemetry
 COPY --from=receiver-build /build/fleet-telemetry/LICENSE /usr/share/doc/fleet-telemetry/LICENSE
