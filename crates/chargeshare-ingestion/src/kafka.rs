@@ -567,3 +567,90 @@ fn consumer_error(error: KafkaError) -> IngestionError {
         _ => IngestionError::KafkaUnavailable,
     }
 }
+
+pub(crate) struct LiveIngestion {
+    consumer: BaseConsumer<SilentSyntheticContext>,
+    config: KafkaConfig,
+    source: SourceBinding,
+    verified_at: Instant,
+}
+
+impl LiveIngestion {
+    pub(crate) fn connect(
+        config: KafkaConfig,
+        source: SourceBinding,
+        store: &Store,
+    ) -> Result<Self, IngestionError> {
+        config.validate()?;
+        verify_source_marker(&config.source_epoch_path, &source)?;
+        if source.topic_id.is_some() {
+            return Err(IngestionError::SourceMismatch);
+        }
+        let consumer = connect_consumer(&config)?;
+        verify_broker_source(
+            &consumer,
+            &config,
+            &source,
+            store,
+            Instant::now() + config.deadline,
+        )?;
+        let mut assignment = TopicPartitionList::new();
+        for position in store.positions()? {
+            assignment
+                .add_partition_offset(
+                    &source.topic,
+                    position.partition,
+                    Offset::Offset(position.next_offset),
+                )
+                .map_err(|_| IngestionError::KafkaUnavailable)?;
+        }
+        consumer
+            .assign(&assignment)
+            .map_err(|_| IngestionError::KafkaUnavailable)?;
+        Ok(Self {
+            consumer,
+            config,
+            source,
+            verified_at: Instant::now(),
+        })
+    }
+
+    pub(crate) fn poll(&mut self, store: &mut Store) -> Result<(), IngestionError> {
+        store.validate_live_storage()?;
+        verify_source_marker(&self.config.source_epoch_path, &self.source)?;
+        if self.verified_at.elapsed() >= Duration::from_secs(2) {
+            verify_broker_source(
+                &self.consumer,
+                &self.config,
+                &self.source,
+                store,
+                Instant::now() + self.config.deadline,
+            )?;
+            self.verified_at = Instant::now();
+        }
+        let Some(delivery) = self.consumer.poll(Duration::from_millis(10)) else {
+            return Ok(());
+        };
+        let delivery = delivery.map_err(consumer_error)?;
+        if delivery.topic() != self.source.topic {
+            return Err(IngestionError::SourceMismatch);
+        }
+        let position = store
+            .positions()?
+            .into_iter()
+            .find(|position| position.partition == delivery.partition())
+            .ok_or(IngestionError::SourceMismatch)?;
+        let manifest = store.manifest.clone();
+        store.ingest(
+            &manifest,
+            DeliveryCoordinate {
+                partition: delivery.partition(),
+                offset: delivery.offset(),
+            },
+            position.next_offset,
+            delivery.key(),
+            delivery.payload().unwrap_or_default(),
+        )?;
+        Ok(())
+    }
+}

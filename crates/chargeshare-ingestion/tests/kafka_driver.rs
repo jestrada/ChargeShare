@@ -761,3 +761,470 @@ fn observed_commit_failure_before_and_after_commit_recovers_atomic_old_or_new_st
         );
     }
 }
+
+struct RuntimeApi {
+    child: std::process::Child,
+    address: std::net::SocketAddr,
+}
+
+impl RuntimeApi {
+    fn start(fixture: &Fixture, broker: &str) -> Self {
+        let runtime = fixture.directory.join(".local-runtime");
+        let fresh = !runtime.exists();
+        if fresh {
+            fs::DirBuilder::new().mode(0o700).create(&runtime).unwrap();
+            for (name, bytes) in [
+                (
+                    "source-epoch.json",
+                    serde_json::to_vec(&fixture.source).unwrap(),
+                ),
+                (
+                    "manifest.json",
+                    serde_json::to_vec(fixture.manifest.config()).unwrap(),
+                ),
+                (
+                    "synthetic-runtime.json",
+                    br#"{"project_name":"chargeshare-local-0123456789ab","synthetic_only":true}"#
+                        .to_vec(),
+                ),
+            ] {
+                OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .mode(0o600)
+                    .open(runtime.join(name))
+                    .unwrap()
+                    .write_all(&bytes)
+                    .unwrap();
+            }
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let child = Command::new(env!("CARGO_BIN_EXE_chargeshare-ingestion"))
+            .args([
+                "serve",
+                runtime.to_str().unwrap(),
+                broker,
+                &address.to_string(),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut api = Self { child, address };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            assert!(
+                api.child.try_wait().unwrap().is_none(),
+                "owning runtime exited before readiness"
+            );
+            if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(50)).is_ok() {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(api.get("/api/poc/ready").0, 200);
+        if fresh {
+            api.wait_state("owner-a", "vehicle-a", "empty");
+        }
+        api
+    }
+
+    fn get(&self, path: &str) -> (u16, serde_json::Value) {
+        http_get(self.address, path)
+    }
+
+    fn wait_state(&self, owner: &str, vehicle: &str, state: &str) -> serde_json::Value {
+        let deadline = Instant::now() + Duration::from_secs(6);
+        loop {
+            let (status, result) = self.get(&format!(
+                "/api/poc/owners/{owner}/vehicles/{vehicle}/results"
+            ));
+            if status == 200 && result["state"] == state {
+                return result;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "scoped HTTP result never reached expected state"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn wait_energy(&self, vehicle: &str, energy: &str) -> serde_json::Value {
+        let owner = if vehicle == "vehicle-a" {
+            "owner-a"
+        } else {
+            "owner-b"
+        };
+        let deadline = Instant::now() + Duration::from_secs(6);
+        loop {
+            let (status, result) = self.get(&format!(
+                "/api/poc/owners/{owner}/vehicles/{vehicle}/results"
+            ));
+            if status == 200
+                && result["state"] == "held"
+                && result["observed_ac_kwh"] == energy
+                && matches!(
+                    result["sessions"][0]["evidence_state"].as_str(),
+                    Some("complete" | "complete_zero")
+                )
+            {
+                return result;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "scoped HTTP energy never reached expected result"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+impl Drop for RuntimeApi {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        self.child.wait().unwrap();
+    }
+}
+
+fn http_get(address: std::net::SocketAddr, path: &str) -> (u16, serde_json::Value) {
+    use std::io::Read;
+    let mut stream =
+        std::net::TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .write_all(format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").as_bytes())
+        .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let (headers, body) = response.split_once("\r\n\r\n").unwrap();
+    assert!(headers.contains("Cache-Control: no-store"));
+    let status = headers.split_whitespace().nth(1).unwrap().parse().unwrap();
+    (status, serde_json::from_str(body).unwrap())
+}
+
+#[test]
+fn owning_process_serves_committed_scopes_and_refuses_leakage_over_http() {
+    let (cluster, fixture) = mock_fixture();
+    let api = RuntimeApi::start(&fixture, &cluster.bootstrap_servers());
+    let empty = api.wait_state("owner-a", "vehicle-a", "empty");
+    assert_eq!(empty["sessions"], serde_json::json!([]));
+    publish(&cluster.bootstrap_servers(), &records());
+    for (owner, vehicle, energy) in [
+        ("owner-a", "vehicle-a", "0.500000"),
+        ("owner-b", "vehicle-b", "0.250000"),
+    ] {
+        let result = api.wait_energy(vehicle, energy);
+        assert_eq!(result["owner"], owner);
+        assert_eq!(result["vehicle"], vehicle);
+        assert_eq!(result["state"], "held");
+        assert_eq!(result["eligible_shared_charger_kwh"], "0.000000");
+        assert_eq!(result["sessions"].as_array().unwrap().len(), 1);
+        assert_eq!(result["sessions"][0]["vehicle"], vehicle);
+        assert_eq!(result["sessions"][0]["connection"], "connection-1");
+        assert_eq!(result["sessions"][0]["classification"], "Unconfirmed");
+        assert_eq!(
+            result["sessions"][0]["exclusion_reasons"],
+            serde_json::json!(["UnconfirmedCharger"])
+        );
+        assert!(
+            result["evidence_boundary"]
+                .as_str()
+                .unwrap()
+                .contains("physical accuracy unvalidated")
+        );
+        assert_eq!(
+            result,
+            api.get(&format!(
+                "/api/poc/owners/{owner}/vehicles/{vehicle}/results"
+            ))
+            .1
+        );
+        let text = result.to_string();
+        for forbidden in [
+            "BatteryLevel",
+            "vin",
+            "VehicleName",
+            "device-",
+            "offset",
+            "createdAt",
+            "price",
+            "owed",
+            "kafka:9092",
+            "sqlite3",
+        ] {
+            assert!(!text.contains(forbidden));
+        }
+    }
+    for path in [
+        "/api/poc/owners/owner-a/vehicles/vehicle-b/results",
+        "/api/poc/owners/unknown/vehicles/vehicle-a/results",
+    ] {
+        assert_eq!(
+            api.get(path),
+            (404, serde_json::json!({"error":"scope_refused"}))
+        );
+    }
+    assert_eq!(
+        api.get("/api/poc/owners/%00/vehicles/vehicle-a/results"),
+        (400, serde_json::json!({"error":"scope_refused"}))
+    );
+    assert_eq!(api.get("/api/demo").0, 404);
+    assert_eq!(api.get("/api/poc/results").0, 404);
+}
+
+#[test]
+fn concurrent_http_reads_during_ingestion_are_coherent_and_revision_tracks_visible_change() {
+    let (cluster, fixture) = mock_fixture();
+    let api = RuntimeApi::start(&fixture, &cluster.bootstrap_servers());
+    let input = records();
+    publish(&cluster.bootstrap_servers(), &input[..2]);
+    let held = api.wait_state("owner-a", "vehicle-a", "held");
+    assert_eq!(held["sessions"][0]["evidence_state"], "incomplete");
+    let address = api.address;
+    let readers: Vec<_> = (0..4)
+        .map(|_| {
+            std::thread::spawn(move || {
+                for _ in 0..12 {
+                    let (status, result) = http_get(
+                        address,
+                        "/api/poc/owners/owner-a/vehicles/vehicle-a/results",
+                    );
+                    assert_eq!(status, 200);
+                    assert_eq!(
+                        result["observed_ac_kwh"],
+                        result["sessions"][0]["observed_ac_kwh"]
+                    );
+                    assert_eq!(result["eligible_shared_charger_kwh"], "0.000000");
+                    assert_eq!(result["sessions"][0]["vehicle"], "vehicle-a");
+                }
+            })
+        })
+        .collect();
+    publish(&cluster.bootstrap_servers(), &input[2..]);
+    for reader in readers {
+        reader.join().unwrap();
+    }
+    let complete = api.wait_energy("vehicle-a", "0.500000");
+    assert_ne!(held["revision"], complete["revision"]);
+    publish(&cluster.bootstrap_servers(), &input);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(complete, api.wait_energy("vehicle-a", "0.500000"));
+    let mut conflict: serde_json::Value = serde_json::from_slice(&input[2].1).unwrap();
+    conflict["data"][3]["value"]["stringValue"] = "100.30".into();
+    publish(
+        &cluster.bootstrap_servers(),
+        &[(input[2].0.clone(), serde_json::to_vec(&conflict).unwrap())],
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let result = api
+            .get("/api/poc/owners/owner-a/vehicles/vehicle-a/results")
+            .1;
+        if result["sessions"][0]["quality_flags"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("ConflictingEvidence"))
+        {
+            assert_ne!(result["revision"], complete["revision"]);
+            assert_eq!(result["eligible_shared_charger_kwh"], "0.000000");
+            break;
+        }
+        assert!(Instant::now() < deadline);
+    }
+}
+
+#[test]
+fn complete_zero_evidence_is_distinct_from_empty_and_incomplete_http_results() {
+    let (cluster, fixture) = mock_fixture();
+    let api = RuntimeApi::start(&fixture, &cluster.bootstrap_servers());
+    let empty = api.wait_state("owner-a", "vehicle-a", "empty");
+    let mut input = records();
+    for (key, payload) in &mut input {
+        let mut record: serde_json::Value = serde_json::from_slice(payload).unwrap();
+        record["data"][3]["value"]["stringValue"] = if key == b"device-1" {
+            "100.00"
+        } else {
+            "200.00"
+        }
+        .into();
+        *payload = serde_json::to_vec(&record).unwrap();
+    }
+    publish(&cluster.bootstrap_servers(), &input);
+    let zero = api.wait_energy("vehicle-a", "0.000000");
+    assert_eq!(zero["sessions"][0]["evidence_state"], "complete_zero");
+    assert_eq!(zero["state"], "held");
+    assert_ne!(empty["revision"], zero["revision"]);
+}
+
+#[test]
+fn killed_owning_process_recovers_identical_http_results_and_sqlite_lock() {
+    let (cluster, fixture) = mock_fixture();
+    let api = RuntimeApi::start(&fixture, &cluster.bootstrap_servers());
+    publish(&cluster.bootstrap_servers(), &records());
+    let before = api.wait_energy("vehicle-a", "0.500000");
+    drop(api);
+    let api = RuntimeApi::start(&fixture, &cluster.bootstrap_servers());
+    assert_eq!(before, api.wait_energy("vehicle-a", "0.500000"));
+    publish(&cluster.bootstrap_servers(), &records());
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(before, api.wait_energy("vehicle-a", "0.500000"));
+}
+
+#[test]
+fn replaced_database_becomes_safe_unavailable_and_never_cached_results() {
+    let (cluster, fixture) = mock_fixture();
+    let api = RuntimeApi::start(&fixture, &cluster.bootstrap_servers());
+    publish(&cluster.bootstrap_servers(), &records());
+    api.wait_energy("vehicle-a", "0.500000");
+    fs::rename(
+        fixture.directory.join(".local-runtime/ingestion.sqlite3"),
+        fixture.directory.join("retained.sqlite3"),
+    )
+    .unwrap();
+    assert_eq!(
+        api.get("/api/poc/owners/owner-a/vehicles/vehicle-a/results"),
+        (503, serde_json::json!({"error":"results_unavailable"}))
+    );
+    assert_eq!(api.get("/api/poc/ready").0, 503);
+}
+
+#[test]
+fn broker_interruption_turns_http_results_unavailable_without_losing_evidence() {
+    let (cluster, fixture) = mock_fixture();
+    let api = RuntimeApi::start(&fixture, &cluster.bootstrap_servers());
+    publish(&cluster.bootstrap_servers(), &records());
+    let complete = api.wait_energy("vehicle-a", "0.500000");
+    cluster.broker_down(1).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let (status, result) = api.get("/api/poc/owners/owner-a/vehicles/vehicle-a/results");
+        if status == 503 {
+            assert_eq!(result, serde_json::json!({"error":"results_unavailable"}));
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    drop(api);
+    cluster.broker_up(1).unwrap();
+    let store = Store::open(
+        &fixture.directory.join(".local-runtime/ingestion.sqlite3"),
+        &fixture.manifest,
+        &fixture.source,
+    )
+    .unwrap();
+    let recovered = store
+        .results(
+            &OwnerId::new("owner-a").unwrap(),
+            &VehicleId::new("vehicle-a").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(serde_json::to_value(recovered).unwrap(), complete);
+}
+
+#[test]
+fn http_methods_invalid_identifiers_and_malformed_requests_fail_without_echoing_input() {
+    use std::io::Read;
+    let (cluster, fixture) = mock_fixture();
+    let api = RuntimeApi::start(&fixture, &cluster.bootstrap_servers());
+    for (request, status, reason) in [
+        (
+            "POST /api/poc/owners/owner-a/vehicles/vehicle-a/results HTTP/1.1\r\n\r\n",
+            "405",
+            "method_refused",
+        ),
+        (
+            "GET /api/poc/owners/fictional-rejected-text!invalid/vehicles/vehicle-a/results HTTP/1.1\r\n\r\n",
+            "400",
+            "scope_refused",
+        ),
+        ("fictional-rejected-text\r\n\r\n", "400", "invalid_request"),
+    ] {
+        let mut stream = std::net::TcpStream::connect(api.address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert_eq!(response.split_whitespace().nth(1).unwrap(), status);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(response.split_once("\r\n\r\n").unwrap().1)
+                .unwrap(),
+            serde_json::json!({"error":reason})
+        );
+        assert!(!response.contains("fictional-rejected-text"));
+    }
+}
+
+#[test]
+fn live_source_refusal_and_competing_owner_preserve_the_committed_http_snapshot() {
+    let (cluster, fixture) = mock_fixture();
+    let api = RuntimeApi::start(&fixture, &cluster.bootstrap_servers());
+    publish(&cluster.bootstrap_servers(), &records());
+    let complete = api.wait_energy("vehicle-a", "0.500000");
+    let runtime = fixture.directory.join(".local-runtime");
+    let output = Command::new(env!("CARGO_BIN_EXE_chargeshare-ingestion"))
+        .args([
+            "serve",
+            runtime.to_str().unwrap(),
+            &cluster.bootstrap_servers(),
+            "127.0.0.1:8788",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        output.stderr,
+        b"storage: another writer owns this runtime\n"
+    );
+    assert!(output.stdout.is_empty());
+    let mut changed = fixture.source.clone();
+    changed.epoch = "synthetic-different-source".to_owned();
+    fs::write(
+        runtime.join("source-epoch.json"),
+        serde_json::to_vec(&changed).unwrap(),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let (status, result) = api.get("/api/poc/owners/owner-a/vehicles/vehicle-a/results");
+        if status == 503 {
+            assert_eq!(result, serde_json::json!({"error":"results_unavailable"}));
+            break;
+        }
+        assert!(Instant::now() < deadline);
+    }
+    fs::write(
+        runtime.join("source-epoch.json"),
+        serde_json::to_vec(&fixture.source).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(api.get("/api/poc/ready").0, 503);
+    drop(api);
+    let store = Store::open(
+        &runtime.join("ingestion.sqlite3"),
+        &fixture.manifest,
+        &fixture.source,
+    )
+    .unwrap();
+    assert_eq!(store.positions().unwrap()[0].next_offset, 6);
+    assert_eq!(
+        serde_json::to_value(
+            store
+                .results(
+                    &OwnerId::new("owner-a").unwrap(),
+                    &VehicleId::new("vehicle-a").unwrap()
+                )
+                .unwrap()
+        )
+        .unwrap(),
+        complete
+    );
+}

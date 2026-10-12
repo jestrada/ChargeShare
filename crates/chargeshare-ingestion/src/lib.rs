@@ -32,3 +32,9 @@ pub use kafka::{
     ConsumeReport, KafkaConfig, RereadRange, RereadReport, consume_bounded,
     consume_bounded_observed, read_source_marker, reread_bounded,
 };
+
+mod results;
+mod viewing;
+
+pub use results::{ResultProvenance, ScopedResults, SessionResult};
+pub use viewing::serve_results;
