@@ -1,78 +1,132 @@
 # ChargeShare contributor guidance
 
-This is a public repository with an offline synthetic Rust ledger and pricing. Read README.md, SECURITY.md, the relevant GitHub issue and the applicable domain documentation before editing.
+This public repository contains only synthetic charging evidence and labeled
+sample rates. Before editing, read [README](README.md), [SECURITY](SECURITY.md),
+the owning GitHub issue and [architecture](docs/architecture.md).
 
-## Overall code design goal
+## Design and working rules
 
-Write self-documenting, agent-friendly code: expressive domain names, explicit types and boundaries, cohesive functions, a predictable module layout and limited hidden side effects. New code should follow the established simple patterns; introduce a different pattern only for a concrete approved need and explain the trade-off in repository documentation or review.
-
-Do not add comments to authored code, including Rust doc comments. Make intent clear through names, types, structure and tests, and keep rationale and contracts in repository documentation. If mandatory notices, generated conventions or safety/tool requirements conflict, preserve required content and ask for a decision as described in [the design guide](docs/code-design.md).
-
-## Working rules
-
-- Use `gh stack` for every repository change and pull request, following the stacked workflow below. Create or switch to a dedicated stack branch before editing, then commit and publish through that workflow. Do not commit or push directly to `main` unless the user explicitly authorizes an exception for the current change.
-- Keep domain logic and backend source in Rust. The user-authorized localhost preview uses React/TypeScript and shadcn in `apps/web`; Node.js/npm runs its build/dev tooling. Keep money calculations in the Rust core.
-- Read [docs/code-design.md](docs/code-design.md) before code or architecture changes. Keep `lib.rs` a small public facade, use cohesive modules and inward domain dependencies, and follow the guide's required decision/review workflow within the approved scope.
-- Keep changes inside this repository. Do not import private repositories, personal correspondence or live vehicle data.
-- Use synthetic vehicle examples and the explicitly labeled public sample tariff only. Never commit secrets, real VINs, home locations, bills, receipts, account identifiers or contact details.
-- Do not register a Tesla app, pair keys, authorize OAuth, deploy, incur costs, or add vehicle-control features without a separate explicit request.
-- Preserve the distinction between proposed behavior and implemented functionality. Keep unimplemented tasks unchecked and record acceptance evidence in the owning issue or PR. Keep affected architecture diagrams current in the same PR, following [the design guide](docs/code-design.md#keep-architecture-diagrams-current).
-- Give every PR a human-readable change summary in its owning GitHub issue and link directly to that summary from the PR. Explain what changed and why, before/after behavior, verification evidence and remaining limitations; keep it current as the PR changes. Follow the [review summary guidance](docs/agents/issue-tracker.md#human-readable-change-reviews).
-- Review documentation impact for every PR. Update affected files in `docs/` and other relevant guides in the same PR so they describe the delivered behavior. Update or add diagrams when architecture, dependencies, data flow or user flows change. Link the docs and diagrams from the issue summary; if either needs no change, state why. Video demos are optional and deferred, not a completion requirement.
-- Establish the problem, approved scope and observable acceptance criteria in the relevant issue before implementing new behavior. Use Wayfinder for large planning efforts with unresolved decisions; small changes do not need a map.
-- Run the applicable checks described in docs/testing.md and the security checks described in SECURITY.md before a commit. Review the exact staged diff and paths as well as scanner output. Do not bypass failing hooks.
-- Treat every energy total as a measured or estimated quantity with a stated boundary and quality. Never advertise utility-meter accuracy without evidence.
+- Read and follow [code design](docs/code-design.md) during the design phase,
+  before writing code. Use expressive domain names, explicit types, cohesive
+  functions, small public facades and inward dependencies. Introduce another
+  pattern only for a concrete approved need, explaining the trade-off in
+  `docs/architecture.md`, `docs/code-design.md` or the review.
+- Do not add comments to authored code, including Rust doc comments. Express
+  intent through names, types, structure and tests; put enduring rationale and
+  contracts in `docs/architecture.md` or `docs/code-design.md`. Preserve mandatory
+  notices/generated requirements and surface conflicts as the design guide requires.
+- Keep backend/domain logic and money calculations in Rust. The authorized
+  `apps/web` preview uses React/TypeScript, shadcn and Node/npm tooling.
+- Establish the problem, approved scope and observable acceptance criteria in
+  the owning issue before implementing new behavior. Keep proposals distinct
+  from implementation and unimplemented tasks unchecked.
+- Keep changes inside this repository. Never import private code, correspondence,
+  live vehicle data, secrets, real VINs/locations, bills or account/contact details.
+  Use fictional vehicles and explicitly labeled public sample tariffs only.
+- Registration, key pairing, OAuth, deployment, spending and vehicle-control
+  features need a separate explicit request.
+- Every energy total must state its measurement/estimate boundary and quality;
+  never claim utility-meter accuracy without evidence.
+- For each PR, update `docs/architecture.md` and its Mermaid diagram only when
+  components, data flow, boundaries or architectural decisions actually change.
+  Otherwise state **"no architecture change"** in the issue summary. Fix affected
+  README/contributor guidance when needed; do not create new documentation files
+  without Joseph's approval. Repository-local skills follow this restriction too.
+- Test evidence and run results go only in the owning GitHub issue or PR, never
+  repository documentation. Keep architecture/design prose about enduring contracts.
+- Run applicable [README checks](README.md#tests) and [security checks](SECURITY.md#before-every-publication)
+  before committing. Review exact staged paths/diff and scanner output; keep hooks
+  enabled and never bypass failures.
+- Use `gh stack` for every repository change/PR, following the workflow below.
+  Create or switch to a dedicated stack branch before editing; do not commit or
+  push to `main` without an explicit exception for the current change.
 
 ## Branches and stacked pull requests
 
-All agents and repository skills use the official
-[`gh stack` extension](https://github.com/github/gh-stack) for branch and PR
-management. Independent work starts its own stack rooted at `main`; small work
-can use a single branch. Dependent increments extend an existing stack, with
-each PR targeting the branch immediately below it and the bottom PR targeting
-`main`.
+All agents and skills use the official [gh stack extension](https://github.com/github/gh-stack).
+Independent work starts at current `main`; dependent increments extend a stack,
+with each PR targeting the branch below and the bottom PR targeting `main`.
 
-- If the extension is missing, install it with `gh extension install github/gh-stack` and verify `gh stack --version`. Read the relevant command's `--help` before using unfamiliar flags. Report a tooling blocker instead of silently replacing the stack workflow with manual PR management.
-- Before editing, fetch current remote refs and inspect open PRs with `gh pr list --repo jestrada/ChargeShare`. Inspect a tracked stack with `gh stack view --json`; continue existing work with `gh stack checkout <PR-or-branch>`. Adopt an existing manual PR chain with `gh stack link <bottom-PR> <next-PR> ...`, then check it out through `gh stack`.
-- Start independent work from current `main` with `gh stack init --base main <branch>`. Add dependent work from the existing stack's top with `gh stack add <branch>`. Keep each layer cohesive and independently reviewable.
-- Stage only reviewed paths and commit normally after the applicable checks and security scans. Keep hooks enabled; avoid the stack command's automatic stage-all shortcuts.
-- After changing a lower layer or updating `main`, restack affected descendants with `gh stack rebase`. Resolve conflicts in the reported worktree, stage the reviewed resolutions and use `gh stack rebase --continue`; use `gh stack rebase --abort` to restore the stack when necessary.
-- Publish new PRs with `gh stack submit --auto`, which creates drafts. Update existing branches with `gh stack push`; use `gh stack submit --auto` when PR bases or stack membership also need updating. These commands use explicit lease protection for rewritten history. Never use unconditional force pushes or bypass a rejected lease.
-- After a parent PR merges, reconcile the remaining stack with `gh stack sync`. Preserve existing implementation and acceptance status, inspect every affected diff/base, and rerun applicable checks on the resulting commits.
-- Verify every affected remote head, PR base and terminal hosted check before reporting completion. Stack pushes can partially succeed; resolve any rejected branch and verify the whole stack. Keep stack metadata local, and pass this workflow to delegated agents.
+- If missing, install with `gh extension install github/gh-stack`; verify
+  `gh stack --version`. Read command help before unfamiliar flags. Report blockers
+  instead of silently substituting manual branch/PR management.
+- Before editing, fetch remote refs and inspect `gh pr list --repo jestrada/ChargeShare`.
+  Inspect tracked stacks with `gh stack view --json`; continue with
+  `gh stack checkout <PR-or-branch>`. Adopt manual chains with
+  `gh stack link <bottom-PR> <next-PR> ...`, then check out through the tool.
+- Start independent work with `gh stack init --base main <branch>` or dependent
+  work from the stack top with `gh stack add <branch>`. Keep layers cohesive.
+- Stage reviewed paths and commit normally after checks. Avoid automatic stage-all.
+- After changing a parent or updating `main`, run `gh stack rebase`. Resolve in
+  the reported worktree, stage reviewed resolutions and use `gh stack rebase --continue`;
+  use `gh stack rebase --abort` when needed.
+- Publish drafts with `gh stack submit --auto`; update existing branches with
+  `gh stack push`. Use submit when bases/membership change. Respect explicit lease
+  protection: resolve rejected leases, never use unconditional force pushes.
+- After a parent merges, run `gh stack sync`, preserving implementation/acceptance
+  status; inspect affected diffs/bases and rerun applicable checks.
+- Verify every affected remote head, PR base and terminal hosted check before
+  reporting completion, including partial-push recovery. Keep metadata local and
+  pass this workflow to delegated agents.
 
 ## Issue tracking
 
-All agents and skills working in this repository use GitHub Issues in
-`jestrada/ChargeShare` through `gh` whenever issue tracking is needed. Read
-[the tracker conventions](docs/agents/issue-tracker.md) before tracker operations,
-and pass the repository and guide path to delegated agents. This tracker is
-already configured; generic skill setup prompts and local-Markdown tracker
-fallbacks do not apply here. Keep current scope, implementation checklists and
-acceptance evidence in the owning issues and PRs. Keep enduring domain contracts
-and architecture decisions in repository documentation, linking rather than
-duplicating them.
+All agents and skills use GitHub Issues in `jestrada/ChargeShare` through `gh`.
+Run from this repository or supply `--repo jestrada/ChargeShare`. This tracker is
+configured: no generic setup prompts, separate trackers or local-Markdown fallback.
+Reuse relevant issues; if access fails, report the blocker and retain a draft.
+Pass the repository and this guide to delegated agents.
 
-Specs for new work are published as GitHub issues through the repository-local
-`to-spec` skill, following the tracker conventions.
+Read issues with `gh issue view <number> --json number,title,body,comments,url`.
+Use reviewed files with `--body-file` for multiline issue/PR bodies or comments.
+Keep current scope, implementation checklists and acceptance evidence in issues
+and PRs; link architecture/design contracts rather than copying them. Close
+implementation issues only after observable acceptance is verified.
 
-OpenSpec is paused. Do not invoke its workflow or require proposal, validation,
-sync or archive steps. Do not create new OpenSpec change scaffolds, proposals,
-designs, specs, task lists or archive copies, including through delegated agents
-or automatic skill suggestions. Existing `openspec/` files are retained as reference and
-historical evidence; their instructions do not govern current work. Preserve
-their recorded status and applicable domain requirements without treating
-unimplemented proposals as delivered. Resume OpenSpec only if the user explicitly
-requests it.
+### Human-readable change reviews
 
-## Wayfinder trial
+Every PR has a current summary in its owning issue body or an identified comment.
+The PR links directly to that summary, and the summary links back to the PR.
+Explain the problem, what changed and why, before/after behavior where useful,
+scope, checks/results, review steps, exact-head CI/acceptance evidence, unrun
+checks, limitations and remaining work. Link affected architecture/diagram and
+guide changes, or state "no architecture change" and explain any other omitted
+guide update. Distinguish implemented behavior from proposals. Each PR sharing
+an issue gets its own summary/evidence. Refresh after material changes and before
+final review; earlier runs do not verify later commits. Videos are optional and
+deferred. All review artifacts must respect SECURITY.md.
 
-User-invoked Wayfinder sessions use the repository-local Matt Pocock skills in
-`.agents/skills/`. Track their maps and decision tickets using the issue-tracking
-conventions above.
-Wayfinder is approved for exploratory planning. New behavior still needs an
-approved implementation scope and the applicable domain contracts and checks.
+### Wayfinding operations
 
-Read the existing architecture, pricing and preview documentation for domain
-language. If `GLOSSARY.md` or relevant records in `docs/adr/` exist, read those too;
-create them only when a resolved term or enduring decision needs a record.
+User-invoked Wayfinder uses `.agents/skills/` for exploratory planning. Agree on
+the destination first; small work needs no map. Implementation issues stay
+separate from decision tickets and need approved scope and acceptance criteria.
+
+- A `wayfinder:map` issue contains Destination, Notes, Decisions so far, Not yet
+  specified and Out of scope. Link implementation issues/PRs from Notes.
+- Decision children use `wayfinder:research`, `wayfinder:prototype`,
+  `wayfinder:grilling` or `wayfinder:task`. Create tickets before cross-references.
+  Use `gh issue create --parent <map-number>` or
+  `gh issue edit <map-number> --add-sub-issue <child-number>`; if unsupported,
+  use a map task list plus `Part of #<map-number>` in each child.
+- Add blocking with `gh issue edit <child-number> --add-blocked-by <blocker-number>`;
+  fallback is `Blocked by: #<number>` with blocker-state inspection.
+- Query children with `gh api --paginate repos/jestrada/ChargeShare/issues/<map-number>/sub_issues`.
+  The frontier is open, unassigned children with no open blockers; inspect
+  `issue_dependencies_summary.blocked_by` when available. Claim with
+  `gh issue edit <number> --add-assignee @me` before work.
+- Resolve by commenting the answer, closing the ticket and adding a linked
+  one-line map pointer. Follow the skill's one-decision-per-session limit,
+  except research tickets. Planning resolution is not delivery evidence.
+
+Publish new specs through the repository-local `to-spec` skill only when requested.
+Use the existing `enhancement` triage label instead of `ready-for-agent`; do not
+create that label or apply a different triage label.
+
+Do not use OpenSpec. It was removed; do not add `openspec/` files, proposals or
+validation/sync/archive steps, including through skills or delegation.
+
+Bundled Matt Pocock skills come from the public
+[pinned source](https://github.com/mattpocock/skills/tree/49dd158d1076134a641b33efb035946536778336);
+installation used `gh api`. Review deliberate upstream updates with the skill
+files and this provenance. Preserve the [MIT notice](docs/licenses/matt-pocock-skills-MIT.txt).

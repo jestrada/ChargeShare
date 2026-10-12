@@ -1,199 +1,88 @@
 # ChargeShare
 
-A private charging ledger for sharing a home charger, built in Rust.
+A Rust charging ledger for sharing a home charger. The local proof of concept
+sends fictional telemetry through the official receiver and Kafka into SQLite,
+then shows scoped sessions in a React/shadcn dashboard. An independent fixture
+preview demonstrates exact offline pricing with labeled sample rates. Everything
+is synthetic; no live vehicle or account is connected.
 
-## Start here
+## Quickstart
 
-Spec 1 implements an offline, in-memory synthetic multi-vehicle ledger with
-separate observed AC energy and conservative shared-charger eligibility,
-deterministic replay and explicit uncertainty. Nothing is connected to Tesla.
-Owner/vehicle scope checks are not authentication or approved cross-owner sharing;
-physical measurement accuracy is unvalidated. The additive offline pricing milestone
-quotes eligible counter intervals using exact versioned rates, with explicit
-holds and exact priced subtotals. Real utility calendars, bills, monthly statements,
-live collection and deployment remain future work.
-An outer ingestion crate retains fictional receiver-shaped evidence and scoped
-replay in local SQLite. Issue #21 adds one owning ingestion/result process and
-an independent persisted browser mode; actual receiver-backed viewing acceptance
-and browser evidence remain unverified in this sandbox.
-A localhost React/shadcn dashboard presents fictional battery readings and real
-core-calculated sample costs through a loopback Rust API. Its committed dated table
-contains a September public tariff sample and a separately labeled winter estimate.
-No account-specific tariff or real charging evidence is loaded.
-
-The guides in `docs/` are:
-
-- [Architecture and domain contract](docs/architecture.md): implemented behavior,
-  system diagram, measurement limits and proposed integration boundaries
-- [Code design](docs/code-design.md): self-documenting, agent-friendly code,
-  cohesive modules, inward dependencies and the decision/review workflow
-- [Testing](docs/testing.md): commands, scenario coverage, verification evidence
-  and later receiver/real-car validation gates
-- [Offline pricing](docs/pricing.md): exact amounts, rate windows, scoped quotes
-  and the runnable fictional example
-- [Local preview](docs/local-preview.md): launch, interactions and demo limits
-- [Local development](docs/local-development.md): pinned Nix/Tilt synthetic receiver-to-Kafka harness and isolated lifecycle
-- [POC plan](docs/plan.md): three local integration stages, then Cloudflare architecture and Terraform deployment
-- [Durable synthetic ingestion](docs/durable-ingestion.md): normalization, local SQLite recovery, owned source epochs, bounded reread and the shared acceptance command; #27 predecessor evidence and #21 viewing verification limits
-- [Persisted viewing](docs/persisted-viewing.md): scoped 5174/8788 API/dashboard, bounded lifecycle and exact supervisor acceptance/empty/unavailable checklist
-- [Issue tracking](docs/agents/issue-tracker.md): Wayfinder decisions and implementation work through GitHub Issues
-
-Current planning and implementation tracking use GitHub Issues through `gh`.
-The [Wayfinder map](https://github.com/jestrada/ChargeShare/issues/9) charts the
-remaining synthetic POC. OpenSpec is paused; the files linked below remain
-reference contracts and historical evidence, with their original completion
-status preserved. New work does not require OpenSpec artifacts or commands.
-
-[Spec 1](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md)
-was implemented, verified and archived on 2026-10-03. Its seven accepted
-requirements are the [vehicle-ledger contract](openspec/specs/vehicle-ledger/spec.md).
-The merged pricing and dashboard changes are archived; their canonical contracts
-are [session pricing](openspec/specs/session-pricing/spec.md) and
-[local dashboard](openspec/specs/local-dashboard/spec.md). The completed follow-up is archived as
-[dated sample rates](openspec/changes/archive/2026-10-03-dated-rate-profiles/proposal.md).
-The archived planning artifacts retain their original review context. The earlier
-broad single-vehicle change was deleted, not marked complete.
-
-Stage 1's synthetic receiver-to-Kafka harness was implemented, verified on fresh
-Ubuntu 24.04 x86_64 and [archived](openspec/changes/archive/2026-10-10-local-nix-tilt-kafka-harness/proposal.md)
-on 2026-10-10. Its canonical contracts are [local development](openspec/specs/local-development/spec.md)
-and [synthetic telemetry verification](openspec/specs/synthetic-telemetry-harness/spec.md).
-[Testing](docs/testing.md) records transport, retention, reset, cleanup and warm
-cache evidence. The #21 persisted mode connects committed ingestion to a separate
-scoped view; the fixture dashboard remains independent.
-
-## Develop
-
-The Cargo workspace starts at `crates/chargeshare-core/`. There is no executable
-production application or Tesla integration to launch. A fictional pricing example
-runs with `cargo run --example offline_pricing --locked`. The core and preview API
-are Rust; the user-authorized frontend uses React/TypeScript in `apps/web`.
-
-To open the synthetic dashboard locally:
-
-```sh
-npm --prefix apps/web ci
-npm run preview:dev
-```
-
-Visit **http://127.0.0.1:5173**. Stop both preview processes with Ctrl-C.
-See [local preview](docs/local-preview.md) for prerequisites and boundaries.
-
-On supported Linux x86_64 with permitted Docker and Nix, start persisted viewing:
+Use Linux x86_64 with **Nix** (`nix-command` and `flakes` enabled) and a running
+local **Docker** daemon your user can access. Nix supplies the pinned development
+tools; it does not install or start Docker. Remote Docker contexts are refused.
+Run from the repository root; first startup can take several minutes.
 
 ```sh
 nix develop --no-update-lock-file -c bash scripts/dev/poc.sh up
+```
+
+Open **http://127.0.0.1:5174**. Startup sends no fixtures, so a fresh dataset is
+empty. Populate and check the receiver → Kafka → SQLite → HTTP path:
+
+```sh
 nix develop --no-update-lock-file -c bash scripts/dev/poc.sh check
 ```
 
-Open **http://127.0.0.1:5174/?owner=owner-a&vehicle=vehicle-a** or the B scope
-`/?owner=owner-b&vehicle=vehicle-b`. Startup sends no fixtures; the finite check
-requires fresh receiver output, committed SQLite and actual scoped HTTP.
-[The reviewer checklist](docs/persisted-viewing.md#supervisor-acceptance) covers
-acceptance, restart/down/reset, empty/unavailable states and required manual
-screenshots. Fixture 5173/8787 remains independent. Persisted viewing displays
-observed AC, Unconfirmed and held eligibility, with no cost or battery fields.
+Choose `owner-a` / `vehicle-a` or `owner-b` / `vehicle-b` in the dashboard. The
+complete sample has 0.500000 / 0.250000 observed AC kWh; sessions currently stay
+`Unconfirmed` with zero eligible energy. Automatic location classification is
+planned in [#22](https://github.com/jestrada/ChargeShare/issues/22).
 
-Prerequisites: Rust 1.99.0 through rustup with rustfmt/Clippy, a C linker, Node.js
-24 or newer, npm, Git, Bash, make, curl, tar and SHA-256 tooling. The toolchain is pinned
-in `rust-toolchain.toml`; `Cargo.lock` is committed and the core has no runtime
-dependencies.
+Restart or stop while preserving evidence:
 
 ```sh
-bash scripts/security/install-gitleaks.sh
-bash scripts/security/install-hooks.sh
-node scripts/security/test-guards.mjs
+nix develop --no-update-lock-file -c bash scripts/dev/poc.sh restart
+nix develop --no-update-lock-file -c bash scripts/dev/poc.sh down
+```
+
+After stopping, explicitly discard only this checkout's synthetic runtime and
+broker volume (the next `up` creates an empty dataset):
+
+```sh
+nix develop --no-update-lock-file -c bash scripts/dev/poc.sh reset --confirm-synthetic-reset
+```
+
+Without the confirmation flag, `reset` lists its scope and refuses deletion.
+The independent fixture preview is at http://127.0.0.1:5173 while the stack runs.
+
+## Tests
+
+Enter the pinned shell, then run the applicable checks:
+
+```sh
+nix develop --no-update-lock-file
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 bash scripts/testing/offline-suite.sh
 bash scripts/testing/ingestion-suite.sh
 python3 scripts/testing/test_ingestion_guard.py
+python3 -m unittest discover -s scripts/dev -p 'test_*.py'
+npm --prefix apps/web ci
+npm --prefix apps/web test
+npm run preview:build
+npm --prefix apps/web run build:persisted
+node scripts/security/check-paths.mjs
 ```
 
-The suite runs complete `cargo test --workspace --locked` and retains synthetic
-output under ignored `target/spec1-test-results/`. See [testing](docs/testing.md)
-for coverage and CI evidence. Read [SECURITY.md](SECURITY.md) before committing;
-a fresh clone does not activate hooks automatically. Gitleaks 8.30.1 is downloaded
-from its official release and checksum-verified by the installer.
+Both Rust suite wrappers run `cargo test --workspace --locked` and guard against
+missing or filtered acceptance suites. For full receiver/recovery/viewing
+acceptance, use a fresh, stopped runtime with no retained state:
 
-The npm package's `private: true` prevents npm publication, not GitHub visibility.
-`.env.example` contains inert placeholders;
-copying it neither creates credentials nor authorizes live operation.
+```sh
+nix develop --no-update-lock-file -c bash scripts/dev/acceptance.sh all
+```
 
-## Change and publication workflow
+CI runs [repository checks](.github/workflows/security.yml),
+[receiver transport](.github/workflows/telemetry-integration.yml) and
+[ingestion/viewing acceptance](.github/workflows/ingestion-acceptance.yml).
+Read [SECURITY.md](SECURITY.md) for scanner/hook setup and publication checks;
+record run results in the owning GitHub issue or PR.
 
-1. Read [AGENTS.md](AGENTS.md), the guides and the relevant change's artifacts.
-   The accepted [main contract](openspec/specs/vehicle-ledger/spec.md) and archived
-   Spec 1's [proposal](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/proposal.md),
-   [design](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/design.md),
-   [scenarios](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/specs/vehicle-ledger/spec.md)
-   and [tasks](openspec/changes/archive/2026-10-03-offline-multi-vehicle-ledger/tasks.md)
-   retain the original review context.
-2. Record the problem, approved scope and observable acceptance criteria in the
-   owning GitHub issue. Use Wayfinder when a large effort needs decisions resolved;
-   keep implementation checklists and evidence in issues and PRs, and enduring
-   contracts in repository documentation. Existing approvals carry forward; new
-   behavior needs user approval. Follow [the tracker conventions](docs/agents/issue-tracker.md).
-3. Run all applicable tests and [publication safeguards](SECURITY.md#before-every-publication).
-   Stage only intended files and review the complete staged diff and commit author
-   metadata. Stop on scanner findings or unexpected files; never bypass hooks.
-4. Use the [stacked PR workflow](AGENTS.md#branches-and-stacked-pull-requests)
-   for every change. Publish new PRs with `gh stack submit --auto` and update
-   existing branches with `gh stack push`. Restack after parent changes with
-   `gh stack rebase`; publish rewritten branches through the tool's explicit
-   lease protection. If a lease is rejected, resolve the remote changes and
-   repeat applicable checks before retrying. Never use unconditional force pushes.
-5. Verify the exact remote commit and terminal hosted checks before claiming
-   completion. Close implementation issues only after their acceptance is verified. Passing checks
-   do not authorize merging, deployment, Tesla registration, OAuth/key pairing,
-   credential creation, vehicle access or spending.
+## Documentation
 
-## Licensing and tooling provenance
+- [Architecture](docs/architecture.md): components, data flow, ports, domain contracts and decisions.
+- [Code design](docs/code-design.md): design-phase guidance for cohesive Rust modules and inward dependencies.
 
-ChargeShare's original source code and documentation are licensed under the
-[MIT License](LICENSE), copyright 2026 Joseph Estrada and contributors.
-Third-party code, generated components, fonts and tools retain their upstream
-licenses and copyright notices; the project MIT license does not replace them.
-Cargo workspace packages and the private npm packages declare `MIT` for
-project-owned code. This does not change their publication settings.
-
-OpenSpec 1.14.0 previously supplied the planning workflow and generated skills.
-Its CLI dependency, npm scripts, generated skills and validation job are removed
-while the workflow is paused. Retained planning artifacts and the
-[upstream MIT notice](docs/licenses/openspec-MIT.txt) preserve their history and
-attribution; see [the reference directory](openspec/README.md).
-
-The initial generation command was
-`OPENSPEC_TELEMETRY=0 npx @fission-ai/openspec@1.14.0 init --tools codex --profile core --no-animation`.
-This is historical provenance; do not rerun it unless OpenSpec is explicitly
-re-enabled. Gitleaks is MIT-licensed;
-its executable is not committed. Its pinned version, official source and digests
-are in [the installer](scripts/security/install-gitleaks.sh). No private project
-code, personal correspondence, live vehicle payloads or proprietary integration
-implementation was copied into this repository.
-
-The shadcn CLI 4.21.1 generated the Base UI `base-nova` button, select, tabs,
-tooltip, dialog, switch and table sources and utility/config scaffolding in `apps/web`. Their
-[upstream MIT notice](docs/licenses/shadcn-ui-MIT.txt) is retained. The CLI is not
-a runtime dependency. Component dependencies and tooling are pinned in the
-frontend package and lockfile. The locally bundled Geist font from
-`@fontsource-variable/geist` 5.3.0 remains under SIL Open Font License 1.1;
-its exact packaged [copyright and OFL notice](docs/licenses/geist-OFL-1.1.txt)
-is retained. Vite includes the project MIT, shadcn MIT and Geist OFL notices
-from [`apps/web/public/licenses/`](apps/web/public/licenses/) in frontend builds.
-
-The local synthetic harness uses the official Tesla Fleet Telemetry receiver
-and protocol helpers at revision
-`bd076fe1494841707528449560c4a19d0d426da4`. Those upstream materials remain under
-[Apache License 2.0](docs/licenses/fleet-telemetry-Apache-2.0.txt), with their
-original notices preserved. ChargeShare's MIT license applies only to the
-project-owned harness and does not relicense Tesla's receiver or helpers.
-
-The receiver's external native build inputs also retain their own terms:
-[libsodium 1.0.19](https://github.com/jedisct1/libsodium/blob/1.0.19-RELEASE/LICENSE)
-uses ISC, and
-[libzmq 4.3.4](https://github.com/zeromq/libzmq/blob/v4.3.4/README.md#license)
-uses LGPL 3.0 or later with the upstream independent-module linking exception.
-Retain their supplied license and copyright files in receiver build outputs.
-Other dependencies and base images retain their upstream notices; this section
-records the named inputs rather than a complete distribution-license audit.
+Contributors follow [AGENTS.md](AGENTS.md). Original code and documentation are
+[MIT licensed](LICENSE); [upstream notices](docs/licenses/) remain applicable.
