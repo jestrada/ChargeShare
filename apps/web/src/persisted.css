@@ -1,0 +1,29 @@
+.persisted-shell { max-width: 1040px; display: grid; gap: 24px; }
+.persisted-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.persisted-label { color: var(--review); margin-bottom: 8px; }
+.persisted-panel { padding: 32px; display: grid; gap: 16px; min-width: 0; }
+.persisted-panel h2 { font-size: 22px; }
+.persisted-scopes { display: flex; flex-wrap: wrap; gap: 12px; }
+.persisted-scope strong { font-weight: 400; }
+.persisted-energy { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding: 16px 0; }
+.persisted-energy dt { color: var(--muted-foreground); margin-bottom: 8px; }
+.persisted-energy dd { font-size: 30px; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
+.persisted-energy dd span { font-size: 16px; letter-spacing: normal; }
+.persisted-session { border-top: 1px solid var(--border); }
+.persisted-session summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 24px 0; cursor: pointer; min-height: 48px; }
+.persisted-session summary > :last-child { color: var(--muted-foreground); }
+.persisted-session summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
+.persisted-detail { display: grid; gap: 12px; padding-bottom: 24px; }
+.persisted-provenance { display: grid; gap: 12px; border-top: 1px solid var(--border); padding-top: 16px; }
+.persisted-provenance div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 16px; }
+.persisted-provenance dt { color: var(--muted-foreground); }
+.persisted-provenance dd, .persisted-revision, .persisted-scope { overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .persisted-heading { flex-wrap: wrap; }
+  .persisted-panel { padding: 24px; }
+  .persisted-scopes { display: grid; }
+  .persisted-scopes .control { min-height: 44px; }
+  .persisted-energy, .persisted-session summary, .persisted-provenance div { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .persisted-energy { gap: 24px; }
+  .persisted-energy dd { font-size: 26px; }
+}
