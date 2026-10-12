@@ -31,7 +31,8 @@ the owning GitHub issue and [architecture](docs/architecture.md).
   components, data flow, boundaries or architectural decisions actually change.
   Otherwise state **"no architecture change"** in the issue summary. Fix affected
   README/contributor guidance when needed; do not create new documentation files
-  without Joseph's approval. Repository-local skills follow this restriction too.
+  without Joseph's approval. [`docs/workflow.md`](docs/workflow.md) is the one
+  approved process doc beyond architecture and code design. Repository-local skills follow this restriction too.
 - Test evidence and run results go only in the owning GitHub issue or PR, never
   repository documentation. Keep architecture/design prose about enduring contracts.
 - Run applicable [README checks](README.md#tests) and [security checks](SECURITY.md#before-every-publication)

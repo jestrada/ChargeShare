@@ -83,6 +83,7 @@ record run results in the owning GitHub issue or PR.
 
 - [Architecture](docs/architecture.md): components, data flow, ports, domain contracts and decisions.
 - [Code design](docs/code-design.md): design-phase guidance for cohesive Rust modules and inward dependencies.
+- [Workflow](docs/workflow.md): how each feature goes from issue to merged PR.
 
 Contributors follow [AGENTS.md](AGENTS.md). Original code and documentation are
 [MIT licensed](LICENSE); [upstream notices](docs/licenses/) remain applicable.
