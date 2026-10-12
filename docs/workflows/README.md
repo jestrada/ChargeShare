@@ -43,16 +43,31 @@ documentation updates; the PR's hosted checks retain that final evidence.
 
 ## Durable ingestion gate for issue #27
 
-The dedicated Ubuntu 24.04 ingestion gate is staged at
-[ci-27-tmp/ingestion-acceptance.yml](../../ci-27-tmp/ingestion-acceptance.yml).
-The current publishing token lacks workflow scope; the maintainer must move it
-into `.github/workflows/` before activation. It invokes the same bounded
-`bash scripts/dev/acceptance.sh all` command used locally through Tilt.
+The dedicated Ubuntu 24.04 ingestion workflow is present at
+[ingestion-acceptance.yml](../../.github/workflows/ingestion-acceptance.yml).
+It invokes the same bounded `bash scripts/dev/acceptance.sh all` used locally
+through Tilt. The shared command now retains every ingestion phase and adds #21
+viewing in a fresh epoch. No existing workflow file changed in #21.
 
-Actual receiver-backed acceptance and decoded golden capture remain unverified
-in the implementation sandbox. Activate separate `setup`, `assertion` and
-`timeout` failure-proof dispatches, then a restored `none` run. Each deliberate
-failure must fail the job and complete owned cleanup; the restored run must pass.
-Only allowlisted summaries and versions are uploaded. See the
-[handoff](../../ci-27-tmp/README.md) and
-[verification limits](../testing.md#issue-27-local-verification).
+Earlier #27 activation notes requested hosted deliberate failures. For the
+current viewing acceptance Joseph's decision 4 allows local setup/assertion/timeout
+runs followed by a restored local pass; a hosted deliberately failing viewing
+run is not required. Each failure must reach its named stage and clean up owned
+resources. Full receiver-backed acceptance and current hosted evidence are not
+claimed by this sandbox. Only allowlisted summaries and versions are uploaded.
+See [verification limits](../testing.md#issue-27-local-verification) and the
+[current supervisor checklist](../persisted-viewing.md#supervisor-acceptance).
+
+## Issue #21 clean viewing gate
+
+The complete new workflow is inactive at
+[ci-21-tmp/viewing-acceptance.yml](../../ci-21-tmp/viewing-acceptance.yml), with
+[exact activation instructions](../../ci-21-tmp/README.md). Existing workflows
+were not edited because the implementation token lacks workflow scope. The new
+fresh Linux gate extends the shared acceptance through the owning runtime and
+actual scoped HTTP, and verifies the dedicated persisted dashboard entry.
+Joseph's decision 4 accepts local setup/assertion/timeout failure runs followed
+by a restored local pass; no hosted deliberately failing viewing run is required.
+The clean hosted gate and manual desktop/mobile evidence remain required.
+[The supervisor checklist](../persisted-viewing.md#supervisor-acceptance) provides
+exact commands, expected output, URLs and evidence/publication limits.

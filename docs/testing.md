@@ -3,8 +3,10 @@
 Spec 1 has been approved for implementation and now has an offline Rust suite.
 The verified receiver-to-Kafka harness is described in [local development](local-development.md).
 The [stage-2 ingestion acceptance](https://github.com/jestrada/ChargeShare/issues/27)
-has an implemented driver and staged dedicated gate; actual receiver-backed acceptance
-remains pending. Persisted results/API/dashboard reads remain stage 3.
+is closed and records local acceptance on `40d97de` and hosted acceptance on
+`1d0d118`; this is inherited issue evidence, not a #21 rerun. Issue #21 adds
+persisted results/API/dashboard reads; full receiver-backed viewing acceptance
+remains unverified in this sandbox.
 
 Offline session pricing adds 15 acceptance tests in
 `crates/chargeshare-core/tests/offline_pricing.rs` and five unit tests for money
@@ -13,6 +15,81 @@ unchanged. The [pricing contract](pricing.md) describes the implemented scope.
 The preview adds twelve Rust route/fixture/rate-table tests, for 51 baseline tests.
 Its React frontend has a TypeScript/production-build check and local browser
 verification described in [local preview](local-preview.md).
+
+## Issue #21 persisted viewing verification
+
+The [persisted-viewing contract and supervisor checklist](persisted-viewing.md)
+provide exact lifecycle, full acceptance, three local deliberate-failure runs,
+restored pass, both URLs and empty/unavailable reproduction. The implementation
+extends `scripts/dev/acceptance.sh all` after preserving every #27 phase. Its
+additive fresh-epoch phase uses the long-lived owner, actual scoped HTTP and the
+separate persisted frontend entry; focused mocks/builds cannot substitute for it.
+No acceptance boxes or historical OpenSpec tasks are marked complete here.
+
+Local checks on 2026-10-11 in this sandbox:
+
+- Pinned Rust 1.99.0 formatting and warnings-denied workspace Clippy passed.
+- Complete workspace tests, offline suite and focused ingestion suite passed:
+  **143 Rust tests**, zero failed/ignored/filtered. Storage/process tests used a
+  disposable Bubblewrap user/filesystem namespace with a private trusted root and
+  the unchanged repository mounted at its real path. The original root has an
+  unmapped UID and was correctly refused; no filesystem guard was weakened.
+- Eight additive tests launch the actual owning Rust executable and query HTTP
+  using a local mocked broker: scoped isolation, safe errors/methods, coherent
+  concurrent reads, semantic changes and stable duplicates, complete zero versus
+  empty/incomplete, actual owner kill/restart, replaced storage, broker interruption,
+  competing owner refusal and live source mismatch. Existing #27 tests still prove
+  actual before/after-commit and commit-window child kills, reread and refusals.
+  Mocked broker tests are supporting evidence, not official receiver acceptance.
+- **110 Python helper tests** passed, including lifecycle contention, active/unowned
+  reset refusal, ownership, HTTP assertions, cleanup and the existing exact
+  setup/assertion/timeout proof reachability. Four ingestion wrapper failure-guard
+  tests passed.
+- Frontend dependency install, **four frontend contract tests**, TypeScript,
+  fixture build and persisted build passed using pinned Node 24.21.0. Direct
+  loopback Vite checks verified separate fixture/persisted entries on 5173/5174
+  and a failed persisted proxy request with the API stopped. Persisted assets
+  use their own bundle with no fixture app/data import.
+- Security guard tests passed. Staged-path/diff and publication scanner results
+  accompany the isolated local commits; hosted checks remain unverified.
+- `nix develop --no-update-lock-file` failed on the read-only Nix database. The
+  installed pinned executables were used directly; pinned shell entry remains
+  external verification. Direct receiver-backed acceptance returned
+  `FAIL: runtime-or-prerequisite` and `Result: FAIL` because Docker socket access
+  is denied. The local deliberately failing stages and restored full pass were
+  **not executed**. No actual receiver/Kafka/SQLite/viewing pass is claimed.
+- Desktop/mobile browser screenshots, keyboard/tap acceptance, actual persisted
+  network-response comparison and Mermaid rendering were not verified here.
+  Diagram source and relative links were reviewed. The complete clean viewing
+  workflow is inactive in [ci-21-tmp](../ci-21-tmp/README.md), awaiting Joseph's move
+  and a terminal hosted pass. Joseph's decision 4 requires no hosted deliberately
+  failing viewing run.
+
+Run the full local checks in the pinned shell on the supervisor host:
+
+```sh
+nix develop --no-update-lock-file -c cargo fmt --all -- --check
+nix develop --no-update-lock-file -c cargo clippy --workspace --all-targets --locked -- -D warnings
+nix develop --no-update-lock-file -c bash scripts/testing/offline-suite.sh
+nix develop --no-update-lock-file -c bash scripts/testing/ingestion-suite.sh
+nix develop --no-update-lock-file -c python3 scripts/testing/test_ingestion_guard.py
+nix develop --no-update-lock-file -c python3 -m unittest discover -s scripts/dev -p 'test_*.py'
+nix develop --no-update-lock-file -c npm --cache .cache/npm --prefix apps/web ci
+nix develop --no-update-lock-file -c npm --prefix apps/web test
+nix develop --no-update-lock-file -c npm run preview:build
+nix develop --no-update-lock-file -c npm --prefix apps/web run build:persisted
+node scripts/security/test-guards.mjs
+git diff --cached --check
+bash scripts/security/scan.sh staged
+bash scripts/security/scan.sh history
+```
+
+When committing with an isolated `GIT_DIR`, unset it for the security guard test
+because that test creates its own temporary repository. Set it explicitly for
+staging/commits and scans. Keep hooks enabled. Record external full acceptance
+and browser/hosted evidence on the exact supervisor-published SHA in issue #21
+before claiming completion. See [architecture](architecture.md) for current
+ownership/data flow and [durable ingestion](durable-ingestion.md) for recovery limits.
 
 ## What runs today
 
@@ -37,6 +114,13 @@ and PR; preserve the existing behavioral scenarios and tests.
 
 ## Durable synthetic ingestion verification
 
+Current predecessor status: issue #27 is closed; its review summary records local
+receiver/Kafka/SQLite/recovery acceptance on PR #28 `40d97de` and hosted acceptance
+on `1d0d118`. The historical implementation-sandbox notes below predate that
+acceptance. Preserve the owning issue's remaining recorded checklist status; this
+change neither claims a new golden fixture nor substitutes inherited proof for
+the extended #21 full-path acceptance.
+
 The original outer crate added 64 focused tests and the rebased stage-1 workspace
 included 125 Rust tests. Issue #27 adds ten Rust tests, for 135 total. Commands and limits are in
 [durable ingestion](durable-ingestion.md). Historical local checks on 2026-10-09:
@@ -60,8 +144,8 @@ only requires the ledger/pricing suites; the focused ingestion guard and its fou
 failure tests remain local. The inherited transport workflow verifies stage 1,
 without consuming into SQLite. Issue #27 now implements volume-bound epochs,
 bounded committed-offset reread and the shared actual receiver → Kafka → ingestion
-→ SQLite → scoped replay driver. The dedicated workflow is staged outside
-`.github/workflows/`, and actual receiver-backed acceptance remains pending in the
+→ SQLite → scoped replay driver. The dedicated ingestion workflow is now present
+in `.github/workflows/`; exact current receiver-backed evidence is owned by the
 [ingestion acceptance issue](https://github.com/jestrada/ChargeShare/issues/27).
 Hosted checks must be verified on each exact published head; historical results
 do not establish that outcome.
@@ -118,16 +202,18 @@ On 2026-10-11 in the implementation sandbox:
   because the Docker socket is inaccessible. No receiver-backed pass, capture,
   golden fixture, real epoch/recovery result or hosted run is claimed.
 
-The staged [Ubuntu 24.04 workflow](../ci-27-tmp/ingestion-acceptance.yml) runs
-focused guards and the same bounded command. A maintainer must activate it. Use
-separate workflow-dispatch `setup`, `assertion` and `timeout` proof runs; each
-must fail and tear down its owned resources. The assertion proof expects 0.6 kWh
-for A and must fail against actual 0.5 kWh. Restore `none` in a separate passing
-hosted run. Locally, the equivalent explicit failure command is
+The [Ubuntu 24.04 ingestion workflow](../.github/workflows/ingestion-acceptance.yml)
+is now present and invokes focused guards and the shared bounded command.
+Earlier #27 delivery notes requested hosted setup/assertion/timeout proof runs.
+Joseph's 2026-10-11 decision 4 accepts local deliberately failing runs followed by
+a restored local pass for #21; no hosted deliberately failing viewing run is
+required. The assertion proof expects 0.6 kWh for A against actual 0.5 kWh.
+The local command is
 `nix develop --no-update-lock-file -c bash scripts/dev/acceptance.sh all --prove-failure assertion`;
-substitute `setup` or `timeout` for those proofs. Do not wrap expected failures
-as passing hosted jobs. Artifact uploads list summaries/versions only and exclude
-payloads, databases, unrestricted logs and test trust.
+substitute `setup` or `timeout` for those proofs. Each must fail at its named stage
+and complete owned cleanup. The restored normal run must pass on its recorded
+exact commit. Artifact uploads list summaries/versions only, excluding payloads,
+databases, unrestricted logs and test trust.
 
 The timeout proof now runs at committed topic end immediately after complete
 ingestion, ahead of duplicate and refusal phases. It requires the actual CLI's
@@ -141,9 +227,10 @@ by the incorrect epoch-reason expectation; that partial result is not a full
 acceptance pass and does not verify these follow-up commits.
 
 Actual acceptance, reviewed captured golden normalization/rejection tests,
-workflow activation, deliberate hosted failures, separate restored pass and
-terminal checks on the exact published commit remain required. Issue #27 stays
-incomplete until those gates are evidenced. Mermaid source and relative links
+exact-commit hosted checks, local failure proofs and a restored passing run
+remain external verification for #21. The predecessor issue is now closed with
+its own recorded acceptance; these older sandbox notes establish no #21 pass.
+Mermaid source and relative links
 are reviewed; diagram rendering is not verified in this sandbox.
 
 ### Stack rebase verification on 2026-10-10

@@ -32,9 +32,10 @@ outer [candidate/mocked ingestion and SQLite replay](durable-ingestion.md).
 [acceptance suite](../crates/chargeshare-core/tests/offline_spec1.rs) define current
 behavior. See [pricing](pricing.md) and [local preview](local-preview.md) for the
 additive contracts. The separate [receiver/Kafka harness](local-development.md)
-has verified Linux acceptance. Receiver-backed ingestion acceptance, persisted
-results/API reads, authentication, real utility calendars, statements and a
-production UI remain pending.
+has verified Linux acceptance. The scoped owning runtime and persisted/API reads
+are implemented in #21 with focused process/HTTP tests; receiver-backed viewing
+acceptance, authentication, real utility calendars, statements and a production
+UI remain pending.
 
 ## 2. Make the code express its intent without comments
 
@@ -125,12 +126,11 @@ is a boundary only if imports and public contracts enforce it.
 
 ```mermaid
 flowchart LR
-    cli["Ingestion CLI"] --> ingestion["chargeshare-ingestion<br/>Kafka + SQLite + replay"]
+    cli["Ingestion CLI / owning runtime"] --> ingestion["chargeshare-ingestion<br/>Kafka + SQLite + replay"]
     ingestion --> domain["chargeshare-core<br/>pure domain + exact pricing"]
     preview["chargeshare-preview<br/>independent fixture API"] --> domain
     ui["React/shadcn UI"] -- "HTTP client" --> preview
-    future["Future persisted-results orchestration"] -.-> ingestion
-    future -.-> domain
+    persisted["Dedicated persisted React entry"] -- "scoped HTTP client" --> ingestion
 ```
 
 Arrows mean **dependencies**, not runtime result flow: Rust imports or the labeled

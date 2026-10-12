@@ -1,9 +1,11 @@
 # Local synthetic receiver environment
 
 This stage adds an official Tesla receiver → Kafka transport harness alongside
-ChargeShare's existing fixture API/dashboard. Ordinary Tilt startup leaves
-ingestion manual and the fixture dashboard independent. Issue #27 adds a shared
-receiver-to-SQLite acceptance command; that actual path remains unverified here.
+ChargeShare's existing fixture API/dashboard. Fixture startup stays independent. Issue #21 adds `poc.sh up` to select the sole
+owning ingestion/API runtime and dedicated persisted mode. Plain Tilt leaves
+ingestion manual; `poc.sh up` ingests automatically but sends no fixtures.
+The extended #27/#21 shared receiver-to-SQLite-to-HTTP acceptance remains
+unverified in this sandbox.
 A passing transport test requires the exact expected
 receiver acknowledgment **and** matching decoded Kafka records. It makes no
 utility-meter, exactly-once or production-durability claim.
@@ -56,6 +58,8 @@ remain untrusted.
 | frontend-install | Locked `apps/web` npm install |
 | fixture-api | Existing Rust fixture API at `http://127.0.0.1:8787/api/demo` |
 | fixture-dashboard | Existing React/shadcn fixture demo at `http://127.0.0.1:5173` |
+| persisted-dashboard | Dedicated persisted mode at `http://127.0.0.1:5174`; its server stays available if the API stops |
+| persisted-runtime | Selected by `poc.sh up`; sole Rust ingestion/SQLite/scoped HTTP owner, host loopback 8788 |
 | receiver-ready | Kafka metadata/topic plus authenticated receiver status |
 | telemetry-smoke | Manual, finite ACK-plus-Kafka assertion |
 
@@ -92,6 +96,34 @@ new run. JSON payload/key/source-time/value comparison retains missing fields
 and duplicate records, with ordering normalized across vehicles. Replay starts
 from the saved independent position in `.local-runtime/last-run.json` and
 checks local broker retention only.
+
+## Persisted all-service entry points
+
+```sh
+nix develop --no-update-lock-file -c bash scripts/dev/poc.sh up
+nix develop --no-update-lock-file -c bash scripts/dev/poc.sh check
+nix develop --no-update-lock-file -c bash scripts/dev/poc.sh restart
+nix develop --no-update-lock-file -c bash scripts/dev/poc.sh down
+nix develop --no-update-lock-file -c bash scripts/dev/poc.sh reset --confirm-synthetic-reset
+```
+
+`up` returns after bounded all-service readiness and leaves resources running,
+without sending fixtures. `check` sends a finite fresh complete receiver run and
+requires matching Kafka, its committed SQLite progress, actual scoped HTTP and
+the persisted browser entry; readiness is separate from acceptance. Restart/down
+preserve epoch and evidence. Reset is confirmed, stopped and owned only. Helpers
+use private repo-local TMPDIR, Docker/Tilt state and logs under `.cache/`.
+The owner uses the validated private bridge, current-user private storage,
+read-only binary/Nix libraries and pinned Kafka execution image, with only host
+`127.0.0.1:8788` published. No broker listener is added.
+
+See [the exact reviewer checklist](persisted-viewing.md#supervisor-acceptance) for
+both URLs, expected results, all three local failure proofs and restored pass,
+1280×1000/375×812 screenshot/network comparison, empty owned startup and stopping
+only the API while 5174 stays running. Do not run bounded ingestion CLI commands
+against a store held by the long-lived runtime. The whole acceptance retains
+#27's separate consumer/crash/reread/refusal chain, then verifies viewing on a
+new epoch with the owning runtime.
 
 ## Deadlines and failures
 
@@ -189,15 +221,17 @@ epoch init/preserve/reset, restart/crash recovery, stable reread, identity and
 retention refusal, and final `Result: PASS`. The summary is in
 `target/ingestion-acceptance-results/summary.md`; private logs and decoded
 capture are in `.cache/ingestion-acceptance/`. Do not upload that cache directory.
-The command has not passed on an actual Docker host in this implementation
+Issue #27 records predecessor local acceptance on `40d97de` and hosted acceptance
+on `1d0d118`; the extended #21 command has not passed in this implementation
 session. Docker socket access and Nix database writes were refused in the
 sandbox; the supervisor must run it externally. See [testing](testing.md#issue-27-local-verification).
 
-The dedicated Ubuntu 24.04 workflow is inactive in
-`ci-27-tmp/ingestion-acceptance.yml`. The maintainer must move it into
-`.github/workflows/` and perform the hosted failure/restored-run proofs described
-in [the handoff](../ci-27-tmp/README.md). Existing transport workflow results below
-establish stage 1 only.
+The existing Ubuntu ingestion workflow is present in `.github/workflows/`.
+The dedicated viewing workflow is inactive in `ci-21-tmp/viewing-acceptance.yml`;
+[its handoff](../ci-21-tmp/README.md) names the exact destination. Joseph's decision
+4 requires local setup/assertion/timeout proofs followed by a restored local pass;
+a hosted deliberately failing viewing run is not required. Clean hosted viewing
+and manual browser acceptance remain pending.
 
 [The integration workflow](../.github/workflows/telemetry-integration.yml)
 runs on every pull request and every push to `main`. It allows one active run
