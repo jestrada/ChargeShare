@@ -1,16 +1,31 @@
-name: Persisted synthetic viewing acceptance
+name: Durable synthetic ingestion acceptance
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      prove_failure:
+        description: Deliberate gate failure; restore none in a separate run
+        type: choice
+        options:
+          - none
+          - setup
+          - assertion
+          - timeout
+        default: none
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  viewing-acceptance:
-    name: Receiver to committed scoped HTTP and persisted dashboard
+  ingestion-acceptance:
+    name: Receiver to SQLite scoped replay
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     steps:
@@ -84,7 +99,8 @@ jobs:
         env:
           CHARGESHARE_CI_PREBUILT_RECEIVER: '1'
           CHARGESHARE_CI_RECEIVER_IMAGE_ID: ${{ steps.receiver-build.outputs.imageid }}
-        run: nix develop --no-update-lock-file -c bash scripts/dev/acceptance.sh all
+          CHARGESHARE_ACCEPTANCE_PROVE_FAILURE: ${{ inputs.prove_failure || 'none' }}
+        run: nix develop --no-update-lock-file -c bash scripts/dev/acceptance.sh all --prove-failure "$CHARGESHARE_ACCEPTANCE_PROVE_FAILURE"
       - name: Ensure owned teardown after interruption
         if: always() && steps.nix.outcome == 'success'
         run: |
@@ -95,7 +111,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: synthetic-viewing-acceptance
+          name: synthetic-ingestion-acceptance
           path: |
             target/ingestion-acceptance-results/summary.md
             target/ingestion-acceptance-results/versions.txt

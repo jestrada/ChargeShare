@@ -226,9 +226,9 @@ on `1d0d118`; the extended #21 command has not passed in this implementation
 session. Docker socket access and Nix database writes were refused in the
 sandbox; the supervisor must run it externally. See [testing](testing.md#issue-27-local-verification).
 
-The existing Ubuntu ingestion workflow is present in `.github/workflows/`.
-The dedicated viewing workflow is inactive in `ci-21-tmp/viewing-acceptance.yml`;
-[its handoff](../ci-21-tmp/README.md) names the exact destination. Joseph's decision
+#21's frontend tests and builds are added to the existing ingestion acceptance
+workflow, staged at `ci-21-tmp/ingestion-acceptance.yml` until Joseph swaps it in;
+[the handoff](../ci-21-tmp/README.md) names the exact destination. Joseph's decision
 4 requires local setup/assertion/timeout proofs followed by a restored local pass;
 a hosted deliberately failing viewing run is not required. Clean hosted viewing
 and manual browser acceptance remain pending.

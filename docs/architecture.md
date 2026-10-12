@@ -116,8 +116,9 @@ are implemented. The Kafka endpoint remains private `kafka:9092`. The extended
 acceptance retains #27 recovery/refusal checks and adds fresh receiver → sole
 owner → committed SQLite → scoped HTTP → dedicated browser entry. This sandbox
 cannot run Docker/Nix orchestration; focused tests do not fulfill that gate.
-The existing ingestion workflow is present; the new dedicated viewing workflow
-is inactive in [ci-21-tmp](../ci-21-tmp/README.md), requiring Joseph's activation.
+#21's frontend tests and builds are added to the existing ingestion acceptance
+workflow, staged at [ci-21-tmp/ingestion-acceptance.yml](../ci-21-tmp/ingestion-acceptance.yml)
+until Joseph swaps it in.
 Manual screenshots and actual network-response comparison remain required.
 Persisted review and exact persisted pricing belong to #22/#23; neither is
 implemented by viewing. No historical planning task is marked complete.

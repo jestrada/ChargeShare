@@ -60,12 +60,11 @@ See [verification limits](../testing.md#issue-27-local-verification) and the
 
 ## Issue #21 clean viewing gate
 
-The complete new workflow is inactive at
-[ci-21-tmp/viewing-acceptance.yml](../../ci-21-tmp/viewing-acceptance.yml), with
-[exact activation instructions](../../ci-21-tmp/README.md). Existing workflows
-were not edited because the implementation token lacks workflow scope. The new
-fresh Linux gate extends the shared acceptance through the owning runtime and
-actual scoped HTTP, and verifies the dedicated persisted dashboard entry.
+#21's frontend tests and builds are added to the existing ingestion acceptance
+workflow, staged at
+[ci-21-tmp/ingestion-acceptance.yml](../../ci-21-tmp/ingestion-acceptance.yml)
+until Joseph swaps it in using [the handoff](../../ci-21-tmp/README.md).
+It runs on PRs and pushes to main, cancelling superseded PR runs.
 Joseph's decision 4 accepts local setup/assertion/timeout failure runs followed
 by a restored local pass; no hosted deliberately failing viewing run is required.
 The clean hosted gate and manual desktop/mobile evidence remain required.

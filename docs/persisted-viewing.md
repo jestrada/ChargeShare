@@ -120,7 +120,10 @@ HTTP results, repeated revisions, mismatch refusal, concurrent reads, actual
 receiver duplicate/out-of-order traffic, committed progress and owner restart.
 Its 40-minute outer bound and owned cleanup remain. Logs/captures stay private;
 only `target/ingestion-acceptance-results/summary.md` and allowlisted versions are
-publication evidence. The new [viewing workflow](../ci-21-tmp/README.md) awaits activation.
+publication evidence. #21's frontend tests and builds are added to the existing
+ingestion acceptance workflow, staged at
+[ci-21-tmp/ingestion-acceptance.yml](../ci-21-tmp/ingestion-acceptance.yml)
+until Joseph swaps it in.
 
 `poc.sh` serializes lifecycle commands with a private controller lock; a competing
 command refuses without signaling resources. Startup interruption follows owned

@@ -60,10 +60,11 @@ Local checks on 2026-10-11 in this sandbox:
   **not executed**. No actual receiver/Kafka/SQLite/viewing pass is claimed.
 - Desktop/mobile browser screenshots, keyboard/tap acceptance, actual persisted
   network-response comparison and Mermaid rendering were not verified here.
-  Diagram source and relative links were reviewed. The complete clean viewing
-  workflow is inactive in [ci-21-tmp](../ci-21-tmp/README.md), awaiting Joseph's move
-  and a terminal hosted pass. Joseph's decision 4 requires no hosted deliberately
-  failing viewing run.
+  Diagram source and relative links were reviewed. #21's frontend tests and builds
+  are added to the existing ingestion acceptance workflow, staged at
+  [ci-21-tmp/ingestion-acceptance.yml](../ci-21-tmp/ingestion-acceptance.yml) until
+  Joseph swaps it in. A terminal hosted pass remains pending; Joseph's decision 4
+  requires no hosted deliberately failing viewing run.
 
 Run the full local checks in the pinned shell on the supervisor host:
 

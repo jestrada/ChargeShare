@@ -6,9 +6,9 @@ epoch, bounded committed-offset reread and a shared receiver-backed acceptance
 command. Issue #27 is closed and records local acceptance on PR #28 `40d97de`
 and hosted acceptance on `1d0d118`. This is inherited issue evidence, not a new
 run. The extended #21 receiver-backed viewing acceptance remains unverified in
-this sandbox; its Docker socket is inaccessible. The ingestion workflow is
-present in `.github/workflows/`; the additive viewing gate is staged in
-`ci-21-tmp/`, awaiting maintainer activation and runs.
+this sandbox; its Docker socket is inaccessible. #21's frontend tests and builds
+are added to the existing ingestion acceptance workflow, staged at
+`ci-21-tmp/ingestion-acceptance.yml` until Joseph swaps it in.
 The existing fixture dashboard stays independent. OpenSpec is paused.
 
 ## Owning persisted runtime
@@ -196,13 +196,13 @@ Run `bash scripts/testing/ingestion-suite.sh` for the complete workspace and a
 guarded, allowlisted focused summary. `python3 scripts/testing/test_ingestion_guard.py`
 proves missing/reduced/failed/ignored/filtered suites fail and Cargo failure
 status is preserved. Python runtime/acceptance tests cover epoch and ownership,
-assertions, setup/timeout failures, exact refusal reasons and cleanup. The staged
-dedicated gate uses these checks plus the shared actual acceptance command.
+assertions, setup/timeout failures, exact refusal reasons and cleanup. The existing
+ingestion gate uses these checks plus the shared actual acceptance command.
 
 ## Remaining verification
 
 - Run the actual pinned receiver → Kafka → ingestion → SQLite → scoped replay command on permitted Linux x86_64/Docker and commit a reviewed decoded golden fixture
-- Activate and prove the staged dedicated CI gate, including hosted setup/assertion/timeout failure and separate restored passing runs
+- Swap in the staged ingestion workflow and verify a hosted pass; local setup/assertion/timeout proofs and a restored local pass remain required
 - Record exact published commit and terminal hosted checks; current local commits are unpublished
 - Review and record acceptance evidence in the owning issue and PR before marking the work complete
 
