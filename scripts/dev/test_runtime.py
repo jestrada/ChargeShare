@@ -165,8 +165,8 @@ class FakeDocker:
                 raise AssertionError("Only resolved JSON configuration was expected")
             return json.dumps(self.configuration)
         if command[:2] == ["docker", "ps"]:
-            project_name = command[command.index("--filter") + 1].rsplit("=", 1)[1]
-            return "\n".join(container["Id"] for container in self.containers if container["Config"]["Labels"].get("com.docker.compose.project") == project_name)
+            label, value = command[command.index("--filter") + 1].removeprefix("label=").split("=", 1)
+            return "\n".join(container["Id"] for container in self.containers if container["Config"]["Labels"].get(label) == value)
         if command[:2] == ["docker", "inspect"]:
             return json.dumps([container for container in self.containers if container["Id"] in command[2:]])
         if command[:3] == ["docker", "volume", "ls"]:
@@ -340,7 +340,7 @@ class RuntimeGuardTests(unittest.TestCase):
                 runtime.preflight(self.project, self.docker, lambda: runtime.check_ports_available((port,)))
 
     def test_each_preview_receiver_and_tilt_port_is_checked(self):
-        self.assertEqual(set(runtime.REQUIRED_HOST_PORTS), {8787, 5173, 8443, 10350})
+        self.assertEqual(set(runtime.REQUIRED_HOST_PORTS), {8787, 5173, 8443, 10350, 8788, 5174})
         with mock.patch.object(runtime.socket, "socket") as create_socket:
             listener = create_socket.return_value.__enter__.return_value
             runtime.check_ports_available()

@@ -15,6 +15,7 @@ from pathlib import Path
 from ingestion_runner import owned_runner, runner_command, runner_name
 from runtime import ProjectRuntime, RuntimeFailure, check_ports_available, compose_command, exclusive_synthetic_run_lock, preflight, project_broker_volume, run_command
 from source_epoch import TOPIC, read_marker, verify_source_epoch, write_private_json
+from viewing import SCOPES, assert_http_scopes, http_document, owning_runtime_command, runtime_name, scoped_results, wait_http_scopes
 
 
 class AcceptanceFailure(Exception):
@@ -52,6 +53,7 @@ class Acceptance:
         self.started = False
         self.tilt = None
         self.runners = set()
+        self.viewing_process = None
         self.stage = "setup"
         self.summary = []
 
@@ -82,8 +84,10 @@ class Acceptance:
         self.stage = "startup"
         self.started = True
         self.private.mkdir(mode=0o700, parents=True, exist_ok=True)
+        environment = self.runtime.environment()
+        environment["CHARGESHARE_PERSISTED_RUNTIME"] = "0"
         with (self.private / "tilt-local.log").open("a", encoding="utf-8") as output:
-            self.tilt = subprocess.Popen(["tilt", "up", "--stream"], cwd=self.runtime.checkout, env=self.runtime.environment(), stdout=output, stderr=output)
+            self.tilt = subprocess.Popen(["tilt", "up", "--stream"], cwd=self.runtime.checkout, env=environment, stdout=output, stderr=output)
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
             if self.tilt.poll() is not None:
@@ -264,6 +268,79 @@ class Acceptance:
             raise AcceptanceFailure("timeout-progress")
         raise AcceptanceFailure("timeout")
 
+    def start_viewing(self):
+        self.stage = "viewing-startup"
+        name = runtime_name(self.runtime)
+        command = owning_runtime_command(self.runtime, self.run_id)
+        self.runners.add(name)
+        with (self.private / "viewing-local.log").open("a", encoding="utf-8") as output:
+            self.viewing_process = subprocess.Popen(command, cwd=self.runtime.checkout, env=self.runtime.environment(), stdout=output, stderr=output)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if self.viewing_process.poll() is not None:
+                raise AcceptanceFailure("viewing-startup")
+            try:
+                http_document("/api/poc/ready")
+                return
+            except RuntimeFailure:
+                time.sleep(0.1)
+        raise AcceptanceFailure("timeout")
+
+    def stop_viewing(self):
+        if self.viewing_process is not None:
+            self.remove_runner(runtime_name(self.runtime))
+            try:
+                self.viewing_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                raise AcceptanceFailure("owned-teardown") from None
+            self.viewing_process = None
+
+    def viewing(self):
+        self.start_viewing()
+        empty = [scoped_results(owner, vehicle) for owner, vehicle, energy in SCOPES]
+        if any(result["state"] != "empty" or result["sessions"] for result in empty):
+            raise AcceptanceFailure("viewing-empty")
+        self.stage = "viewing-receiver-fixture"
+        self.checked(["bash", "scripts/dev/harness.sh", "complete"], 180)
+        if json.loads((self.runtime.directory / "last-run.json").read_bytes())["starting_offsets"] != {"0": 0}:
+            raise AcceptanceFailure("stale-fixture")
+        try:
+            complete = wait_http_scopes()
+            if any(before["revision"] == after["revision"] for before, after in zip(empty, complete)):
+                raise AcceptanceFailure("viewing-revision")
+            self.record("PASS: owning runtime ingested fresh official receiver output; HTTP scopes A=0.500000/B=0.250000 kWh; Unconfirmed; eligible=0.000000 kWh; mismatched scope refused; semantic revision stable")
+            self.stage = "viewing-concurrent-replay"
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=4) as readers:
+                pending = [readers.submit(assert_http_scopes) for _ in range(8)]
+                self.checked(["bash", "scripts/dev/harness.sh", "adverse"], 300)
+                if any(request.result(timeout=15) != complete for request in pending):
+                    raise AcceptanceFailure("viewing-concurrent-snapshot")
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                with contextlib.closing(sqlite3.connect("file:" + str(self.runtime.directory / "ingestion.sqlite3") + "?mode=ro", uri=True)) as database:
+                    progress = database.execute("SELECT next_offset FROM partition_progress WHERE partition=0").fetchone()
+                if progress == (20,):
+                    break
+                time.sleep(0.1)
+            else:
+                raise AcceptanceFailure("viewing-commit-progress")
+            if assert_http_scopes() != complete:
+                raise AcceptanceFailure("viewing-replay")
+            self.stop_viewing()
+            self.start_viewing()
+            if assert_http_scopes() != complete:
+                raise AcceptanceFailure("viewing-restart")
+            self.record("PASS: concurrent scoped HTTP reads, receiver duplicates/out-of-order replay and owning-process restart preserved coherent committed results and revisions")
+            html = self.checked(["curl", "--fail", "--max-time", "5", "--silent", "--show-error", "http://127.0.0.1:5174"], 10)
+            if "/src/persisted-main.tsx" not in html:
+                raise AcceptanceFailure("viewing-dashboard-entry")
+            self.record("PASS: separate persisted dashboard listener ready on IPv4 loopback 5174; browser screenshots remain manual")
+        except RuntimeFailure:
+            raise AcceptanceFailure(self.stage) from None
+        finally:
+            self.stop_viewing()
+
     def execute(self):
         preflight(self.runtime)
         if self.runtime.directory.exists() or project_broker_volume(self.runtime, run_command) is not None:
@@ -339,8 +416,10 @@ class Acceptance:
         if first_epoch == second_epoch or (self.runtime.directory / "ingestion.sqlite3").exists():
             raise AcceptanceFailure("owned-reset")
         self.record("PASS: explicit stopped owned reset replaced source epoch=" + second_epoch)
+        self.viewing()
 
     def cleanup(self):
+        self.stop_viewing()
         for name in list(self.runners):
             self.remove_runner(name)
         if self.started:

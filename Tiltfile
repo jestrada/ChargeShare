@@ -24,3 +24,7 @@ local_resource('fixture-api', serve_cmd='exec target/debug/chargeshare-preview',
 local_resource('fixture-dashboard', serve_cmd='cd apps/web && exec node node_modules/vite/bin/vite.js', resource_deps=['frontend-install', 'fixture-api'], readiness_probe=probe(http_get=http_get_action(host='127.0.0.1', port=5173, path='/')), links=['http://127.0.0.1:5173'], labels=['fixture-demo'])
 local_resource('receiver-ready', cmd='python3 scripts/dev/readiness.py --service-health --timeout 180 receiver && bash scripts/dev/harness.sh ready', resource_deps=['rust-build', 'receiver', 'kafka'], labels=['synthetic-transport'])
 local_resource('telemetry-smoke', cmd='bash scripts/dev/harness.sh smoke', resource_deps=['receiver-ready'], trigger_mode=TRIGGER_MODE_MANUAL, auto_init=False, labels=['synthetic-transport'])
+
+local_resource('persisted-dashboard', serve_cmd='cd apps/web && exec node node_modules/vite/bin/vite.js --mode persisted', resource_deps=['frontend-install'], readiness_probe=probe(http_get=http_get_action(host='127.0.0.1', port=5174, path='/')), links=['http://127.0.0.1:5174'], labels=['persisted-view'])
+if os.getenv('CHARGESHARE_PERSISTED_RUNTIME') == '1':
+    local_resource('persisted-runtime', serve_cmd='exec python3 scripts/dev/viewing.py serve', resource_deps=['rust-build', 'receiver-ready'], readiness_probe=probe(http_get=http_get_action(host='127.0.0.1', port=8788, path='/api/poc/ready')), labels=['persisted-view'])
