@@ -7,6 +7,8 @@ pub enum TariffError {
     InvalidVersion,
     InvalidWindow,
     OverlappingWindows,
+    InvalidModel,
+    IncompatibleRules,
 }
 
 impl fmt::Display for TariffError {

@@ -11,6 +11,7 @@ use crate::session::{
     Session, classify_location, reconstruct_session,
 };
 use crate::tariff::RateSchedule;
+use crate::time_of_use::{RateModelHistory, TimeOfUsePricing, summarize_time_of_use};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionReasons {
@@ -139,6 +140,17 @@ impl Ledger {
             )?);
         }
         Ok(sessions)
+    }
+
+    pub fn time_of_use_pricing(
+        &self,
+        scope: &VehicleId,
+        rates: &RateModelHistory,
+    ) -> Result<TimeOfUsePricing, PricingError> {
+        summarize_time_of_use(
+            self.reconstruct(scope).map_err(PricingError::Ledger)?,
+            rates,
+        )
     }
 
     pub fn summary(&self, scope: &VehicleId) -> Result<Summary, LedgerError> {

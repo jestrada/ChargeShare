@@ -8,6 +8,7 @@ mod money;
 mod pricing;
 mod session;
 mod tariff;
+mod time_of_use;
 
 pub use energy::{CounterProblem, Energy};
 pub use error::LedgerError;
@@ -24,3 +25,8 @@ pub use session::{
     Session,
 };
 pub use tariff::{RateSchedule, RateWindow, TariffError};
+pub use time_of_use::{
+    DayType, RateModelDefinition, RateModelHistory, RateModelVersion, RatePeriod, RatedSlice,
+    Season, TIMEZONE_RULES_VERSION, TOU_CALCULATION_VERSION, TimeOfUsePricing, TimeOfUseQuote,
+    TimeOfUseSession,
+};

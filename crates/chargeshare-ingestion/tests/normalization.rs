@@ -169,7 +169,13 @@ fn candidate_golden_records_equal_direct_core_events_with_separate_provenance() 
 fn runtime_manifest_and_inspected_receiver_shape_bind_the_existing_normalizer_contract() {
     let runtime_manifest =
         Manifest::from_json(include_bytes!("../../../dev/ingestion-manifest.json")).unwrap();
-    assert_eq!(runtime_manifest.config(), manifest().config());
+    let legacy = manifest();
+    let mut normalization_contract = runtime_manifest.config().clone();
+    normalization_contract.geofence_version = legacy.config().geofence_version.clone();
+    normalization_contract.geofences = legacy.config().geofences.clone();
+    normalization_contract.owner_chargers.clear();
+    normalization_contract.rate_models.clear();
+    assert_eq!(&normalization_contract, legacy.config());
     let complete: Value =
         serde_json::from_slice(include_bytes!("../../../dev/fixtures/complete.json")).unwrap();
     let records = complete["expected"].as_array().unwrap();

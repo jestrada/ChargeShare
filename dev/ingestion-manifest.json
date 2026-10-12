@@ -210,25 +210,113 @@
       "charge_type": "ac"
     }
   ],
-  "geofence_version": "fictional-geofence-v1",
-  "geofences": [
+  "geofence_version": "fictional-shared-geofence-v1",
+  "geofences": [],
+  "owner_chargers": [
     {
-      "center": {
-        "latitude": "12.3456789",
-        "longitude": "45.6789123",
-        "status": "valid"
+      "owner_id": "owner-a",
+      "charger_id": "fictional-shared-charger",
+      "geofence": {
+        "center": {
+          "latitude": "12.3456789",
+          "longitude": "45.6789123",
+          "status": "valid"
+        },
+        "radius_meters": 100
       },
-      "owner": "owner-a",
-      "radius_meters": 100
+      "rate_model_versions": [
+        "pge-ev2-a-2026-03-v1"
+      ]
     },
     {
-      "center": {
-        "latitude": "-23.4567891",
-        "longitude": "-67.8912345",
-        "status": "valid"
+      "owner_id": "owner-b",
+      "charger_id": "fictional-shared-charger",
+      "geofence": {
+        "center": {
+          "latitude": "12.3456789",
+          "longitude": "45.6789123",
+          "status": "valid"
+        },
+        "radius_meters": 100
       },
-      "owner": "owner-b",
-      "radius_meters": 100
+      "rate_model_versions": [
+        "pge-ev2-a-2026-03-v1"
+      ]
+    }
+  ],
+  "rate_models": [
+    {
+      "id": "pge-ev2-a-2026-03-v1",
+      "plan": "PGE-EV2-A",
+      "source_label": "Public synthetic PG&E bundled EV2-A sample Advice 7846-E",
+      "source_url": "https://www.pge.com/tariffs/assets/pdf/tariffbook/ELEC_SCHEDS_EV2%20%28Sch%29.pdf",
+      "effective_from": "2026-03-01",
+      "effective_until": null,
+      "timezone": "America/Los_Angeles",
+      "timezone_rules_version": "2025b",
+      "season_rules_version": "june-september-v1",
+      "day_type_rules_version": "all-days-v1",
+      "holidays": [
+        "2026-09-07"
+      ],
+      "periods": [
+        {
+          "season": "Summer",
+          "period": "off_peak",
+          "start_second": 0,
+          "end_second": 54000,
+          "usd_per_kwh": "0.22558"
+        },
+        {
+          "season": "Summer",
+          "period": "part_peak",
+          "start_second": 54000,
+          "end_second": 57600,
+          "usd_per_kwh": "0.42760"
+        },
+        {
+          "season": "Summer",
+          "period": "peak",
+          "start_second": 57600,
+          "end_second": 75600,
+          "usd_per_kwh": "0.53809"
+        },
+        {
+          "season": "Summer",
+          "period": "part_peak",
+          "start_second": 75600,
+          "end_second": 86400,
+          "usd_per_kwh": "0.42760"
+        },
+        {
+          "season": "Winter",
+          "period": "off_peak",
+          "start_second": 0,
+          "end_second": 54000,
+          "usd_per_kwh": "0.22558"
+        },
+        {
+          "season": "Winter",
+          "period": "part_peak",
+          "start_second": 54000,
+          "end_second": 57600,
+          "usd_per_kwh": "0.39428"
+        },
+        {
+          "season": "Winter",
+          "period": "peak",
+          "start_second": 57600,
+          "end_second": 75600,
+          "usd_per_kwh": "0.41099"
+        },
+        {
+          "season": "Winter",
+          "period": "part_peak",
+          "start_second": 75600,
+          "end_second": 86400,
+          "usd_per_kwh": "0.39428"
+        }
+      ]
     }
   ]
 }

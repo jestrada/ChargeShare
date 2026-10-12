@@ -793,6 +793,8 @@ mod tests {
             timestamp_version: TIMESTAMP_VERSION.to_owned(),
             geofence_version: "fictional-geofence-v1".to_owned(),
             geofences: Vec::new(),
+            owner_chargers: Vec::new(),
+            rate_models: Vec::new(),
             mappings: vec![DeviceMapping {
                 device: "device-a".to_owned(),
                 vehicle: "vehicle-a".to_owned(),

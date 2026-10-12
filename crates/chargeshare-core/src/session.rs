@@ -238,13 +238,11 @@ pub(crate) fn reconstruct_session(
                                     .observed_ac
                                     .checked_add(delta)
                                     .map_err(|_| LedgerError::EnergyOverflow)?;
-                                if delta != Energy::ZERO {
-                                    segments.push(CounterSegment {
-                                        start_time,
-                                        end_time: event.time,
-                                        energy: delta,
-                                    });
-                                }
+                                segments.push(CounterSegment {
+                                    start_time,
+                                    end_time: event.time,
+                                    energy: delta,
+                                });
                             }
                             None => {
                                 session.quality_flags.insert(QualityFlag::CounterRollback);

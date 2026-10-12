@@ -30,6 +30,21 @@ impl Store {
                     .map_err(|_| IngestionError::StorageCorrupt)?,
             );
         }
+        if let Some(charger) = self
+            .manifest
+            .config()
+            .owner_chargers
+            .iter()
+            .find(|charger| charger.owner_id == owner.as_str())
+        {
+            ledger.configure_charger(
+                owner.clone(),
+                charger
+                    .geofence
+                    .to_core()
+                    .map_err(|_| IngestionError::StorageCorrupt)?,
+            );
+        }
         let mut statement = self
             .connection
             .prepare("SELECT event_json FROM event_variants WHERE vehicle = ?1 ORDER BY event_json")

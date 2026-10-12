@@ -80,6 +80,9 @@ fn quote_session(
         exact_cost: ExactUsd::ZERO,
     };
     for segment in &reconstructed.segments {
+        if segment.energy == Energy::ZERO {
+            continue;
+        }
         let start_time = segment.start_time;
         let end_time = segment.end_time;
         if start_time >= end_time {

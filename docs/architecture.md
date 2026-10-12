@@ -2,8 +2,8 @@
 
 ChargeShare is a synthetic charging ledger with exact offline pricing, a local
 receiver/Kafka harness, durable Rust ingestion and a scoped browser view.
-Ingestion, persisted viewing and automatic location classification are implemented;
-persisted pricing is the next increment. No live vehicle, account or production
+Ingestion, persisted viewing, automatic location classification and derived
+time-of-use pricing are implemented. No live vehicle, account or production
 service is connected. Setup and checks are in [README](../README.md); contributor
 rules are in [AGENTS](../AGENTS.md) and [code design](code-design.md).
 
@@ -11,7 +11,7 @@ rules are in [AGENTS](../AGENTS.md) and [code design](code-design.md).
 
 | Component | Responsibility |
 | --- | --- |
-| `chargeshare-core` | Dependency-free Rust domain: scoped ledger, deterministic session replay, exact energy and offline pricing |
+| `chargeshare-core` | Rust domain: scoped replay, exact energy/money and local-time sample pricing |
 | `chargeshare-ingestion` | Rust normalization, Kafka consumption, SQLite transactions/recovery and committed scoped HTTP results |
 | `chargeshare-harness` | Rust sender/verifier for finite fictional receiver traffic; requires protocol ACKs and matching new Kafka records |
 | `chargeshare-preview` | Independent Rust fixture API with core-calculated sample prices |
@@ -26,8 +26,7 @@ receiver remains external Go code, with immutable inputs in
 
 ## Architecture at a glance
 
-Arrows show evidence/result flow. Solid arrows describe implemented paths;
-dashed arrows describe the planned persisted pricing increment.
+Arrows show evidence/result flow. Solid arrows describe implemented paths.
 
 ```mermaid
 flowchart LR
@@ -37,12 +36,14 @@ flowchart LR
     kafka --> capture["Harness: curated acceptance evidence"]
     subgraph owner["Single Rust owner: chargeshare-ingestion serve"]
         normalize["Frozen mapping + normalized location/counters"] --> sqlite[("SQLite: evidence + config versions + progress")]
-        config["Versioned owner charger geofences"] --> sqlite
+        config["Owner charger config + immutable rate histories"] --> sqlite
         sqlite --> replay["Scoped core replay"]
         replay --> classification["Core: automatic session location classification"]
-        classification --> results["Committed observed AC + quality + eligibility + reason"]
+        classification --> results["Committed energy + eligibility + quotes + provenance"]
+        classification --> pricing["Core: local-time splits + exact quotes + whole-session holds"]
+        sqlite --> pricing
+        pricing --> results
         results --> api["Scoped HTTP: host loopback 8788"]
-        classification -.-> pricing["Planned #23: persisted exact pricing"]
     end
     api --> persisted["Persisted browser entry: 5174"]
     subgraph fixture["Independent fixture preview"]
@@ -84,8 +85,9 @@ pair of validated aliases. Malformed scopes return 400, unknown/mismatched scope
 rejected values. `/api/poc/ready` reports readiness separately from acceptance.
 There are no aggregate, mutation or pricing endpoints in this API.
 
-Responses contain aliases, exact six-decimal observed/eligible kWh, sessions,
-quality/exclusion reasons, synthetic measurement labels, allowlisted provenance
+Responses contain aliases, exact six-decimal observed/eligible/priced kWh, sessions,
+exact quotes and once-rounded scoped subtotals, quality/exclusion and rate-hold
+reasons, synthetic measurement/estimate labels, allowlisted rate/time provenance
 and a deterministic semantic revision. Revisions reflect visible domain results
 and provenance, not requests or redelivery; they are not cryptographic tokens.
 No coordinates, raw payload, device identity, credentials, paths, offsets or logs
@@ -97,8 +99,11 @@ geofence version; classification reasons are separate from evidence quality.
 
 The persisted UI separates empty, complete zero, incomplete/held, refused and
 unavailable states. Scope changes hide prior results; failed reads clear them.
-It never falls back to fixture data and displays no battery, rate, cost or amount
-owed. Browser requests time out after five seconds and repeat every ten seconds.
+It presents returned exact cost, display amount, rate and interval strings without
+browser money arithmetic. It never falls back to fixture data or claims an amount
+owed. A missing quote has no fabricated zero subtotal; a complete eligible zero
+session has a zero quote. Rate-held counts and reasons remain visible. Browser
+requests time out after five seconds and repeat every ten seconds.
 Broker/source/storage failures latch the owner unavailable until repaired and
 restarted. HTTP reads/writes and broker verification have bounded deadlines.
 
@@ -136,8 +141,11 @@ Other receiver fields remain strictly allowlisted. Raw location payloads and
 rejected coordinate text are discarded. Diagnostics redact points, and coordinates
 never enter API responses, browser bundles, application logs or acceptance output.
 
-The manifest also configures one synthetic center and a 100 m radius for every
-owner, shared by all that owner's vehicles, under a separate geofence version.
+The manifest configures an owner charger with a stable charger ID, synthetic
+geofence and selected rate-version IDs. Vehicle registration selects its owner
+and that owner's charger; shared physical charger IDs and rate histories do not
+merge owner ledgers. Geofences remain owner-scoped under a separate geofence
+version. Legacy geofence-only manifests remain readable with no selected rates.
 The Rust core uses great-circle haversine distance on a sphere with mean radius
 6,371,008.8 m. The radius is inclusive, with a 10 nm numerical rounding allowance;
 this computation makes no claim about physical positioning accuracy.
@@ -152,10 +160,12 @@ Classification is derived on replay, without stored per-session decisions,
 review controls, overrides or a classify API. Loading a new geofence version on
 owner startup automatically replays every affected retained session using that
 config. Previously loaded versions retain immutable normalized config; changing
-content under a reused version refuses recovery. Only geofence settings can change
-through this path; source bindings, mappings, annotations and normalization/time
-contracts stay frozen. Schema-one datasets migrate transactionally without
-removing evidence or progress; their absent locations yield an automatic hold.
+content under a reused version refuses recovery. Geofence and charger/rate
+selection can change
+through startup configuration; source bindings, mappings, annotations and
+normalization/time contracts stay frozen. Schema-one and schema-two datasets
+migrate transactionally to schema three without removing evidence or progress.
+Absent locations yield an automatic hold.
 
 SQLite stores curated variants or fixed rejection reasons, provenance and next
 partition positions in one transaction using WAL, FULL synchronization, foreign
@@ -197,8 +207,8 @@ with session reconstruction in `session`. Neither depends on the ledger or IO.
 
 The small [public facade](../crates/chargeshare-core/src/lib.rs) explicitly exports
 types from cohesive private modules: `energy`, `identity`, `event`, `session`,
-`ledger`, `location`, `error`, `money`, `tariff` and `pricing`. Domain imports are
-acyclic and never depend on adapters. Extra layers, generic repositories and service splits
+`ledger`, `location`, `error`, `money`, `tariff`, `pricing` and `time_of_use`.
+Domain imports are acyclic and never depend on adapters. Extra layers, generic repositories and service splits
 need a concrete approved use case; current orchestration stays in Ledger and the
 outer ingestion crate. [Code design](code-design.md) describes the design workflow.
 
@@ -210,8 +220,9 @@ Session identity is `(vehicle, connection)` and positions are vehicle-wide. Conn
 
 Energy is checked integer arithmetic with six decimal kWh places. Signs,
 whitespace, exponents, non-finite values and excess precision reject; arithmetic
-overflow fails explicitly. Time in the core is signed synthetic ticks, not an
-inferred timezone or real tariff calendar.
+overflow fails explicitly. The independent offline preview keeps signed synthetic
+ticks. Persisted evidence uses integral UTC epoch seconds and the selected sample's
+explicit local timezone.
 
 Replay partitions by vehicle before deduplication and orders by `(time, position)`.
 Identical repeats are no-ops. Different payloads at the same position remain
@@ -243,7 +254,57 @@ them; they are not an amount owed. The fixture adapter supplies a date-bounded
 September public EV2-A sample and a separately labeled winter estimate from
 [`rates.rs`](../crates/chargeshare-preview/src/rates.rs). It borrows no rate across
 missing coverage. Fixture dates/ticks do not implement timezone, DST or utility
-calendars. Fixed fees, taxes, statements and persisted pricing remain separate work.
+calendars. Fixed fees, taxes and statements remain outside quotes.
+
+### Persisted time-of-use pricing
+
+The existing scoped result replay also derives prices through the core's
+`time_of_use` module. Its concrete immutable history and named local periods use
+existing `Energy`, `UsdRate`, `ExactUsd` and `UsdCents`; SQL/config DTOs stay in
+ingestion. There is no pricing endpoint, quote storage or mutation UI. SQLite
+retains immutable rate definitions separately from the startup-selected histories.
+Reusing a version ID with changed contents refuses startup before evidence or
+progress changes. A new selected version changes quotes, provenance and semantic
+revision while preserving session identity, evidence, classification and quality.
+
+The active labeled PG&E bundled EV2-A sample is Advice 7846-E, effective
+2026-03-01, in `America/Los_Angeles`. Summer is June through September and winter
+October through May. Named periods apply every day, including weekends/holidays:
+off-peak 00:00–15:00, part-peak 15:00–16:00 and 21:00–24:00, peak 16:00–21:00.
+Rates, source and half-open effective local dates are versioned configuration.
+The bounded period list supports multiple named periods. Overlapping periods or
+selected effective dates, invalid exact rates and incompatible calendar/timezone
+rules refuse configuration. Missing coverage is a session hold. Holiday dates
+label provenance under `all-days-v1`; they do not change prices.
+
+`chrono` and `chrono-tz` supply calendar conversion and an embedded IANA timezone
+version, avoiding host clock/calendar dependence and handwritten DST rules.
+The selected timezone-rule version must match the compiled database. This is the
+small dependency needed for actual civil-time resolution; domain policy still has
+no infrastructure dependency. The current calendar policy is the approved
+June–September season and all-day PG&E sample schedule, not a general utility
+calendar engine.
+
+Each adjacent valid AC counter pair is split at local period edges, midnight,
+season/effective-date changes and actual UTC offset transitions. Bounds are
+half-open. Repeated wall times resolve to their distinct UTC instants; nonexistent
+spring wall times add no elapsed seconds. Integer micro-kWh shares use elapsed
+UTC seconds, floor each exact ratio, then assign remainders by largest fraction
+with earlier slices winning ties. This conserves each observed delta and discloses
+linear allocation as an estimate, including long counter gaps; no maximum-gap
+hold or extra energy is inferred. Missing coverage, non-increasing times or an
+unresolved boundary holds the entire quote; no partial cost escapes. Complete
+eligible zero energy requires no rate. Automatic #22 classification and AC/evidence
+quality remain the eligibility authority.
+
+Slices return UTC epoch bounds, local timestamp bounds with offsets, local date,
+season/day/period, selected
+model ID, allocated AC energy and exact rate/cost. The scoped response also returns
+charger/model/source/effective-date and timezone/calendar/calculation provenance.
+Checked exact slice costs form session costs and scoped subtotals, rounded half-up
+to cents once; displayed session cents are never summed in the browser. Overflow
+refuses the result with a typed error. The estimate excludes CCA/PCIA, baseline
+credit, daily Base Services Charge and taxes and is not a bill.
 
 ## Measurement boundary
 
@@ -262,8 +323,9 @@ infer energy from battery percentage or a last power reading across gaps.
   versioned geofences. Retained inputs support restart and reclassification;
   only otherwise-eligible AC `SharedCharger` energy crosses the pricing boundary.
   There is no manual per-session classification path or coordinate display.
-- [#23](https://github.com/jestrada/ChargeShare/issues/23): persisted versioned rates
-  and exact pricing follow classification; the existing persisted UI has no costs.
+- [#23](https://github.com/jestrada/ChargeShare/issues/23): startup-selected immutable
+  EV2-A rates price committed eligible sessions in the core; the persisted UI
+  presents returned amounts, provenance and whole-session hold reasons.
 - Live transport, production authentication/sharing, privacy/retention and hosting
   need separate approval and contracts. Enforce any live ingress allowlist before
   sinks, payload logs or persistence; preserve receiver mTLS authentication.
