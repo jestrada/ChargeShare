@@ -1,9 +1,9 @@
 {
   "provenance": {
+    "actual_receiver_transport_verified": false,
     "classification": "synthetic_candidate_decoded_fixture",
     "receiver_revision": "bd076fe1494841707528449560c4a19d0d426da4",
-    "source": "stage-1 dev/fixtures.json complete expected records",
-    "actual_receiver_transport_verified": false
+    "source": "stage-1 dev/fixtures.json complete expected records"
   },
   "records": [
     {
@@ -32,6 +32,15 @@
             "key": "ACChargingEnergyIn",
             "value": {
               "stringValue": "100.00"
+            }
+          },
+          {
+            "key": "Location",
+            "value": {
+              "locationValue": {
+                "latitude": 12.3456789,
+                "longitude": 45.6789123
+              }
             }
           }
         ],
@@ -67,6 +76,15 @@
             "value": {
               "stringValue": "200.00"
             }
+          },
+          {
+            "key": "Location",
+            "value": {
+              "locationValue": {
+                "latitude": 12.3456789,
+                "longitude": 45.6789123
+              }
+            }
           }
         ],
         "createdAt": "2026-09-01T12:00:00Z",
@@ -100,6 +118,15 @@
             "key": "ACChargingEnergyIn",
             "value": {
               "stringValue": "100.25"
+            }
+          },
+          {
+            "key": "Location",
+            "value": {
+              "locationValue": {
+                "latitude": 12.3456789,
+                "longitude": 45.6789123
+              }
             }
           }
         ],
@@ -135,6 +162,15 @@
             "value": {
               "stringValue": "200.125"
             }
+          },
+          {
+            "key": "Location",
+            "value": {
+              "locationValue": {
+                "latitude": 12.3456789,
+                "longitude": 45.6789123
+              }
+            }
           }
         ],
         "createdAt": "2026-09-01T12:05:00Z",
@@ -169,6 +205,15 @@
             "value": {
               "stringValue": "100.50"
             }
+          },
+          {
+            "key": "Location",
+            "value": {
+              "locationValue": {
+                "latitude": 12.3456789,
+                "longitude": 45.6789123
+              }
+            }
           }
         ],
         "createdAt": "2026-09-01T12:10:00Z",
@@ -202,6 +247,15 @@
             "key": "ACChargingEnergyIn",
             "value": {
               "stringValue": "200.25"
+            }
+          },
+          {
+            "key": "Location",
+            "value": {
+              "locationValue": {
+                "latitude": 12.3456789,
+                "longitude": 45.6789123
+              }
             }
           }
         ],

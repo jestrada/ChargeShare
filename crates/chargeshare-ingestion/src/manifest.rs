@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use chargeshare_core::{ConnectionId, OwnerId, VehicleId};
+use chargeshare_core::{ChargerGeofence, ConnectionId, LocationSample, OwnerId, VehicleId};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
     AcceptedEvidence, INPUT_CONTRACT_VERSION, MAX_ANNOTATIONS, MAX_MANIFEST_BYTES, MAX_MAPPINGS,
-    NORMALIZER_VERSION, NormalizedChargeType, NormalizedEventKind, RejectionReason,
-    TIMESTAMP_VERSION, parse_position,
+    NORMALIZER_VERSION, NormalizedChargeType, NormalizedEventKind, NormalizedLocation,
+    RejectionReason, TIMESTAMP_VERSION, parse_position,
 };
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -55,6 +55,31 @@ pub struct ManifestConfig {
     pub timestamp_version: String,
     pub mappings: Vec<DeviceMapping>,
     pub annotations: Vec<Annotation>,
+    #[serde(default = "default_geofence_version")]
+    pub geofence_version: String,
+    #[serde(default)]
+    pub geofences: Vec<OwnerGeofence>,
+}
+
+fn default_geofence_version() -> String {
+    "fictional-geofence-v1".to_owned()
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerGeofence {
+    pub owner: String,
+    pub center: NormalizedLocation,
+    pub radius_meters: u32,
+}
+
+impl OwnerGeofence {
+    pub fn to_core(&self) -> Result<ChargerGeofence, RejectionReason> {
+        let LocationSample::Valid(center) = self.center.to_core()? else {
+            return Err(RejectionReason::InvalidManifest);
+        };
+        ChargerGeofence::new(center, self.radius_meters).ok_or(RejectionReason::InvalidManifest)
+    }
 }
 
 impl fmt::Debug for ManifestConfig {
@@ -96,6 +121,7 @@ impl Manifest {
             &config.manifest_version,
             &config.normalizer_version,
             &config.timestamp_version,
+            &config.geofence_version,
         ] {
             OwnerId::new(version).map_err(|_| RejectionReason::InvalidManifest)?;
         }
@@ -126,6 +152,26 @@ impl Manifest {
             }
         }
         let mut annotation_indices = BTreeMap::new();
+        config
+            .geofences
+            .sort_by(|left, right| left.owner.cmp(&right.owner));
+        let owners: BTreeSet<_> = config
+            .mappings
+            .iter()
+            .map(|mapping| &mapping.owner)
+            .collect();
+        let mut configured_owners = BTreeSet::new();
+        for geofence in &config.geofences {
+            geofence
+                .to_core()
+                .map_err(|_| RejectionReason::InvalidManifest)?;
+            if !owners.contains(&geofence.owner) || !configured_owners.insert(&geofence.owner) {
+                return Err(RejectionReason::InvalidManifest);
+            }
+        }
+        if !config.geofences.is_empty() && configured_owners != owners {
+            return Err(RejectionReason::InvalidManifest);
+        }
         for (index, annotation) in config.annotations.iter().enumerate() {
             VehicleId::new(&annotation.device).map_err(|_| RejectionReason::InvalidManifest)?;
             ConnectionId::new(&annotation.connection)

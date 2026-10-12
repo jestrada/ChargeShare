@@ -54,6 +54,12 @@ fn ledger_for(manifest: &Manifest) -> Ledger {
             )
             .unwrap();
     }
+    for geofence in &manifest.config().geofences {
+        ledger.configure_charger(
+            OwnerId::new(&geofence.owner).unwrap(),
+            geofence.to_core().unwrap(),
+        );
+    }
     ledger
 }
 
@@ -74,6 +80,7 @@ fn core_event(
         kind,
         charge_type,
         counter: counter.map(CounterReading::parse_kwh),
+        location: chargeshare_core::LocationSample::Missing,
     }
 }
 
@@ -110,7 +117,7 @@ fn candidate_golden_records_equal_direct_core_events_with_separate_provenance() 
             ["100.00", "100.25", "100.50"],
             ["200.00", "200.125", "200.25"],
         ][index % 2][sample];
-        let expected = core_event(
+        let mut expected = core_event(
             vehicle,
             "connection-1",
             sample as u64 + 1,
@@ -118,6 +125,9 @@ fn candidate_golden_records_equal_direct_core_events_with_separate_provenance() 
             [EventKind::Start, EventKind::Sample, EventKind::End][sample],
             ChargeType::Ac,
             Some(counter),
+        );
+        expected.location = chargeshare_core::LocationSample::Valid(
+            chargeshare_core::LocationPoint::new(12.3456789, 45.6789123).unwrap(),
         );
         assert_eq!(accepted.event.to_core().unwrap(), expected);
         assert_eq!(accepted.provenance.device, device);
@@ -140,13 +150,18 @@ fn candidate_golden_records_equal_direct_core_events_with_separate_provenance() 
             summary.observed_ac,
             Energy::parse_kwh(expected_energy).unwrap()
         );
-        assert_eq!(summary.eligible_shared_charger, Energy::ZERO);
-        assert!(summary.held_or_excluded[0].quality_flags.is_empty());
-        assert!(
-            summary.held_or_excluded[0]
-                .exclusion_reasons
-                .contains(&ExclusionReason::UnconfirmedCharger)
-        );
+        if vehicle == "vehicle-a" {
+            assert_eq!(summary.eligible_shared_charger, summary.observed_ac);
+            assert!(summary.held_or_excluded.is_empty());
+        } else {
+            assert_eq!(summary.eligible_shared_charger, Energy::ZERO);
+            assert!(summary.held_or_excluded[0].quality_flags.is_empty());
+            assert!(
+                summary.held_or_excluded[0]
+                    .exclusion_reasons
+                    .contains(&ExclusionReason::OtherCharger)
+            );
+        }
     }
 }
 
@@ -269,6 +284,9 @@ fn duplicate_devices_vehicles_and_source_associations_fail_before_normalization(
     );
     let mut config = manifest_config();
     config.mappings[1].owner = config.mappings[0].owner.clone();
+    config
+        .geofences
+        .retain(|geofence| geofence.owner == "owner-a");
     Manifest::new(config).unwrap();
 }
 
@@ -587,7 +605,7 @@ fn discarded_names_battery_fields_and_rejected_payload_text_never_enter_safe_evi
     payload["data"]
         .as_array_mut()
         .unwrap()
-        .push(json!({"key":"Location","value":{"stringValue":sentinel}}));
+        .push(json!({"key":"OriginLocation","value":{"stringValue":sentinel}}));
     let reason = normalize(
         &manifest,
         Some(b"device-1"),
@@ -956,6 +974,9 @@ fn explicit_input_bounds_and_manifest_duplicate_fields_fail_safely() {
 #[test]
 fn pause_resume_annotations_are_explicit_and_do_not_bridge_connections() {
     let mut config = manifest_config();
+    config
+        .annotations
+        .retain(|annotation| annotation.connection == "connection-1");
     config.annotations.extend([
         Annotation {
             device: "device-1".to_owned(),
@@ -1209,6 +1230,110 @@ fn explicit_mapping_and_annotation_count_limits_fail_before_duplicate_validation
     config.annotations = vec![config.annotations[0].clone(); MAX_ANNOTATIONS + 1];
     assert_eq!(
         Manifest::new(config).unwrap_err(),
+        RejectionReason::InvalidManifest
+    );
+}
+
+#[test]
+fn location_normalization_preserves_only_valid_canonical_points_or_safe_invalid_state() {
+    for (value, valid) in [
+        (
+            json!({"locationValue":{"latitude":12.3456789,"longitude":45.6789123}}),
+            true,
+        ),
+        (
+            json!({"locationValue":{"latitude":999.1234501,"longitude":45.6789123}}),
+            false,
+        ),
+        (json!({"locationValue":{"latitude":12.3456789}}), false),
+        (
+            json!({"locationValue":{"latitude":"fictional-private-location","longitude":45.6789123}}),
+            false,
+        ),
+        (json!({"invalid":true}), false),
+        (json!({"doubleValue":12.3456789}), false),
+        (
+            json!({"locationValue":{"latitude":12.3456789,"longitude":45.6789123,"altitude":999.1234501}}),
+            false,
+        ),
+    ] {
+        let mut payload: Value = serde_json::from_slice(&receiver_payload(
+            "device-1",
+            "2026-09-01T12:00:00Z",
+            Some("0"),
+        ))
+        .unwrap();
+        payload["data"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"key":"Location","value":value}));
+        let evidence = normalize(
+            &manifest(),
+            Some(b"device-1"),
+            &serde_json::to_vec(&payload).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                evidence.event.to_core().unwrap().location,
+                chargeshare_core::LocationSample::Valid(_)
+            ) == valid
+        );
+        let stored = serde_json::to_string(&evidence).unwrap();
+        for forbidden in [
+            "locationValue",
+            "999.1234501",
+            "fictional-private-location",
+            "altitude",
+        ] {
+            assert!(!stored.contains(forbidden));
+        }
+        let diagnostic = format!("{evidence:?}");
+        for forbidden in ["12.3456789", "45.6789123", "999.1234501"] {
+            assert!(!diagnostic.contains(forbidden));
+        }
+    }
+    let raw = br#"{"data":[{"key":"Location","value":{"locationValue":{"latitude":12.3456789,"latitude":12.3556789,"longitude":45.6789123}}}],"createdAt":"2026-09-01T12:00:00Z","vin":"device-1","isResend":false}"#;
+    let evidence = normalize(&manifest(), Some(b"device-1"), raw).unwrap();
+    assert_eq!(
+        evidence.event.location,
+        Some(chargeshare_ingestion::NormalizedLocation::Invalid)
+    );
+}
+
+#[test]
+fn geofence_configuration_requires_unique_registered_owners_valid_centers_and_approved_radius() {
+    let config = manifest_config();
+    for radius in [0, 99, 101] {
+        let mut changed = config.clone();
+        changed.geofences[0].radius_meters = radius;
+        assert_eq!(
+            Manifest::new(changed).unwrap_err(),
+            RejectionReason::InvalidManifest
+        );
+    }
+    let mut duplicate = config.clone();
+    duplicate.geofences.push(duplicate.geofences[0].clone());
+    assert_eq!(
+        Manifest::new(duplicate).unwrap_err(),
+        RejectionReason::InvalidManifest
+    );
+    let mut unknown = config.clone();
+    unknown.geofences[0].owner = "owner-unknown".to_owned();
+    assert_eq!(
+        Manifest::new(unknown).unwrap_err(),
+        RejectionReason::InvalidManifest
+    );
+    let mut missing = config.clone();
+    missing.geofences.pop();
+    assert_eq!(
+        Manifest::new(missing).unwrap_err(),
+        RejectionReason::InvalidManifest
+    );
+    let mut invalid = config;
+    invalid.geofences[0].center = chargeshare_ingestion::NormalizedLocation::Invalid;
+    assert_eq!(
+        Manifest::new(invalid).unwrap_err(),
         RejectionReason::InvalidManifest
     );
 }

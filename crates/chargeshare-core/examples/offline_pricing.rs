@@ -1,6 +1,6 @@
 use chargeshare_core::{
-    ChargeType, ChargerClassification, ConnectionId, CounterReading, Event, EventKind, Ledger,
-    OwnerId, RateSchedule, RateWindow, SessionId, UsdRate, VehicleId,
+    ChargeType, ChargerGeofence, ConnectionId, CounterReading, Event, EventKind, Ledger,
+    LocationPoint, LocationSample, OwnerId, RateSchedule, RateWindow, UsdRate, VehicleId,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,16 +40,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 kind,
                 charge_type: ChargeType::Ac,
                 counter: Some(CounterReading::parse_kwh(counter)),
+                location: LocationSample::Valid(LocationPoint::new(0.0, 0.0).unwrap()),
             })?;
         }
-        ledger.classify(
-            &vehicle,
-            &SessionId {
-                vehicle: vehicle.clone(),
-                connection: connection.clone(),
-            },
-            ChargerClassification::SharedCharger,
-        )?;
+        ledger.configure_charger(
+            OwnerId::new(owner)?,
+            ChargerGeofence::new(LocationPoint::new(0.0, 0.0).unwrap(), 100).unwrap(),
+        );
         let summary = ledger.pricing(&vehicle, &rates)?;
         println!("{}", summary.evidence_label);
         println!(

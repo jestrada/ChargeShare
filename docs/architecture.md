@@ -2,8 +2,8 @@
 
 ChargeShare is a synthetic charging ledger with exact offline pricing, a local
 receiver/Kafka harness, durable Rust ingestion and a scoped browser view.
-Ingestion and persisted viewing are implemented; charger classification and
-persisted pricing are the next increments. No live vehicle, account or production
+Ingestion, persisted viewing and automatic location classification are implemented;
+persisted pricing is the next increment. No live vehicle, account or production
 service is connected. Setup and checks are in [README](../README.md); contributor
 rules are in [AGENTS](../AGENTS.md) and [code design](code-design.md).
 
@@ -27,20 +27,21 @@ receiver remains external Go code, with immutable inputs in
 ## Architecture at a glance
 
 Arrows show evidence/result flow. Solid arrows describe implemented paths;
-dashed arrows describe the planned classification and persisted pricing increments.
+dashed arrows describe the planned persisted pricing increment.
 
 ```mermaid
 flowchart LR
     sender["Rust harness: fictional mTLS frames"] --> receiver["Official Go receiver"]
     receiver --> kafka["Private Kafka: decoded V records"]
     kafka --> normalize
+    kafka --> capture["Harness: curated acceptance evidence"]
     subgraph owner["Single Rust owner: chargeshare-ingestion serve"]
-        normalize["Frozen mapping + normalization"] --> sqlite[("SQLite: evidence + dispositions + progress")]
+        normalize["Frozen mapping + normalized location/counters"] --> sqlite[("SQLite: evidence + config versions + progress")]
+        config["Versioned owner charger geofences"] --> sqlite
         sqlite --> replay["Scoped core replay"]
-        replay --> results["Committed observed AC + quality + eligibility"]
+        replay --> classification["Core: automatic session location classification"]
+        classification --> results["Committed observed AC + quality + eligibility + reason"]
         results --> api["Scoped HTTP: host loopback 8788"]
-        replay -.-> classification["Planned #22: automatic location/geofence classification"]
-        classification -.-> results
         classification -.-> pricing["Planned #23: persisted exact pricing"]
     end
     api --> persisted["Persisted browser entry: 5174"]
@@ -87,7 +88,12 @@ Responses contain aliases, exact six-decimal observed/eligible kWh, sessions,
 quality/exclusion reasons, synthetic measurement labels, allowlisted provenance
 and a deterministic semantic revision. Revisions reflect visible domain results
 and provenance, not requests or redelivery; they are not cryptographic tokens.
-No raw payload, device identity, credentials, paths, offsets or logs are served.
+No coordinates, raw payload, device identity, credentials, paths, offsets or logs
+are served. Session results include `SharedCharger`, `OtherCharger` or `Held` and
+`InsideGeofence`, `OutsideGeofence`, `LocationUnavailable` or `LocationAmbiguous`.
+The overall state is empty, eligible when every session is eligible, or held when
+any session remains held or excluded. Results provenance identifies the loaded
+geofence version; classification reasons are separate from evidence quality.
 
 The persisted UI separates empty, complete zero, incomplete/held, refused and
 unavailable states. Scope changes hide prior results; failed reads clear them.
@@ -103,7 +109,11 @@ frames, exact ACK bytes and expected decoded Kafka multisets for complete,
 missing, duplicate and reordered traffic. Frames use official helpers from the
 pinned receiver revision; names and battery readings remain fixture context.
 The verifier takes starting offsets before sending, so retained traffic cannot
-satisfy a fresh run. ACK alone never proves the downstream result.
+satisfy a fresh run. ACK alone never proves the downstream result. After matching
+observed records, the harness retains curated normalized evidence for complete
+sessions using the ingestion normalizer, preserving one field-validation policy.
+Its publication summaries omit location fields, and replay metadata
+contains scenario identity, counts and starting offsets rather than raw payloads.
 
 [`dev/ingestion-manifest.json`](../dev/ingestion-manifest.json) freezes fictional
 device/owner/vehicle associations and maps observed source moments to explicit
@@ -111,14 +121,41 @@ Start/Sample/End, connection, position and AC annotations. An annotation creates
 no event without its observed record and contains no expected energy counter.
 Charging-complete state and silence never invent an End.
 
-The versioned normalizer currently accepts `VehicleName`, `BatteryLevel`,
-`DetailedChargeState` and `ACChargingEnergyIn` in the inspected V envelope.
+The versioned normalizer accepts `VehicleName`, `BatteryLevel`,
+`DetailedChargeState`, `ACChargingEnergyIn` and `Location` in the inspected V envelope.
 Names and battery values are discarded; counters come only from observed strings.
 Missing counters remain absent, invalid counters retain safe reasons, and
 unsupported/duplicate fields reject safely. Integral UTC `createdAt` becomes
 signed Unix seconds; Kafka's zero timestamp header is not event time. Mapping,
 input, normalizer and time-conversion versions are frozen with the database.
-Location inputs and their retention contract belong to the #22 extension below.
+`Location.locationValue` supplies latitude and longitude. Finite coordinates in
+latitude ±90° and longitude ±180° are normalized to canonical decimal strings
+with signed zero removed. Malformed, duplicate-coordinate, out-of-range and invalid
+location values retain only an invalid state; missing location stays absent.
+Other receiver fields remain strictly allowlisted. Raw location payloads and
+rejected coordinate text are discarded. Diagnostics redact points, and coordinates
+never enter API responses, browser bundles, application logs or acceptance output.
+
+The manifest also configures one synthetic center and a 100 m radius for every
+owner, shared by all that owner's vehicles, under a separate geofence version.
+The Rust core uses great-circle haversine distance on a sphere with mean radius
+6,371,008.8 m. The radius is inclusive, with a 10 nm numerical rounding allowance;
+this computation makes no claim about physical positioning accuracy.
+Every retained logical session position contributes location evidence. All inside
+means `SharedCharger`; all outside means `OtherCharger`. No valid samples means
+`Held` / `LocationUnavailable`; partial coverage, mixed locations or conflicting
+evidence means `Held` / `LocationAmbiguous`. A later valid sample can enrich the
+same otherwise-identical missing/invalid event without duplicating energy or
+boundaries. Distinct valid points at the same position remain conflicts.
+
+Classification is derived on replay, without stored per-session decisions,
+review controls, overrides or a classify API. Loading a new geofence version on
+owner startup automatically replays every affected retained session using that
+config. Previously loaded versions retain immutable normalized config; changing
+content under a reused version refuses recovery. Only geofence settings can change
+through this path; source bindings, mappings, annotations and normalization/time
+contracts stay frozen. Schema-one datasets migrate transactionally without
+removing evidence or progress; their absent locations yield an automatic hold.
 
 SQLite stores curated variants or fixed rejection reasons, provenance and next
 partition positions in one transaction using WAL, FULL synchronization, foreign
@@ -155,18 +192,21 @@ databases stay private; only allowlisted synthetic summaries may be published.
 
 ### Core module ownership
 
+Location validation and distance live in `location`; automatic classification lives
+with session reconstruction in `session`. Neither depends on the ledger or IO.
+
 The small [public facade](../crates/chargeshare-core/src/lib.rs) explicitly exports
 types from cohesive private modules: `energy`, `identity`, `event`, `session`,
-`ledger`, `error`, `money`, `tariff` and `pricing`. Domain imports are acyclic and
-never depend on adapters. Extra layers, generic repositories and service splits
+`ledger`, `location`, `error`, `money`, `tariff` and `pricing`. Domain imports are
+acyclic and never depend on adapters. Extra layers, generic repositories and service splits
 need a concrete approved use case; current orchestration stays in Ledger and the
 outer ingestion crate. [Code design](code-design.md) describes the design workflow.
 
 Owner, vehicle, connection and tariff-version aliases accept 1–64 ASCII letters,
-digits, underscores or hyphens. A vehicle has exactly one owner. Every read and
-classification operation requires vehicle scope; wrong-scope requests refuse
-without mutation. Session identity is `(vehicle, connection)` and positions are
-vehicle-wide. Connection aliases must not be reused for another connection.
+digits, underscores or hyphens. A vehicle has exactly one owner. Every read requires
+vehicle scope; wrong-scope requests refuse without mutation.
+Automatic classification selects configuration by the vehicle’s registered owner.
+Session identity is `(vehicle, connection)` and positions are vehicle-wide. Connection aliases must not be reused for another connection.
 
 Energy is checked integer arithmetic with six decimal kWh places. Signs,
 whitespace, exponents, non-finite values and excess precision reject; arithmetic
@@ -183,10 +223,10 @@ Start/End require explicit evidence and baseline/terminal samples. Pause/resume
 stay in the same connection. Missing boundaries/readings, malformed ordering,
 rollback and conflicting evidence retain visible quality flags. Silence means
 neither zero consumption nor a session end. Only complete, uncontested AC sessions
-classified `SharedCharger` are eligible; `OtherCharger` and `Unconfirmed` are
-excluded. Classification cannot clear quality flags or DC/ambiguous exclusions.
-The persisted runtime currently leaves sessions `Unconfirmed` with zero eligible
-energy; automatic classification is planned in #22.
+classified `SharedCharger` are eligible; `OtherCharger` and automatic location
+holds are excluded. Classification cannot clear quality flags or DC/ambiguous exclusions.
+The same automatic policy supplies offline and persisted eligibility. Location
+cannot make incomplete, conflicting, DC or ambiguous charge-type evidence eligible.
 
 ### Exact offline pricing
 
@@ -217,14 +257,11 @@ infer energy from battery percentage or a last power reading across gaps.
 
 ## Key decisions and next increments
 
-- [#22](https://github.com/jestrada/ChargeShare/issues/22): charger classification
-  will run automatically in the sole Rust owner from vehicle location compared
-  with each owner's saved charger geofence, with no manual review or confirmation.
-  Synthetic fixtures will supply fictional coordinates and the allowlist will
-  accept the minimum required location fields. Results will persist and recompute
-  deterministically when evidence changes. Location cannot override quality or
-  charge-type exclusions. Radius, configuration, sample selection, missing/ambiguous
-  location policy and retained representation still need a finalized contract.
+- [#22](https://github.com/jestrada/ChargeShare/issues/22): automatic classification
+  runs inside the Rust core from normalized session location and owner-scoped,
+  versioned geofences. Retained inputs support restart and reclassification;
+  only otherwise-eligible AC `SharedCharger` energy crosses the pricing boundary.
+  There is no manual per-session classification path or coordinate display.
 - [#23](https://github.com/jestrada/ChargeShare/issues/23): persisted versioned rates
   and exact pricing follow classification; the existing persisted UI has no costs.
 - Live transport, production authentication/sharing, privacy/retention and hosting

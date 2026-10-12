@@ -23,7 +23,8 @@ struct RuntimeIdentity {
 struct RetainedRun {
     scenario: String,
     starting_offsets: std::collections::BTreeMap<u32, u64>,
-    expected: Vec<fixtures::ExpectedRecord>,
+    expected_records: usize,
+    injected_missing_output: bool,
 }
 
 fn main() {
@@ -62,8 +63,15 @@ fn execute() -> Result<()> {
         }
         "replay" => {
             let run: RetainedRun = serde_json::from_slice(&fs::read(runtime.runtime_dir.join("last-run.json"))?)?;
-            let observed = broker.observe(&run.starting_offsets, run.expected.len())?;
-            fixtures::verify(&run.expected, &observed)?;
+            let mut expected = fixtures::load(&run.scenario)?.expected;
+            if run.injected_missing_output {
+                expected.push(fixtures::missing_expectation());
+            }
+            if expected.len() != run.expected_records {
+                return Err("fixture: retained scenario count mismatch".into());
+            }
+            let observed = broker.observe(&run.starting_offsets, expected.len())?;
+            fixtures::verify(&expected, &observed)?;
             println!("retained replay passed: {}; local broker retention, no application crash-recovery claim", run.scenario);
         }
         "invalid-auth" => {
@@ -74,7 +82,7 @@ fn execute() -> Result<()> {
             }
             println!("invalid-auth passed: unrelated synthetic CA rejected; no telemetry record");
         }
-        "smoke" | "all" | "complete" | "missing" | "adverse" => {
+        "smoke" | "all" | "complete" | "missing" | "adverse" | "location" | "location-recovery" => {
             let scenario = fixtures::load(mode)?;
             let starting_offsets = broker.offsets()?;
             if !arguments.iter().any(|argument| argument == "--no-send") {
@@ -92,20 +100,27 @@ fn execute() -> Result<()> {
             }
             let observed = broker.observe(&starting_offsets, expected.len())?;
             fixtures::verify(&expected, &observed)?;
-            let run = RetainedRun { scenario: mode.to_owned(), starting_offsets, expected };
+            let run = RetainedRun {
+                scenario: mode.to_owned(), starting_offsets, expected_records: expected.len(),
+                injected_missing_output: arguments.iter().any(|argument| argument == "--inject-missing-output"),
+            };
             write_private(runtime.runtime_dir.join("last-run.json"), serde_json::to_vec_pretty(&run)?)?;
-            write_private(runtime.runtime_dir.join("normalized.json"), serde_json::to_vec_pretty(&fixtures::normalized(&observed))?)?;
+            write_private(runtime.runtime_dir.join("normalized.json"), serde_json::to_vec_pretty(&fixtures::publication_records(&observed))?)?;
             if mode == "complete" {
+                let manifest = chargeshare_ingestion::Manifest::from_json(&fs::read(runtime.runtime_dir.join("manifest.json"))?)?;
+                let evidence = observed.iter().map(|record| {
+                    chargeshare_ingestion::normalize(&manifest, Some(record.key.as_bytes()), &serde_json::to_vec(&record.payload).map_err(|_| chargeshare_ingestion::RejectionReason::UnsupportedPayload)?)
+                }).collect::<std::result::Result<Vec<_>, _>>()?;
                 write_private(runtime.runtime_dir.join("decoded-capture.json"), serde_json::to_vec_pretty(&serde_json::json!({
                     "receiver_revision": RECEIVER_REVISION,
                     "actual_receiver_transport_verified": true,
                     "topic": "chargeshare_synthetic_V",
-                    "records": fixtures::normalized(&observed),
+                    "evidence": evidence,
                 }))?)?;
             }
             println!("{mode} passed: {} expected ACKs and {} matching decoded records; receiver {RECEIVER_REVISION}; {BOUNDARY}", scenario.frames.len(), observed.len());
         }
-        _ => return Err("usage: chargeshare-harness ready|smoke|all|complete|missing|adverse|invalid-auth|replay [--no-send|--inject-missing-output]".into()),
+        _ => return Err("usage: chargeshare-harness ready|smoke|all|complete|missing|adverse|location|location-recovery|invalid-auth|replay [--no-send|--inject-missing-output]".into()),
     }
     FileExt::unlock(&lock)?;
     Ok(())

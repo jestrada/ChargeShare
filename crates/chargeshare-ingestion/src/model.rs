@@ -1,7 +1,8 @@
 use std::fmt;
 
 use chargeshare_core::{
-    ChargeType, ConnectionId, CounterProblem, CounterReading, Event, EventKind, VehicleId,
+    ChargeType, ConnectionId, CounterProblem, CounterReading, Event, EventKind, LocationPoint,
+    LocationSample, VehicleId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +13,60 @@ pub const MAX_PAYLOAD_BYTES: usize = 65_536;
 pub const MAX_MANIFEST_BYTES: usize = 2_097_152;
 pub const MAX_MAPPINGS: usize = 256;
 pub const MAX_ANNOTATIONS: usize = 8_192;
+
+#[derive(Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NormalizedLocation {
+    Valid { latitude: String, longitude: String },
+    Invalid,
+}
+
+impl NormalizedLocation {
+    pub fn from_coordinates(latitude: f64, longitude: f64) -> Self {
+        match LocationPoint::new(latitude, longitude) {
+            Some(point) => Self::Valid {
+                latitude: point.latitude().to_string(),
+                longitude: point.longitude().to_string(),
+            },
+            None => Self::Invalid,
+        }
+    }
+
+    pub fn to_core(&self) -> Result<LocationSample, RejectionReason> {
+        match self {
+            Self::Invalid => Ok(LocationSample::Invalid),
+            Self::Valid {
+                latitude,
+                longitude,
+            } => {
+                let point = LocationPoint::new(
+                    latitude
+                        .parse()
+                        .map_err(|_| RejectionReason::InvalidNormalizedEvent)?,
+                    longitude
+                        .parse()
+                        .map_err(|_| RejectionReason::InvalidNormalizedEvent)?,
+                )
+                .ok_or(RejectionReason::InvalidNormalizedEvent)?;
+                if point.latitude().to_string() != *latitude
+                    || point.longitude().to_string() != *longitude
+                {
+                    return Err(RejectionReason::InvalidNormalizedEvent);
+                }
+                Ok(LocationSample::Valid(point))
+            }
+        }
+    }
+}
+
+impl fmt::Debug for NormalizedLocation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Valid { .. } => "Valid { coordinates: <redacted> }",
+            Self::Invalid => "Invalid",
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -183,6 +238,8 @@ pub struct NormalizedEvent {
     pub kind: NormalizedEventKind,
     pub charge_type: NormalizedChargeType,
     pub counter: Option<NormalizedCounter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<NormalizedLocation>,
 }
 
 impl NormalizedEvent {
@@ -204,6 +261,12 @@ impl NormalizedEvent {
                 .as_ref()
                 .map(NormalizedCounter::to_core)
                 .transpose()?,
+            location: self
+                .location
+                .as_ref()
+                .map(NormalizedLocation::to_core)
+                .transpose()?
+                .unwrap_or_default(),
         })
     }
 }

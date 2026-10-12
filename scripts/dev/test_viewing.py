@@ -13,11 +13,13 @@ import test_runtime as runtime_tests
 
 
 def complete_results(owner="owner-a", vehicle="vehicle-a", energy="0.500000"):
+    shared = owner == "owner-a"
+    eligible = energy if shared else "0.000000"
     return {
-        "owner": owner, "vehicle": vehicle, "state": "held", "evidence_boundary": "Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated",
-        "observed_ac_kwh": energy, "eligible_shared_charger_kwh": "0.000000", "revision": "results-v1-0123456789abcdef",
-        "provenance": {"source": "synthetic-receiver-kafka", "source_epoch": "synthetic-epoch", "input_contract": "tesla-v-bd076fe-v1", "mapping_version": "fictional-mapping-v1", "manifest_version": "fictional-manifest-v1", "normalizer_version": "chargeshare-normalizer-v1", "calculation_version": "scoped-core-replay-v1"},
-        "sessions": [{"vehicle": vehicle, "connection": "connection-1", "classification": "Unconfirmed", "evidence_state": "complete", "observed_ac_kwh": energy, "eligible_shared_charger_kwh": "0.000000", "quality_flags": [], "exclusion_reasons": ["UnconfirmedCharger"]}],
+        "owner": owner, "vehicle": vehicle, "state": "eligible" if shared else "held", "evidence_boundary": "Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated",
+        "observed_ac_kwh": energy, "eligible_shared_charger_kwh": eligible, "revision": "results-v1-0123456789abcdef",
+        "provenance": {"source": "synthetic-receiver-kafka", "source_epoch": "synthetic-epoch", "input_contract": "tesla-v-bd076fe-v1", "mapping_version": "fictional-mapping-v1", "manifest_version": "fictional-manifest-v1", "normalizer_version": "chargeshare-normalizer-v1", "calculation_version": "scoped-core-replay-v2", "geofence_version": "fictional-geofence-v1"},
+        "sessions": [{"vehicle": vehicle, "connection": "connection-1", "classification": "SharedCharger" if shared else "OtherCharger", "classification_reason": "InsideGeofence" if shared else "OutsideGeofence", "evidence_state": "complete", "observed_ac_kwh": energy, "eligible_shared_charger_kwh": eligible, "quality_flags": [], "exclusion_reasons": [] if shared else ["OtherCharger"]}],
     }
 
 
@@ -25,7 +27,7 @@ class HttpAcceptanceTests(unittest.TestCase):
     def test_scope_assertion_rejects_wrong_energy_leakage_quality_and_extra_payload(self):
         result = complete_results()
         viewing.assert_scoped_result(result, "owner-a", "vehicle-a", "0.500000")
-        changes = [lambda value: value.update(observed_ac_kwh="0.600000"), lambda value: value.update(owner="owner-b"), lambda value: value.update(eligible_shared_charger_kwh="0.500000"), lambda value: value.update(raw_payload="fictional-private"), lambda value: value["sessions"][0].update(vehicle="vehicle-b"), lambda value: value["sessions"][0].update(quality_flags=["MissingBaseline"]), lambda value: value["sessions"][0].update(exclusion_reasons=[]), lambda value: value["provenance"].update(raw="fictional-private")]
+        changes = [lambda value: value.update(observed_ac_kwh="0.600000"), lambda value: value.update(owner="owner-b"), lambda value: value.update(eligible_shared_charger_kwh="0.000000"), lambda value: value.update(raw_payload="fictional-private"), lambda value: value["sessions"][0].update(vehicle="vehicle-b"), lambda value: value["sessions"][0].update(quality_flags=["MissingBaseline"]), lambda value: value["sessions"][0].update(classification_reason="LocationUnavailable"), lambda value: value["provenance"].update(raw="fictional-private")]
         for change in changes:
             changed = copy.deepcopy(result)
             change(changed)

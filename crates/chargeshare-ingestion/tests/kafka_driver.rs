@@ -232,7 +232,7 @@ fn focused_mock_transport_resumes_sqlite_after_forced_duplicate_and_reconnect() 
         )
         .unwrap();
     assert_eq!(summary.observed_ac.to_string(), "0.500000 kWh");
-    assert_eq!(summary.eligible_shared_charger.to_string(), "0.000000 kWh");
+    assert_eq!(summary.eligible_shared_charger.to_string(), "0.500000 kWh");
 }
 
 #[test]
@@ -865,7 +865,7 @@ impl RuntimeApi {
                 "/api/poc/owners/{owner}/vehicles/{vehicle}/results"
             ));
             if status == 200
-                && result["state"] == "held"
+                && matches!(result["state"].as_str(), Some("held" | "eligible"))
                 && result["observed_ac_kwh"] == energy
                 && matches!(
                     result["sessions"][0]["evidence_state"].as_str(),
@@ -922,15 +922,48 @@ fn owning_process_serves_committed_scopes_and_refuses_leakage_over_http() {
         let result = api.wait_energy(vehicle, energy);
         assert_eq!(result["owner"], owner);
         assert_eq!(result["vehicle"], vehicle);
-        assert_eq!(result["state"], "held");
-        assert_eq!(result["eligible_shared_charger_kwh"], "0.000000");
+        assert_eq!(
+            result["state"],
+            if vehicle == "vehicle-a" {
+                "eligible"
+            } else {
+                "held"
+            }
+        );
+        assert_eq!(
+            result["eligible_shared_charger_kwh"],
+            if vehicle == "vehicle-a" {
+                energy
+            } else {
+                "0.000000"
+            }
+        );
         assert_eq!(result["sessions"].as_array().unwrap().len(), 1);
         assert_eq!(result["sessions"][0]["vehicle"], vehicle);
         assert_eq!(result["sessions"][0]["connection"], "connection-1");
-        assert_eq!(result["sessions"][0]["classification"], "Unconfirmed");
+        assert_eq!(
+            result["sessions"][0]["classification"],
+            if vehicle == "vehicle-a" {
+                "SharedCharger"
+            } else {
+                "OtherCharger"
+            }
+        );
+        assert_eq!(
+            result["sessions"][0]["classification_reason"],
+            if vehicle == "vehicle-a" {
+                "InsideGeofence"
+            } else {
+                "OutsideGeofence"
+            }
+        );
         assert_eq!(
             result["sessions"][0]["exclusion_reasons"],
-            serde_json::json!(["UnconfirmedCharger"])
+            if vehicle == "vehicle-a" {
+                serde_json::json!([])
+            } else {
+                serde_json::json!(["OtherCharger"])
+            }
         );
         assert!(
             result["evidence_boundary"]
@@ -957,6 +990,10 @@ fn owning_process_serves_committed_scopes_and_refuses_leakage_over_http() {
             "owed",
             "kafka:9092",
             "sqlite3",
+            "latitude",
+            "longitude",
+            "12.3456789",
+            "45.6789123",
         ] {
             assert!(!text.contains(forbidden));
         }
@@ -1000,7 +1037,13 @@ fn concurrent_http_reads_during_ingestion_are_coherent_and_revision_tracks_visib
                         result["observed_ac_kwh"],
                         result["sessions"][0]["observed_ac_kwh"]
                     );
-                    assert_eq!(result["eligible_shared_charger_kwh"], "0.000000");
+                    assert_eq!(
+                        result["eligible_shared_charger_kwh"],
+                        result["sessions"][0]["eligible_shared_charger_kwh"]
+                    );
+                    if result["sessions"][0]["evidence_state"] == "incomplete" {
+                        assert_eq!(result["eligible_shared_charger_kwh"], "0.000000");
+                    }
                     assert_eq!(result["sessions"][0]["vehicle"], "vehicle-a");
                 }
             })
@@ -1058,7 +1101,7 @@ fn complete_zero_evidence_is_distinct_from_empty_and_incomplete_http_results() {
     publish(&cluster.bootstrap_servers(), &input);
     let zero = api.wait_energy("vehicle-a", "0.000000");
     assert_eq!(zero["sessions"][0]["evidence_state"], "complete_zero");
-    assert_eq!(zero["state"], "held");
+    assert_eq!(zero["state"], "eligible");
     assert_ne!(empty["revision"], zero["revision"]);
 }
 

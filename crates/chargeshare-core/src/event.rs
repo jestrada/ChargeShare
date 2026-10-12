@@ -1,5 +1,6 @@
 use crate::energy::{CounterProblem, Energy};
 use crate::identity::{ConnectionId, VehicleId};
+use crate::location::LocationSample;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ChargeType {
@@ -40,4 +41,5 @@ pub struct Event {
     pub kind: EventKind,
     pub charge_type: ChargeType,
     pub counter: Option<CounterReading>,
+    pub location: LocationSample,
 }

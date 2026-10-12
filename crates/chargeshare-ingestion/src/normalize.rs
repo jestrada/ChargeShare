@@ -5,7 +5,7 @@ use serde::Deserialize;
 use crate::manifest::{Manifest, parse_utc_seconds};
 use crate::model::{
     AcceptedEvidence, EvidenceProvenance, MAX_PAYLOAD_BYTES, NormalizedCounter, NormalizedEvent,
-    RejectionReason,
+    NormalizedLocation, RejectionReason,
 };
 
 #[derive(Deserialize)]
@@ -21,7 +21,7 @@ struct ReceiverPayload {
 #[serde(deny_unknown_fields)]
 struct ReceiverField {
     key: ReceiverFieldKey,
-    value: ReceiverValue,
+    value: Box<serde_json::value::RawValue>,
 }
 
 #[derive(Clone, Copy, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
@@ -30,6 +30,7 @@ enum ReceiverFieldKey {
     BatteryLevel,
     DetailedChargeState,
     ACChargingEnergyIn,
+    Location,
 }
 
 #[derive(Deserialize)]
@@ -75,7 +76,7 @@ pub fn normalize(
     let annotation = manifest
         .annotation(device, time)
         .ok_or(RejectionReason::MissingAssociation)?;
-    let counter = decode_counter(payload.data)?;
+    let (counter, location) = decode_samples(payload.data)?;
     let config = manifest.config();
     let evidence = AcceptedEvidence {
         event: NormalizedEvent {
@@ -86,6 +87,7 @@ pub fn normalize(
             kind: annotation.kind,
             charge_type: annotation.charge_type,
             counter,
+            location,
         },
         provenance: EvidenceProvenance {
             device: mapping.device.clone(),
@@ -103,41 +105,67 @@ pub fn normalize(
     Ok(evidence)
 }
 
-fn decode_counter(
+fn decode_samples(
     fields: Vec<ReceiverField>,
-) -> Result<Option<NormalizedCounter>, RejectionReason> {
+) -> Result<(Option<NormalizedCounter>, Option<NormalizedLocation>), RejectionReason> {
     let mut observed_keys = BTreeSet::new();
     let mut counter = None;
+    let mut location = None;
     for field in fields {
         if !observed_keys.insert(field.key) {
             return Err(RejectionReason::DuplicateSourceField);
         }
+        if field.key == ReceiverFieldKey::Location {
+            location = Some(decode_location(&field.value));
+            continue;
+        }
+        let value: ReceiverValue = serde_json::from_str(field.value.get())
+            .map_err(|_| RejectionReason::UnsupportedPayload)?;
         match field.key {
             ReceiverFieldKey::VehicleName | ReceiverFieldKey::BatteryLevel => {
-                if field.value.string_value.is_none()
-                    || field.value.detailed_charge_state_value.is_some()
-                {
+                if value.string_value.is_none() || value.detailed_charge_state_value.is_some() {
                     return Err(RejectionReason::UnsupportedPayload);
                 }
             }
             ReceiverFieldKey::DetailedChargeState => {
-                if field.value.detailed_charge_state_value.is_none()
-                    || field.value.string_value.is_some()
-                {
+                if value.detailed_charge_state_value.is_none() || value.string_value.is_some() {
                     return Err(RejectionReason::UnsupportedPayload);
                 }
             }
             ReceiverFieldKey::ACChargingEnergyIn => {
-                let value = field
-                    .value
+                let counter_value = value
                     .string_value
                     .ok_or(RejectionReason::UnsupportedPayload)?;
-                if field.value.detailed_charge_state_value.is_some() {
+                if value.detailed_charge_state_value.is_some() {
                     return Err(RejectionReason::UnsupportedPayload);
                 }
-                counter = Some(NormalizedCounter::parse_kwh(&value));
+                counter = Some(NormalizedCounter::parse_kwh(&counter_value));
             }
+            ReceiverFieldKey::Location => unreachable!(),
         }
     }
-    Ok(counter)
+    Ok((counter, location))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReceiverLocationValue {
+    location_value: ReceiverLocation,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReceiverLocation {
+    latitude: f64,
+    longitude: f64,
+}
+
+fn decode_location(value: &serde_json::value::RawValue) -> NormalizedLocation {
+    match serde_json::from_str::<ReceiverLocationValue>(value.get()) {
+        Ok(value) => NormalizedLocation::from_coordinates(
+            value.location_value.latitude,
+            value.location_value.longitude,
+        ),
+        Err(_) => NormalizedLocation::Invalid,
+    }
 }

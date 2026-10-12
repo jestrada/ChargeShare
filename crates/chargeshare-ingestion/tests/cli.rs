@@ -356,10 +356,28 @@ fn decoded_verification_requires_real_capture_provenance_and_complete_associatio
     let capture = fixture.runtime.join("decoded-capture.json");
     let candidate: serde_json::Value =
         serde_json::from_slice(include_bytes!("fixtures/candidate-v.json")).unwrap();
+    let manifest =
+        chargeshare_ingestion::Manifest::from_json(include_bytes!("fixtures/manifest-v1.json"))
+            .unwrap();
+    let evidence: Vec<_> = candidate["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| {
+            chargeshare_ingestion::normalize(
+                &manifest,
+                Some(record["key"].as_str().unwrap().as_bytes()),
+                &serde_json::to_vec(&record["payload"]).unwrap(),
+            )
+            .unwrap()
+        })
+        .collect();
+    let evidence = serde_json::to_value(evidence).unwrap();
     for (verified, records, succeeds) in [
-        (false, candidate["records"].clone(), false),
+        (false, evidence.clone(), false),
         (true, serde_json::json!([]), false),
-        (true, candidate["records"].clone(), true),
+        (true, candidate["records"].clone(), false),
+        (true, evidence, true),
     ] {
         private_file(
             &capture,
@@ -367,7 +385,7 @@ fn decoded_verification_requires_real_capture_provenance_and_complete_associatio
                 "receiver_revision": "bd076fe1494841707528449560c4a19d0d426da4",
                 "actual_receiver_transport_verified": verified,
                 "topic": SYNTHETIC_TOPIC,
-                "records": records,
+                "evidence": records,
             }))
             .unwrap(),
         );

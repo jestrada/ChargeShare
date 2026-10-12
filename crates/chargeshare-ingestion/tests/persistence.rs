@@ -70,6 +70,7 @@ fn evidence(
             kind,
             charge_type: NormalizedChargeType::Ac,
             counter,
+            location: None,
         },
         provenance: EvidenceProvenance {
             device: device.to_owned(),
@@ -98,6 +99,8 @@ fn manifest(records: &[AcceptedEvidence]) -> Manifest {
         manifest_version: "synthetic-manifest-v1".to_owned(),
         normalizer_version: NORMALIZER_VERSION.to_owned(),
         timestamp_version: TIMESTAMP_VERSION.to_owned(),
+        geofence_version: "fictional-geofence-v1".to_owned(),
+        geofences: Vec::new(),
         mappings: vec![
             DeviceMapping {
                 device: "device-a".to_owned(),
@@ -598,7 +601,7 @@ fn frozen_configuration_versions_schema_and_source_fail_without_deletion() {
         Err(IngestionError::SourceMismatch)
     ));
     let connection = Connection::open(directory.database()).unwrap();
-    connection.pragma_update(None, "user_version", 2).unwrap();
+    connection.pragma_update(None, "user_version", 99).unwrap();
     assert!(matches!(
         Store::open(&directory.database(), &original, &source()),
         Err(IngestionError::SchemaMismatch)
@@ -609,7 +612,7 @@ fn frozen_configuration_versions_schema_and_source_fail_without_deletion() {
             .unwrap(),
         1
     );
-    connection.pragma_update(None, "user_version", 1).unwrap();
+    connection.pragma_update(None, "user_version", 2).unwrap();
     connection
         .execute(
             "UPDATE partition_progress SET next_offset = ?1",
@@ -682,4 +685,169 @@ fn make_private(path: &Path) {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     }
+}
+
+#[test]
+fn versioned_geofences_reclassify_retained_sessions_without_changing_evidence_or_other_owners() {
+    let directory = RuntimeDirectory::new();
+    let mut records = vec![
+        evidence(
+            "device-a",
+            "connection-1",
+            1,
+            0,
+            NormalizedEventKind::Start,
+            valid_counter("0.000000"),
+        ),
+        evidence(
+            "device-a",
+            "connection-1",
+            2,
+            10,
+            NormalizedEventKind::End,
+            valid_counter("10.000000"),
+        ),
+        evidence(
+            "device-b",
+            "connection-1",
+            1,
+            0,
+            NormalizedEventKind::Start,
+            valid_counter("0.000000"),
+        ),
+        evidence(
+            "device-b",
+            "connection-1",
+            2,
+            10,
+            NormalizedEventKind::End,
+            valid_counter("4.000000"),
+        ),
+    ];
+    for record in &mut records {
+        record.event.location = Some(NormalizedLocation::from_coordinates(12.3456789, 45.6789123));
+    }
+    let mut config = manifest(&records).config().clone();
+    config.geofences = vec![
+        OwnerGeofence {
+            owner: "owner-a".to_owned(),
+            center: NormalizedLocation::from_coordinates(12.3456789, 45.6789123),
+            radius_meters: 100,
+        },
+        OwnerGeofence {
+            owner: "owner-b".to_owned(),
+            center: NormalizedLocation::from_coordinates(-23.4567891, -67.8912345),
+            radius_meters: 100,
+        },
+    ];
+    let original = Manifest::new(config.clone()).unwrap();
+    let mut store = Store::open(&directory.database(), &original, &source()).unwrap();
+    for (offset, record) in records.into_iter().enumerate() {
+        commit(&mut store, offset as i64, record);
+    }
+    let owner_a = OwnerId::new("owner-a").unwrap();
+    let vehicle_a = VehicleId::new("vehicle-a").unwrap();
+    let owner_b = OwnerId::new("owner-b").unwrap();
+    let vehicle_b = VehicleId::new("vehicle-b").unwrap();
+    let before = store.results(&owner_a, &vehicle_a).unwrap();
+    assert_eq!(before.eligible_shared_charger_kwh, "10.000000");
+    let other = store.sessions(&owner_b, &vehicle_b).unwrap();
+    let statistics = store.statistics().unwrap();
+    let positions = store.positions().unwrap();
+    drop(store);
+    config.geofence_version = "fictional-geofence-v2".to_owned();
+    config.geofences[0].center = NormalizedLocation::from_coordinates(12.3556789, 45.6789123);
+    let revised = Manifest::new(config.clone()).unwrap();
+    let store = Store::open(&directory.database(), &revised, &source()).unwrap();
+    let result = store.results(&owner_a, &vehicle_a).unwrap();
+    assert_eq!(result.sessions[0].classification, "OtherCharger");
+    assert_eq!(result.sessions[0].classification_reason, "OutsideGeofence");
+    assert_eq!(result.eligible_shared_charger_kwh, "0.000000");
+    assert_eq!(result.observed_ac_kwh, before.observed_ac_kwh);
+    assert_ne!(result.revision, before.revision);
+    assert_eq!(store.sessions(&owner_b, &vehicle_b).unwrap(), other);
+    assert_eq!(store.statistics().unwrap(), statistics);
+    assert_eq!(store.positions().unwrap(), positions);
+    for forbidden in [
+        "latitude",
+        "longitude",
+        "12.3456789",
+        "45.6789123",
+        "12.3556789",
+    ] {
+        assert!(!serde_json::to_string(&result).unwrap().contains(forbidden));
+    }
+    drop(store);
+    let store = Store::open(&directory.database(), &revised, &source()).unwrap();
+    assert_eq!(store.results(&owner_a, &vehicle_a).unwrap(), result);
+    drop(store);
+    config.geofences[0].center = NormalizedLocation::from_coordinates(12.3456789, 45.6789123);
+    let reused_version = Manifest::new(config).unwrap();
+    assert!(matches!(
+        Store::open(&directory.database(), &reused_version, &source()),
+        Err(IngestionError::ConfigurationMismatch)
+    ));
+    let store = Store::open(&directory.database(), &original, &source()).unwrap();
+    assert_eq!(store.results(&owner_a, &vehicle_a).unwrap(), before);
+}
+
+#[test]
+fn persisted_location_enrichment_settles_held_sessions_and_survives_duplicate_reordered_replay() {
+    let directory = RuntimeDirectory::new();
+    let missing = vec![
+        evidence(
+            "device-a",
+            "connection-1",
+            1,
+            0,
+            NormalizedEventKind::Start,
+            valid_counter("0.000000"),
+        ),
+        evidence(
+            "device-a",
+            "connection-1",
+            2,
+            10,
+            NormalizedEventKind::End,
+            valid_counter("10.000000"),
+        ),
+    ];
+    let mut config = manifest(&missing).config().clone();
+    config.geofences = vec![
+        OwnerGeofence {
+            owner: "owner-a".to_owned(),
+            center: NormalizedLocation::from_coordinates(12.3456789, 45.6789123),
+            radius_meters: 100,
+        },
+        OwnerGeofence {
+            owner: "owner-b".to_owned(),
+            center: NormalizedLocation::from_coordinates(-23.4567891, -67.8912345),
+            radius_meters: 100,
+        },
+    ];
+    let manifest = Manifest::new(config).unwrap();
+    let mut store = Store::open(&directory.database(), &manifest, &source()).unwrap();
+    for (offset, record) in missing.iter().cloned().enumerate() {
+        commit(&mut store, offset as i64, record);
+    }
+    let owner = OwnerId::new("owner-a").unwrap();
+    let vehicle = VehicleId::new("vehicle-a").unwrap();
+    assert_eq!(
+        store.results(&owner, &vehicle).unwrap().sessions[0].classification_reason,
+        "LocationUnavailable"
+    );
+    for (index, mut record) in missing.iter().rev().cloned().enumerate() {
+        record.event.location = Some(NormalizedLocation::from_coordinates(12.3456789, 45.6789123));
+        commit(&mut store, index as i64 + 2, record);
+    }
+    let settled = store.results(&owner, &vehicle).unwrap();
+    assert_eq!(settled.eligible_shared_charger_kwh, "10.000000");
+    assert!(settled.sessions[0].quality_flags.is_empty());
+    for (index, record) in missing.into_iter().enumerate() {
+        commit(&mut store, index as i64 + 4, record);
+    }
+    assert_eq!(store.results(&owner, &vehicle).unwrap(), settled);
+    drop(store);
+    let store = Store::open(&directory.database(), &manifest, &source()).unwrap();
+    assert_eq!(store.results(&owner, &vehicle).unwrap(), settled);
 }

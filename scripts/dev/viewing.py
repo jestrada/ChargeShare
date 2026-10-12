@@ -40,14 +40,16 @@ def scoped_results(owner, vehicle):
 
 
 def assert_scoped_result(result, owner, vehicle, energy):
+    shared = owner == "owner-a"
+    eligible = energy if shared else "0.000000"
     allowed = {"owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "provenance", "revision"}
-    if set(result) != allowed or result["owner"] != owner or result["vehicle"] != vehicle or result["state"] != "held" or result["observed_ac_kwh"] != energy or result["eligible_shared_charger_kwh"] != "0.000000" or result["evidence_boundary"] != "Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated":
+    if set(result) != allowed or result["owner"] != owner or result["vehicle"] != vehicle or result["state"] != ("eligible" if shared else "held") or result["observed_ac_kwh"] != energy or result["eligible_shared_charger_kwh"] != eligible or result["evidence_boundary"] != "Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated":
         raise RuntimeFailure("Scoped persisted energy assertion failed.")
-    expected = {"vehicle": vehicle, "connection": "connection-1", "classification": "Unconfirmed", "evidence_state": "complete", "observed_ac_kwh": energy, "eligible_shared_charger_kwh": "0.000000", "quality_flags": [], "exclusion_reasons": ["UnconfirmedCharger"]}
+    expected = {"vehicle": vehicle, "connection": "connection-1", "classification": "SharedCharger" if shared else "OtherCharger", "classification_reason": "InsideGeofence" if shared else "OutsideGeofence", "evidence_state": "complete", "observed_ac_kwh": energy, "eligible_shared_charger_kwh": eligible, "quality_flags": [], "exclusion_reasons": [] if shared else ["OtherCharger"]}
     if result["sessions"] != [expected]:
         raise RuntimeFailure("Scoped session identity, quality or hold assertion failed.")
     provenance = result["provenance"]
-    if set(provenance) != {"source", "source_epoch", "input_contract", "mapping_version", "manifest_version", "normalizer_version", "calculation_version"} or provenance["source"] != "synthetic-receiver-kafka" or provenance["calculation_version"] != "scoped-core-replay-v1" or not re.fullmatch(r"results-v1-[a-f0-9]{16}", result["revision"]) or any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value) for value in provenance.values()):
+    if set(provenance) != {"source", "source_epoch", "input_contract", "mapping_version", "manifest_version", "normalizer_version", "calculation_version", "geofence_version"} or provenance["source"] != "synthetic-receiver-kafka" or provenance["calculation_version"] != "scoped-core-replay-v2" or not re.fullmatch(r"results-v1-[a-f0-9]{16}", result["revision"]) or any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value) for value in provenance.values()):
         raise RuntimeFailure("Scoped semantic revision or safe provenance assertion failed.")
 
 
@@ -165,7 +167,7 @@ def check(runtime):
         if response.status != 200 or b"/src/persisted-main.tsx" not in response.read(131072):
             raise RuntimeFailure("Persisted dashboard entry is unavailable or incorrect.")
     print("PASS: fresh official receiver ACK + matching Kafka + committed SQLite + scoped HTTP + persisted dashboard")
-    print("PASS: vehicle-a=0.500000 kWh vehicle-b=0.250000 kWh observed AC; Unconfirmed; eligible=0.000000 kWh; mismatched scope refused; revision stable")
+    print("PASS: vehicle-a=0.500000 kWh vehicle-b=0.250000 kWh observed AC; automatic SharedCharger/OtherCharger; eligible A=0.500000/B=0.000000 kWh; mismatched scope refused; revision stable")
     return results
 
 

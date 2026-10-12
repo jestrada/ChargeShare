@@ -1,7 +1,7 @@
 use chargeshare_core::{
-    ChargeType, ChargerClassification, ConnectionId, CounterReading, Energy, Event, EventKind,
-    ExactUsd, Ledger, OwnerId, PricingHold, RateSchedule, Session, SessionId, SessionPricing,
-    UsdRate, VehicleId,
+    ChargeType, ChargerGeofence, ConnectionId, CounterReading, Energy, Event, EventKind, ExactUsd,
+    Ledger, LocationPoint, LocationSample, OwnerId, PricingHold, RateSchedule, Session,
+    SessionPricing, UsdRate, VehicleId,
 };
 use serde_json::{Value, json};
 
@@ -253,16 +253,13 @@ fn snapshot_with_rates(scenario: Scenario, rates: &RateSchedule) -> DemoResult<V
                     },
                     charge_type: ChargeType::Ac,
                     counter: Some(CounterReading::parse_kwh(counter)),
+                    location: LocationSample::Valid(LocationPoint::new(0.0, 0.0).unwrap()),
                 })?;
             }
-            ledger.classify(
-                &vehicle,
-                &SessionId {
-                    vehicle: vehicle.clone(),
-                    connection,
-                },
-                ChargerClassification::SharedCharger,
-            )?;
+            ledger.configure_charger(
+                OwnerId::new(owner)?,
+                ChargerGeofence::new(LocationPoint::new(0.0, 0.0).unwrap(), 100).unwrap(),
+            );
         }
     }
     let mut vehicles = Vec::new();

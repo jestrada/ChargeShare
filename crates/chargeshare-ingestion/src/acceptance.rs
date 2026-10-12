@@ -1,8 +1,9 @@
 use std::time::{Duration, Instant};
 
-use chargeshare_core::{ChargerClassification, OwnerId, VehicleId};
+use chargeshare_core::{OwnerId, VehicleId};
 use chargeshare_ingestion::{
-    CommitBoundary, IngestionError, KafkaConfig, Store, consume_bounded_observed, normalize,
+    AcceptedEvidence, CommitBoundary, IngestionError, KafkaConfig, Store, consume_bounded_observed,
+    normalize,
 };
 use serde_json::json;
 
@@ -25,7 +26,8 @@ pub fn status(path: &str) -> Result<(), IngestionError> {
         scopes.push(json!({
             "vehicle": vehicle.as_str(), "observed_ac": summary.observed_ac.to_string(),
             "eligible": summary.eligible_shared_charger.to_string(), "sessions": sessions.len(),
-            "unconfirmed": sessions.iter().all(|session| session.classification == ChargerClassification::Unconfirmed),
+            "classifications": sessions.iter().map(|session| format!("{:?}", session.classification)).collect::<Vec<_>>(),
+            "classification_reasons": sessions.iter().map(|session| format!("{:?}", session.classification_reason)).collect::<Vec<_>>(),
             "quality_flags": sessions.iter().map(|session| session.quality_flags.len()).sum::<usize>(),
         }));
     }
@@ -56,7 +58,7 @@ pub fn verify_decoded(path: &str) -> Result<(), IngestionError> {
     let candidate: serde_json::Value =
         serde_json::from_slice(include_bytes!("../tests/fixtures/candidate-v.json"))
             .map_err(|_| IngestionError::InvalidConfiguration)?;
-    let observed = capture["records"]
+    let observed = capture["evidence"]
         .as_array()
         .ok_or(IngestionError::InvalidConfiguration)?;
     let expected = candidate["records"]
@@ -80,7 +82,19 @@ pub fn verify_decoded(path: &str) -> Result<(), IngestionError> {
         normalized.sort();
         Ok(normalized)
     };
-    if normalize_records(observed)? != normalize_records(expected)? {
+    let mut observed_evidence = Vec::new();
+    for value in observed {
+        let evidence: AcceptedEvidence = serde_json::from_value(value.clone())
+            .map_err(|_| IngestionError::InvalidConfiguration)?;
+        manifest
+            .validate_evidence(&evidence)
+            .map_err(|_| IngestionError::InvalidConfiguration)?;
+        observed_evidence.push(
+            serde_json::to_string(&evidence).map_err(|_| IngestionError::InvalidConfiguration)?,
+        );
+    }
+    observed_evidence.sort();
+    if observed_evidence != normalize_records(expected)? {
         return Err(IngestionError::InvalidConfiguration);
     }
     println!(

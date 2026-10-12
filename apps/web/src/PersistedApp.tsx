@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Button } from "./components/ui/button"
-import { evidenceLabel, parseResults, reasonLabel, resultPath, scopes, type Scope, type ScopedResults } from "./persisted"
+import { classificationLabel, evidenceLabel, parseResults, reasonLabel, resultPath, scopes, type Scope, type ScopedResults } from "./persisted"
 
 type View = { scope: string; state: "loading" | "unavailable" | "refused" } |
   { scope: string; state: "available"; results: ScopedResults }
@@ -77,12 +77,13 @@ function Results({ results }: { results: ScopedResults }) {
       <div><dt>Observed vehicle-reported AC</dt><dd>{results.observed_ac_kwh} <span>kWh</span></dd></div>
       <div><dt>Eligible shared-charger energy</dt><dd>{results.eligible_shared_charger_kwh} <span>kWh eligible</span></dd></div>
     </dl>
-    <p className="needs-review">Unconfirmed · Held: charger has not been confirmed as the shared charger.</p>
+    <p className="muted">Charger classification updates automatically from session location evidence.</p>
     {results.sessions.map(session => <details className="persisted-session" key={`${session.vehicle}/${session.connection}`}>
-      <summary><span>{session.connection}</span><span>{session.observed_ac_kwh} kWh observed AC</span><span className="needs-review">Unconfirmed · Held</span><span>{evidenceLabel(session)}</span><span>Quality and provenance details</span></summary>
+      <summary><span>{session.connection}</span><span>{session.observed_ac_kwh} kWh observed AC</span><span>{classificationLabel(session)}</span><span>{evidenceLabel(session)}</span><span>Quality and provenance details</span></summary>
       <div className="persisted-detail">
         <p>Session identity: {session.vehicle} / {session.connection}</p>
         <p>{evidenceLabel(session)}</p>
+        <p>{reasonLabel(session.classification_reason)}</p>
         <p>{session.eligible_shared_charger_kwh} kWh eligible</p>
         {session.exclusion_reasons.map(reason => <p className="needs-review" key={reason}>{reasonLabel(reason)}</p>)}
         {session.quality_flags.length ? <ul>{session.quality_flags.map(flag => <li key={flag}>{reasonLabel(flag)}</li>)}</ul> : <p className="muted">No counter or boundary quality flags.</p>}
@@ -101,6 +102,7 @@ function Provenance({ results }: { results: ScopedResults }) {
     <div><dt>Input contract</dt><dd>{results.provenance.input_contract}</dd></div>
     <div><dt>Mapping / manifest</dt><dd>{results.provenance.mapping_version} / {results.provenance.manifest_version}</dd></div>
     <div><dt>Normalization / calculation</dt><dd>{results.provenance.normalizer_version} / {results.provenance.calculation_version}</dd></div>
+    <div><dt>Geofence configuration</dt><dd>{results.provenance.geofence_version}</dd></div>
     <div><dt>Revision</dt><dd>{results.revision}</dd></div>
   </dl>
 }

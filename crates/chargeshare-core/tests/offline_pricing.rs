@@ -34,6 +34,7 @@ fn event(
         kind,
         charge_type: ChargeType::Ac,
         counter: counter.map(CounterReading::parse_kwh),
+        location: LocationSample::Valid(LocationPoint::new(0.0, 0.0).unwrap()),
     }
 }
 
@@ -50,33 +51,18 @@ fn ingest(ledger: &mut Ledger, events: impl IntoIterator<Item = Event>) {
     }
 }
 
-fn classify(
-    ledger: &mut Ledger,
-    car: &str,
-    connection: &str,
-    classification: ChargerClassification,
-) {
-    ledger
-        .classify(
-            &vehicle(car),
-            &SessionId {
-                vehicle: vehicle(car),
-                connection: ConnectionId::new(connection).unwrap(),
-            },
-            classification,
-        )
-        .unwrap();
-}
-
-fn confirm(ledger: &mut Ledger, car: &str, connection: &str) {
-    classify(
-        ledger,
-        car,
-        connection,
-        ChargerClassification::SharedCharger,
+fn configure_shared_charger(ledger: &mut Ledger, car: &str) {
+    let owner = OwnerId::new(if car == "vehicle-a" {
+        "owner-a"
+    } else {
+        "owner-b"
+    })
+    .unwrap();
+    ledger.configure_charger(
+        owner,
+        ChargerGeofence::new(LocationPoint::new(0.0, 0.0).unwrap(), 100).unwrap(),
     );
 }
-
 fn window(version: &str, start: i64, end: i64, rate: &str) -> RateWindow {
     RateWindow::new(version, start, end, UsdRate::parse_per_kwh(rate).unwrap()).unwrap()
 }
@@ -94,7 +80,7 @@ fn split() -> RateSchedule {
 }
 
 #[test]
-fn flat_rate_prices_only_the_confirmed_vehicle_and_preserves_scope() {
+fn flat_rate_prices_only_the_automatically_classified_vehicle_and_preserves_scope() {
     let mut ledger = configured();
     let a = complete("vehicle-a", "connection-1", 1, "10");
     let b = complete("vehicle-b", "connection-1", 1, "4");
@@ -102,7 +88,7 @@ fn flat_rate_prices_only_the_confirmed_vehicle_and_preserves_scope() {
         &mut ledger,
         [a[0].clone(), b[0].clone(), a[1].clone(), b[1].clone()],
     );
-    confirm(&mut ledger, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut ledger, "vehicle-a");
     let a = ledger.pricing(&vehicle("vehicle-a"), &flat("0.2")).unwrap();
     assert_eq!(a.rounded_priced_subtotal.as_cents(), 200);
     assert_eq!(
@@ -122,9 +108,9 @@ fn flat_rate_prices_only_the_confirmed_vehicle_and_preserves_scope() {
         b.sessions[0]
             .session
             .exclusion_reasons
-            .contains(&ExclusionReason::UnconfirmedCharger)
+            .contains(&ExclusionReason::LocationUnavailable)
     );
-    confirm(&mut ledger, "vehicle-b", "connection-1");
+    configure_shared_charger(&mut ledger, "vehicle-b");
     assert_eq!(
         ledger
             .pricing(&vehicle("vehicle-b"), &flat("0.2"))
@@ -171,7 +157,7 @@ fn boundary_readings_preserve_energy_and_explain_each_rate_and_version() {
             ),
         ],
     );
-    confirm(&mut ledger, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut ledger, "vehicle-a");
     let summary = ledger.pricing(&vehicle("vehicle-a"), &split()).unwrap();
     assert_eq!(summary.priced_energy, energy("10"));
     assert_eq!(summary.rounded_priced_subtotal.to_string(), "3.20 USD");
@@ -227,7 +213,7 @@ fn an_unknown_split_is_held_until_late_boundary_evidence_resolves_it() {
             ),
         ],
     );
-    confirm(&mut ledger, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut ledger, "vehicle-a");
     let held = ledger.pricing(&vehicle("vehicle-a"), &split()).unwrap();
     assert_eq!(
         held.sessions[0].quote,
@@ -270,9 +256,7 @@ fn an_unpriced_interval_holds_the_entire_session_but_not_other_sessions() {
             event("vehicle-a", "priced", 5, 10, EventKind::End, Some("1")),
         ],
     );
-    for connection in ["held", "priced"] {
-        confirm(&mut ledger, "vehicle-a", connection);
-    }
+    configure_shared_charger(&mut ledger, "vehicle-a");
     let summary = ledger.pricing(&vehicle("vehicle-a"), &split()).unwrap();
     assert_eq!(summary.priced_energy, energy("1"));
     assert_eq!(summary.rounded_priced_subtotal.as_cents(), 20);
@@ -291,7 +275,7 @@ fn an_unpriced_interval_holds_the_entire_session_but_not_other_sessions() {
 fn absent_rates_and_gaps_never_fall_back_to_a_nearby_rate() {
     let mut ledger = configured();
     ingest(&mut ledger, complete("vehicle-a", "connection-1", 1, "10"));
-    confirm(&mut ledger, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut ledger, "vehicle-a");
     for windows in [
         vec![],
         vec![window("before", 0, 10, "0.1")],
@@ -354,7 +338,7 @@ fn positive_energy_at_one_tick_is_held_even_with_a_known_rate() {
             ),
         ],
     );
-    confirm(&mut ledger, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut ledger, "vehicle-a");
     let summary = ledger.pricing(&vehicle("vehicle-a"), &flat("0.2")).unwrap();
     assert!(summary.sessions[0].session.is_eligible());
     assert_eq!(
@@ -371,14 +355,14 @@ fn positive_energy_at_one_tick_is_held_even_with_a_known_rate() {
 fn zero_consumption_needs_no_rate_and_zero_rates_add_no_fees() {
     let mut ledger = configured();
     ingest(&mut ledger, complete("vehicle-a", "connection-1", 1, "0"));
-    confirm(&mut ledger, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut ledger, "vehicle-a");
     let empty_rates = RateSchedule::new(vec![]).unwrap();
     let summary = ledger.pricing(&vehicle("vehicle-a"), &empty_rates).unwrap();
     assert!(!summary.has_unpriced_sessions());
     assert!(summary.sessions[0].quote.as_ref().unwrap().lines.is_empty());
     assert_eq!(summary.exact_priced_subtotal, ExactUsd::ZERO);
     ingest(&mut ledger, complete("vehicle-a", "connection-2", 3, "10"));
-    confirm(&mut ledger, "vehicle-a", "connection-2");
+    configure_shared_charger(&mut ledger, "vehicle-a");
     let free = ledger.pricing(&vehicle("vehicle-a"), &flat("0")).unwrap();
     assert_eq!(free.priced_energy, energy("10"));
     assert_eq!(free.rounded_priced_subtotal.as_cents(), 0);
@@ -393,7 +377,7 @@ fn rounding_occurs_once_after_summing_exact_session_costs() {
             &mut ledger,
             complete("vehicle-a", connection, position, "1"),
         );
-        confirm(&mut ledger, "vehicle-a", connection);
+        configure_shared_charger(&mut ledger, "vehicle-a");
     }
     let summary = ledger
         .pricing(&vehicle("vehicle-a"), &flat("0.004"))
@@ -445,7 +429,7 @@ fn excluded_and_incomplete_evidence_never_gets_a_quote() {
     ] {
         let mut ledger = configured();
         ingest(&mut ledger, events);
-        confirm(&mut ledger, "vehicle-a", "connection-1");
+        configure_shared_charger(&mut ledger, "vehicle-a");
         let before = ledger.sessions(&vehicle("vehicle-a")).unwrap();
         let summary = ledger.pricing(&vehicle("vehicle-a"), &flat("0.2")).unwrap();
         assert_eq!(summary.sessions[0].session, before[0]);
@@ -459,11 +443,9 @@ fn excluded_and_incomplete_evidence_never_gets_a_quote() {
     }
     let mut other = configured();
     ingest(&mut other, base);
-    classify(
-        &mut other,
-        "vehicle-a",
-        "connection-1",
-        ChargerClassification::OtherCharger,
+    other.configure_charger(
+        OwnerId::new("owner-a").unwrap(),
+        ChargerGeofence::new(LocationPoint::new(1.0, 1.0).unwrap(), 100).unwrap(),
     );
     let result = other.pricing(&vehicle("vehicle-a"), &flat("0.2")).unwrap();
     assert_eq!(
@@ -500,7 +482,7 @@ fn reverse_order_duplicates_and_window_order_preserve_identical_quotes() {
     );
     for ledger in [&mut forward, &mut reverse] {
         for car in ["vehicle-a", "vehicle-b"] {
-            confirm(ledger, car, "connection-1");
+            configure_shared_charger(ledger, car);
         }
     }
     let reversed_rates =
@@ -527,9 +509,7 @@ fn pauses_and_new_connections_do_not_invent_or_bridge_energy() {
             event("vehicle-a", "second", 6, 25, EventKind::End, Some("5")),
         ],
     );
-    for connection in ["first", "second"] {
-        confirm(&mut ledger, "vehicle-a", connection);
-    }
+    configure_shared_charger(&mut ledger, "vehicle-a");
     let summary = ledger.pricing(&vehicle("vehicle-a"), &flat("0.2")).unwrap();
     assert_eq!(summary.priced_energy, energy("14"));
     assert_eq!(summary.rounded_priced_subtotal.as_cents(), 280);
@@ -547,7 +527,7 @@ fn pauses_and_new_connections_do_not_invent_or_bridge_energy() {
 fn tariff_revisions_produce_new_results_without_mutating_prior_snapshots() {
     let mut ledger = configured();
     ingest(&mut ledger, complete("vehicle-a", "connection-1", 1, "10"));
-    confirm(&mut ledger, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut ledger, "vehicle-a");
     let before = ledger.clone();
     let original = ledger.pricing(&vehicle("vehicle-a"), &flat("0.2")).unwrap();
     let revised_rates = RateSchedule::new(vec![window("fictional-flat-v2", 0, 30, "0.3")]).unwrap();
@@ -579,7 +559,7 @@ fn aggregate_overflows_fail_without_mutating_evidence_or_returning_a_partial_tot
             &mut ledger,
             complete("vehicle-a", connection, position, "18446744073709.551615"),
         );
-        confirm(&mut ledger, "vehicle-a", connection);
+        configure_shared_charger(&mut ledger, "vehicle-a");
     }
     let before = ledger.clone();
     assert_eq!(
@@ -597,7 +577,7 @@ fn aggregate_overflows_fail_without_mutating_evidence_or_returning_a_partial_tot
 fn adjacent_same_rate_versions_still_need_a_boundary_and_extreme_ticks_do_not_overflow() {
     let mut ledger = configured();
     ingest(&mut ledger, complete("vehicle-a", "connection-1", 1, "10"));
-    confirm(&mut ledger, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut ledger, "vehicle-a");
     let adjacent = RateSchedule::new(vec![
         window("v1", 0, 15, "0.2"),
         window("v2", 15, 30, "0.2"),
@@ -631,7 +611,7 @@ fn adjacent_same_rate_versions_still_need_a_boundary_and_extreme_ticks_do_not_ov
             ),
         ],
     );
-    confirm(&mut extreme, "vehicle-a", "connection-1");
+    configure_shared_charger(&mut extreme, "vehicle-a");
     let rates = RateSchedule::new(vec![window("extreme", i64::MIN, i64::MAX, "0.2")]).unwrap();
     assert_eq!(
         extreme

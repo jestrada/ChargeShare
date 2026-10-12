@@ -63,6 +63,8 @@ fn manifest(records: &[AcceptedEvidence]) -> Manifest {
         manifest_version: "synthetic-manifest-v1".to_owned(),
         normalizer_version: NORMALIZER_VERSION.to_owned(),
         timestamp_version: TIMESTAMP_VERSION.to_owned(),
+        geofence_version: "fictional-geofence-v1".to_owned(),
+        geofences: Vec::new(),
         mappings: vec![DeviceMapping {
             device: "device-a".to_owned(),
             vehicle: "vehicle-a".to_owned(),
@@ -99,6 +101,7 @@ fn record(
             kind,
             charge_type,
             counter,
+            location: None,
         },
         provenance: EvidenceProvenance {
             device: "device-a".to_owned(),
