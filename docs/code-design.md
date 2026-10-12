@@ -14,8 +14,8 @@ instructions to leave the repository or start additional work.
   Start with a proposal for new behavior; implementation needs explicit approval.
 - Inspect the existing public API, callers, tests and relevant `.agents/skills`
   before selecting a design. Do not infer the current implementation from older
-  planning text. Retained OpenSpec history and [architecture](architecture.md)
-  describe some components that do not exist.
+  planning text; [architecture](architecture.md) marks planned components
+  that do not exist yet.
 - State what is implemented, what is only proposed, and what this change excludes.
   A design guide does not authorize a refactor, dependency, live integration,
   deployment, data collection, spending or broader functionality.
@@ -27,15 +27,14 @@ instructions to leave the repository or start additional work.
 
 Today's implemented boundary includes the synthetic in-memory Rust ledger,
 exact offline pricing, an independent localhost fixture API/frontend and the
-outer [candidate/mocked ingestion and SQLite replay](durable-ingestion.md).
+outer [durable ingestion and SQLite replay](architecture.md#durable-ingestion-and-recovery).
 [Its domain contract](architecture.md#implemented-offline-ledger) and
 [acceptance suite](../crates/chargeshare-core/tests/offline_spec1.rs) define current
-behavior. See [pricing](pricing.md) and [local preview](local-preview.md) for the
-additive contracts. The separate [receiver/Kafka harness](local-development.md)
-has verified Linux acceptance. The scoped owning runtime and persisted/API reads
-are implemented in #21 with focused process/HTTP tests; receiver-backed viewing
-acceptance, authentication, real utility calendars, statements and a production
-UI remain pending.
+behavior. See [pricing](architecture.md#exact-offline-pricing) and
+[local preview](architecture.md#ports-and-boundaries) for the additive contracts.
+The receiver/Kafka harness and scoped owning runtime/persisted reads are
+implemented. Authentication, real utility calendars, statements and a production
+UI remain pending; acceptance evidence belongs in the owning issue or PR.
 
 ## 2. Make the code express its intent without comments
 
@@ -56,9 +55,9 @@ Use self-documenting code instead:
   hierarchies or a framework-shaped design.
 - Give tests behavior-oriented names and clear synthetic fixtures. An assertion
   should show the expected invariant or failure, not hide it behind broad helpers.
-- Put rationale, public API usage/contracts, algorithm explanations and trade-offs
-  in repository Markdown or the approved change's design, linked from relevant
-  docs. Keep that documentation aligned with code and tests.
+- Put enduring rationale, public API contracts, algorithm explanations and
+  trade-offs in `docs/architecture.md` or `docs/code-design.md`; use the owning
+  issue/PR for change reviews. New documentation files need Joseph's approval.
 
 Previously authored comments outside the refactored implementation are retained;
 future approved code changes must follow the rule above. If a required license
@@ -207,17 +206,17 @@ conversation or the approved planning artifact (within its authorized edit scope
 5. Tests proving the invariant, failure behavior and any affected boundary
 
 For a local helper or rename, a brief owning-issue summary linked from the PR
-is enough; follow the [change review guidance](agents/issue-tracker.md#human-readable-change-reviews).
+is enough; follow the [change review guidance](../AGENTS.md#human-readable-change-reviews).
 Do not create an architecture record for every function. Capture enduring architectural choices
-in the approved design or relevant repository documentation. Ask before departing
+in architecture.md or code-design.md. Ask before departing
 from the approved plan or broadening a behavior/API change.
 
 ### Keep architecture diagrams current
 
 When a change affects components, ownership, data flow, persistence or dependencies,
-update affected diagrams in [architecture](architecture.md) and the relevant
-repository documentation in the same PR. Shared guides describe current code and
-verification; retained OpenSpec designs preserve historical context. Label arrow
+update affected diagrams in [architecture](architecture.md) in the same PR.
+Otherwise state "no architecture change" in the issue summary. Shared guides
+describe enduring contracts. Label arrow
 meanings and distinguish implemented/tested paths from proposed or unrun
 integrations. Render changed Mermaid when tooling is available and disclose any
 validation limitation.
@@ -241,9 +240,9 @@ Before publishing, review the exact diff and complete this checklist:
 - [ ] Applicable checks below pass; blocked or unrun checks are disclosed explicitly.
 - [ ] Documentation and affected architecture diagrams match current code, boundaries and verification; public examples use only synthetic data.
 - [ ] The owning issue has a current human-readable summary linked from the PR, with verification evidence and documentation links.
-- [ ] Affected guides and diagrams are updated in this PR, or the issue summary explains why no update is needed.
+- [ ] Architecture/diagrams are updated when affected, otherwise the issue summary states "no architecture change"; no new doc files lack Joseph's approval.
 
-Follow [security](../SECURITY.md) and [testing](testing.md) for setup and full rules:
+Follow [security](../SECURITY.md) and [README checks](../README.md#tests) for setup and full rules:
 
 ```sh
 node scripts/security/test-guards.mjs

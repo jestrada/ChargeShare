@@ -74,8 +74,7 @@ false positives carefully rather than disabling a rule or bypassing hooks.
 ## CI and limits
 
 GitHub Actions scans tracked paths and complete fetched history and checks the
-Rust workspace, frontend build and synthetic receiver integration. OpenSpec
-validation is paused with its workflow. Actions are pinned to immutable commit
+Rust workspace, frontend build and synthetic receiver integration. Actions are pinned to immutable commit
 IDs; Gitleaks downloads are checksum-pinned. Workflow permissions are read-only, checkout does not retain
 credentials, and no repository secrets are required.
 
