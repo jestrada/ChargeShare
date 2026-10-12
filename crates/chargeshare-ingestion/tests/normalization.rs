@@ -170,11 +170,9 @@ fn runtime_manifest_and_inspected_receiver_shape_bind_the_existing_normalizer_co
     let runtime_manifest =
         Manifest::from_json(include_bytes!("../../../dev/ingestion-manifest.json")).unwrap();
     assert_eq!(runtime_manifest.config(), manifest().config());
-    let receiver: Value =
-        serde_json::from_slice(include_bytes!("../../../dev/fixtures.json")).unwrap();
-    let records = receiver["scenarios"]["complete"]["expected"]
-        .as_array()
-        .unwrap();
+    let complete: Value =
+        serde_json::from_slice(include_bytes!("../../../dev/fixtures/complete.json")).unwrap();
+    let records = complete["expected"].as_array().unwrap();
     assert_eq!(records.len(), 6);
     for record in records {
         let key = record["key"].as_str().unwrap();

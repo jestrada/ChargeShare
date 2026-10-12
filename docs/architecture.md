@@ -104,7 +104,7 @@ restarted. HTTP reads/writes and broker verification have bounded deadlines.
 
 ## Durable ingestion and recovery
 
-[`dev/fixtures.json`](../dev/fixtures.json) contains finite fictional binary
+[`dev/fixtures/`](../dev/fixtures/) contains finite fictional binary
 frames, exact ACK bytes and expected decoded Kafka multisets for complete,
 missing, duplicate and reordered traffic. Frames use official helpers from the
 pinned receiver revision; names and battery readings remain fixture context.

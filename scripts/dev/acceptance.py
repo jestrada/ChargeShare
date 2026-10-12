@@ -24,8 +24,7 @@ class AcceptanceFailure(Exception):
 
 def assert_coordinate_privacy(text, checkout):
     coordinates = set()
-    for name in ("dev/fixtures.json", "dev/ingestion-manifest.json"):
-        path = checkout / name
+    for path in [*sorted((checkout / "dev/fixtures").glob("*.json")), checkout / "dev/ingestion-manifest.json"]:
         if not path.is_file():
             continue
         def collect(value):
@@ -418,8 +417,8 @@ class Acceptance:
         original = json.loads(path.read_bytes())
         changed = json.loads(json.dumps(original))
         changed["geofence_version"] = "fictional-geofence-v2"
-        fixture = json.loads((self.runtime.checkout / "dev/fixtures.json").read_bytes())
-        fields = fixture["scenarios"]["location"]["expected"][0]["payload"]["data"]
+        fixture = json.loads((self.runtime.checkout / "dev/fixtures/location.json").read_bytes())
+        fields = fixture["expected"][0]["payload"]["data"]
         point = next(field["value"]["locationValue"] for field in fields if field["key"] == "Location")
         geofence = next(geofence for geofence in changed["geofences"] if geofence["owner"] == "owner-a")
         geofence["center"] = dict(status="valid", **{key: str(value) for key, value in point.items()})
