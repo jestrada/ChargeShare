@@ -21,17 +21,39 @@ pub struct ExpectedRecord {
     pub payload: Value,
 }
 
+#[derive(Deserialize)]
+struct Composite {
+    includes: Vec<String>,
+}
+
+fn source(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "smoke" => include_str!("../../../dev/fixtures/smoke.json"),
+        "complete" => include_str!("../../../dev/fixtures/complete.json"),
+        "missing" => include_str!("../../../dev/fixtures/missing.json"),
+        "adverse" => include_str!("../../../dev/fixtures/adverse.json"),
+        "all" => include_str!("../../../dev/fixtures/all.json"),
+        "location" => include_str!("../../../dev/fixtures/location.json"),
+        "location-recovery" => include_str!("../../../dev/fixtures/location-recovery.json"),
+        _ => return None,
+    })
+}
+
 pub fn load(name: &str) -> Result<Scenario> {
-    let fixtures: Value = serde_json::from_str(include_str!("../../../dev/fixtures.json"))?;
-    let name = if name == "smoke" { "smoke" } else { name };
-    serde_json::from_value(
-        fixtures
-            .get("scenarios")
-            .and_then(|scenarios| scenarios.get(name))
-            .ok_or("fixture: unknown scenario")?
-            .clone(),
-    )
-    .map_err(Into::into)
+    let text = source(name).ok_or("fixture: unknown scenario")?;
+    if let Ok(composite) = serde_json::from_str::<Composite>(text) {
+        let mut scenario = Scenario {
+            frames: Vec::new(),
+            expected: Vec::new(),
+        };
+        for part in &composite.includes {
+            let included = load(part)?;
+            scenario.frames.extend(included.frames);
+            scenario.expected.extend(included.expected);
+        }
+        return Ok(scenario);
+    }
+    serde_json::from_str(text).map_err(Into::into)
 }
 
 pub fn decode_hex(encoded: &str) -> Result<Vec<u8>> {
@@ -108,6 +130,29 @@ mod tests {
         let mut changed = missing_expectation();
         changed.payload = json!({"createdAt":"2026-09-01T00:02:00Z"});
         assert!(verify(&[changed], &[]).is_err());
+    }
+
+    #[test]
+    fn all_scenario_combines_complete_missing_and_adverse() {
+        let all = load("all").unwrap();
+        let parts: Vec<Scenario> = ["complete", "missing", "adverse"]
+            .map(|name| load(name).unwrap())
+            .into();
+        let frames: Vec<&str> = parts
+            .iter()
+            .flat_map(|part| part.frames.iter().map(|frame| frame.message_hex.as_str()))
+            .collect();
+        let expected: Vec<&ExpectedRecord> =
+            parts.iter().flat_map(|part| part.expected.iter()).collect();
+        assert_eq!(
+            all.frames
+                .iter()
+                .map(|frame| frame.message_hex.as_str())
+                .collect::<Vec<_>>(),
+            frames
+        );
+        assert!(all.expected.iter().eq(expected));
+        assert!(load("unknown").is_err());
     }
 
     #[test]

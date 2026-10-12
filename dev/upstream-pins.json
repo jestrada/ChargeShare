@@ -52,8 +52,17 @@
     "runtime_directory": ".local-runtime/certificates"
   },
   "fixtures": {
-    "path": "dev/fixtures.json",
-    "sha256": "4d09903bab83d896fd1071b612b0fd5b607f7a6f2a36bec29182106c2595a84a",
+    "path": "dev/fixtures",
+    "sha256": {
+      "adverse.json": "699e7ce371272b1781a650ea513f0b0d04c34db698aabc372d428ba0979fa4b1",
+      "all.json": "ffd27a410c791f354cbb8a1864fe2d6fa5576b4631cf6358f90ed84def7b437c",
+      "complete.json": "c2954023c402f99c0cbb16f46d9443b4a35ae9c3ac29ca7a14acbc3aad585362",
+      "location-recovery.json": "4f0e740af0b04f48b77cfab7d4983a31c7d880928e74506b46103bb362352c54",
+      "location.json": "105df6ff3716d89b9df96f128d6d8805032eba8f55d2ca8956436011ca2bdb1b",
+      "missing.json": "75291e73d1f2bec76fee294b8a4e0c0e5a5fdd698fafc5a97eba071b8ee37189",
+      "receiver.json": "b87fafaeb6f0502de24d5d9484c11c2f898e5c1da06b30e75d86d417fd235c9e",
+      "smoke.json": "046fd01388c29c2d3e56106071fff823d9231ff79f066756cb341720608b682d"
+    },
     "receiver_revision": "bd076fe1494841707528449560c4a19d0d426da4",
     "generator_go_version": "1.27.1",
     "generator_go_archive_url": "https://go.dev/dl/go1.27.1.linux-amd64.tar.gz",
