@@ -146,3 +146,18 @@ pull requests only (never on pushes to `main`). When a PR body links an issue wi
 `Closes`/`Fixes`/`Resolves #N` (any tense, case-insensitive), post a comment on each
 linked issue with at least one screenshot/image (`![..](..)` or `<img>`) after
 starting the PR. If evidence does not apply, apply the `no-evidence` label instead.
+
+## Issue and comment style
+
+Keep issues and comments short and plain; Joseph reads the top only.
+
+- Every issue starts with `## For Joseph` (about 10 lines at most): one sentence on
+  what it does, a simple ASCII or Mermaid diagram of what happens in the system,
+  decisions needed (one line each, with a recommendation) and a status line. Use
+  the [feature spec template](.github/ISSUE_TEMPLATE/feature.md).
+- Everything else (full spec, data models, test details, rerun commands) goes in
+  one collapsed `<details>` block below it.
+- Result comments use the same shape: a pass/fail line, at most about 5 bullets,
+  one screenshot, then details collapsed.
+- Do not repeat information. Keep internal IDs, hashes and jargon out of the top
+  section.

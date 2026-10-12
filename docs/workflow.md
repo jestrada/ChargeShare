@@ -30,7 +30,9 @@ agents. This page explains the steps each issue goes through.
    questions, each with a recommended answer. They are posted on the issue with
    the questions at the top.
 3. **Settle the spec.** Joseph answers the questions. The final spec goes into
-   the issue body.
+   the issue body. Every issue opens with a short `## For Joseph`
+   summary; the full spec sits in a collapsed details block (see
+   [AGENTS.md](../AGENTS.md#issue-and-comment-style)).
 4. **Build.** Sol (Codex `gpt-6.1-sol`, xhigh) builds the feature on Grok Bot's
    computer in its own git worktree and branch. Scope stays tight. Sol follows
    [code design](code-design.md) and updates only [architecture](architecture.md),
@@ -41,7 +43,8 @@ agents. This page explains the steps each issue goes through.
    Rust ingestion -> SQLite -> API -> dashboard. It adds forced-failure runs to
    prove failures are caught.
 6. **Check in a browser.** Screenshots at desktop and 375px phone width are
-   posted on the issue with the test results. Checklist boxes on the issue are
+   posted on the issue in one short result comment (pass/fail, a few bullets,
+   details collapsed). Checklist boxes on the issue are
    ticked only where there is real evidence. No browser proof, no PR.
 7. **Open the PR.** The PR body says `Closes #N`. CI extends the existing
    workflows; features do not add new workflows. The evidence check fails if the
