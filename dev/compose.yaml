@@ -72,6 +72,7 @@ volumes:
     name: ${CHARGESHARE_BROKER_VOLUME}
     labels:
       dev.chargeshare.synthetic-only: 'true'
+      dev.chargeshare.source-epoch: ${CHARGESHARE_SOURCE_EPOCH:-}
 networks:
   default:
     name: ${CHARGESHARE_PROJECT_NAME}_default

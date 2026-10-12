@@ -3,8 +3,8 @@
 The harness source was recovered from commit
 `ec1c8922c813e8af57ea931324466ccc5afba5d5` and published on PR #5 without
 rewriting history. The earlier environment could not publish workflow changes.
-The current local GitHub login has the required workflow scope, so the recovered
-workflow is now active at
+At PR #5 activation, the local GitHub login had the required workflow scope, so
+the recovered workflow became active at
 [telemetry-integration.yml](../../.github/workflows/telemetry-integration.yml).
 
 Activation commit `4ea28f01445265b8e9e630cccc848895847a6d59` retained
@@ -40,3 +40,19 @@ resolved the startup race. The passing run covered retained stop/start, two
 identical clean reset/start results, invalid-trust shutdown and successful cleanup
 in a 5m24s job. Reverify the exact published commit after final code or
 documentation updates; the PR's hosted checks retain that final evidence.
+
+## Durable ingestion gate for issue #27
+
+The dedicated Ubuntu 24.04 ingestion gate is staged at
+[ci-27-tmp/ingestion-acceptance.yml](../../ci-27-tmp/ingestion-acceptance.yml).
+The current publishing token lacks workflow scope; the maintainer must move it
+into `.github/workflows/` before activation. It invokes the same bounded
+`bash scripts/dev/acceptance.sh all` command used locally through Tilt.
+
+Actual receiver-backed acceptance and decoded golden capture remain unverified
+in the implementation sandbox. Activate separate `setup`, `assertion` and
+`timeout` failure-proof dispatches, then a restored `none` run. Each deliberate
+failure must fail the job and complete owned cleanup; the restored run must pass.
+Only allowlisted summaries and versions are uploaded. See the
+[handoff](../../ci-27-tmp/README.md) and
+[verification limits](../testing.md#issue-27-local-verification).

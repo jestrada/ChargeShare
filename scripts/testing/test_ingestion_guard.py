@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 
-SUITES = {"normalization": 20, "persistence": 9, "recovery": 8, "kafka_driver": 10, "cli": 10}
+SUITES = {"normalization": 21, "persistence": 9, "recovery": 8, "kafka_driver": 16, "cli": 13}
 ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = ROOT / "scripts/testing/ingestion-suite.sh"
 

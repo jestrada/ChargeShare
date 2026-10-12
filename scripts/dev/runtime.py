@@ -107,6 +107,9 @@ class ProjectRuntime:
             "CHARGESHARE_UID": str(os.getuid()),
             "CHARGESHARE_GID": str(os.getgid()),
         })
+        from source_epoch import read_marker
+
+        environment["CHARGESHARE_SOURCE_EPOCH"] = read_marker(self)["epoch"] if (self.directory / "source-epoch.json").exists() else ""
         return environment
 
     def identity(self):
@@ -295,6 +298,11 @@ def validate_compose_configuration(runtime, configuration):
     if len(services["kafka"].get("volumes", [])) != 1:
         raise RuntimeFailure("Unsafe Compose configuration: Kafka requires exactly its named synthetic data volume.")
     require_synthetic_labels(volumes["kafka-data"], "broker volume")
+    from source_epoch import EPOCH_LABEL, read_marker
+
+    expected_epoch = read_marker(runtime)["epoch"] if (runtime.directory / "source-epoch.json").exists() else ""
+    if volumes["kafka-data"].get("labels", {}).get(EPOCH_LABEL, "") != expected_epoch:
+        raise RuntimeFailure("Unsafe Compose configuration: broker epoch label differs from its private marker.")
     networks = configuration.get("networks", {})
     if not isinstance(networks, dict) or set(networks) != {"default"} or not isinstance(networks["default"], dict) or networks["default"].get("name") != runtime.project_name + "_default" or networks["default"].get("external") or networks["default"].get("driver", "bridge") != "bridge":
         raise RuntimeFailure("Unsafe Compose configuration: services must use the isolated project bridge network.")
@@ -352,8 +360,12 @@ def ensure_certificate_directory(runtime):
 
 
 def prepare_runtime(runtime, command_runner=run_command):
+    from source_epoch import ensure_manifest, ensure_source_epoch
+
     validate_receiver_configuration(runtime)
-    ensure_runtime_directory(runtime)
+    with exclusive_synthetic_run_lock(runtime):
+        ensure_source_epoch(runtime, command_runner)
+        ensure_manifest(runtime)
     command_runner(["bash", str(runtime.checkout / "scripts" / "dev" / "certificates.sh")], runtime.environment())
 
 
@@ -756,7 +768,7 @@ def main(arguments=None):
         except KeyboardInterrupt:
             return 130
     parser = argparse.ArgumentParser(description="Guard this checkout's synthetic local harness and disposable runtime state.")
-    parser.add_argument("action", choices=("identity", "project-name", "runtime-dir", "certificate-directory", "prepare", "preflight", "validate-config", "validate-live-config", "reset"))
+    parser.add_argument("action", choices=("identity", "project-name", "runtime-dir", "certificate-directory", "prepare", "preflight", "validate-config", "validate-live-config", "source-epoch", "reset"))
     parser.add_argument("--confirm-synthetic-reset", action="store_true")
     options = parser.parse_args(arguments)
     if options.confirm_synthetic_reset and options.action != "reset":
@@ -781,6 +793,10 @@ def main(arguments=None):
             print("Resolved Compose configuration is project-scoped and synthetic-only.")
         elif options.action == "validate-live-config":
             print(json.dumps(validate_live_configuration(runtime), sort_keys=True))
+        elif options.action == "source-epoch":
+            from source_epoch import verify_source_epoch
+
+            print(verify_source_epoch(runtime)["epoch"])
         elif options.action == "reset":
             reset_runtime(runtime, options.confirm_synthetic_reset)
             print("Removed only this checkout's stopped synthetic runtime state.")

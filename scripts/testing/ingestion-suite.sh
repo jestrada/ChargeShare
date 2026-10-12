@@ -19,11 +19,11 @@ if ! awk '
     suite = ""
   }
   END {
-    exit !(valid["normalization"] && count["normalization"] >= 20 &&
+    exit !(valid["normalization"] && count["normalization"] >= 21 &&
        valid["persistence"] && count["persistence"] >= 9 &&
        valid["recovery"] && count["recovery"] >= 8 &&
-       valid["kafka_driver"] && count["kafka_driver"] >= 10 &&
-       valid["cli"] && count["cli"] >= 10)
+       valid["kafka_driver"] && count["kafka_driver"] >= 16 &&
+       valid["cli"] && count["cli"] >= 13)
   }
 ' "$output/workspace-tests.txt" \
    || grep -Eq '; [1-9][0-9]* (ignored|filtered out)' "$output/workspace-tests.txt"; then

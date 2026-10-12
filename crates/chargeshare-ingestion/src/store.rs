@@ -42,6 +42,12 @@ pub struct StoreStatistics {
     pub event_variants: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommitBoundary {
+    BeforeCommit,
+    AfterCommit,
+}
+
 pub struct Store {
     pub(crate) connection: Connection,
     pub(crate) manifest: Manifest,
@@ -132,6 +138,25 @@ impl Store {
         key: Option<&[u8]>,
         payload: &[u8],
     ) -> Result<CommitOutcome, IngestionError> {
+        self.ingest_observed(
+            manifest,
+            coordinate,
+            expected_resume_position,
+            key,
+            payload,
+            &mut |_| Ok(()),
+        )
+    }
+
+    pub(crate) fn ingest_observed(
+        &mut self,
+        manifest: &Manifest,
+        coordinate: DeliveryCoordinate,
+        expected_resume_position: i64,
+        key: Option<&[u8]>,
+        payload: &[u8],
+        observer: &mut dyn FnMut(CommitBoundary) -> Result<(), IngestionError>,
+    ) -> Result<CommitOutcome, IngestionError> {
         let manifest_json = serde_json::to_string(manifest.config())
             .map_err(|_| IngestionError::InvalidConfiguration)?;
         if manifest_json != self.manifest_json {
@@ -141,7 +166,7 @@ impl Store {
             Ok(evidence) => RecordDisposition::Accepted(Box::new(evidence)),
             Err(reason) => RecordDisposition::Rejected(reason),
         };
-        self.commit_record(coordinate, expected_resume_position, disposition)
+        self.commit_record_observed(coordinate, expected_resume_position, disposition, observer)
     }
 
     pub fn commit_record(
@@ -149,6 +174,21 @@ impl Store {
         coordinate: DeliveryCoordinate,
         expected_resume_position: i64,
         disposition: RecordDisposition,
+    ) -> Result<CommitOutcome, IngestionError> {
+        self.commit_record_observed(
+            coordinate,
+            expected_resume_position,
+            disposition,
+            &mut |_| Ok(()),
+        )
+    }
+
+    fn commit_record_observed(
+        &mut self,
+        coordinate: DeliveryCoordinate,
+        expected_resume_position: i64,
+        disposition: RecordDisposition,
+        observer: &mut dyn FnMut(CommitBoundary) -> Result<(), IngestionError>,
     ) -> Result<CommitOutcome, IngestionError> {
         if coordinate.partition < 0 || coordinate.offset < 0 || expected_resume_position < 0 {
             return Err(IngestionError::ProgressConflict);
@@ -235,7 +275,9 @@ impl Store {
         if changed != 1 {
             return Err(IngestionError::ProgressConflict);
         }
+        observer(CommitBoundary::BeforeCommit)?;
         transaction.commit().map_err(storage_error)?;
+        observer(CommitBoundary::AfterCommit)?;
         Ok(CommitOutcome {
             duplicate_delivery: false,
             inserted_variant,
@@ -256,6 +298,59 @@ impl Store {
             .map_err(storage_error)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(storage_error)
+    }
+
+    pub(crate) fn validate_reread_range(
+        &self,
+        partition: i32,
+        start: i64,
+        end: i64,
+    ) -> Result<(), IngestionError> {
+        let position = self
+            .positions()?
+            .into_iter()
+            .find(|position| position.partition == partition)
+            .ok_or(IngestionError::SourceMismatch)?;
+        if start < 0 || end <= start || end > position.next_offset {
+            return Err(IngestionError::ProgressConflict);
+        }
+        let count: i64 = self.connection.query_row(
+            "SELECT count(*) FROM deliveries WHERE partition = ?1 AND offset >= ?2 AND offset < ?3",
+            params![partition, start, end], |row| row.get(0),
+        ).map_err(storage_error)?;
+        if count != end - start {
+            return Err(IngestionError::ProgressConflict);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn verify_reread_record(
+        &self,
+        coordinate: DeliveryCoordinate,
+        key: Option<&[u8]>,
+        payload: &[u8],
+    ) -> Result<(), IngestionError> {
+        let disposition = match normalize(&self.manifest, key, payload) {
+            Ok(evidence) => RecordDisposition::Accepted(Box::new(evidence)),
+            Err(reason) => RecordDisposition::Rejected(reason),
+        };
+        let prepared = PreparedDisposition::new(&self.manifest, disposition)?;
+        let existing = self
+            .connection
+            .query_row(
+                "SELECT v.event_json, d.provenance_json, d.rejection_reason
+             FROM deliveries d LEFT JOIN event_variants v ON v.id = d.variant_id
+             WHERE d.partition = ?1 AND d.offset = ?2",
+                params![coordinate.partition, coordinate.offset],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        match existing {
+            Some(stored) if stored == prepared.identity() => Ok(()),
+            Some(_) => Err(IngestionError::DeliveryConflict),
+            None => Err(IngestionError::ProgressConflict),
+        }
     }
 
     pub fn validate_source(

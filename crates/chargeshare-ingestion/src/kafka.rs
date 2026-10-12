@@ -11,7 +11,10 @@ use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::{Message, Offset, TopicPartitionList};
 
-use crate::{DeliveryCoordinate, IngestionError, Manifest, PartitionRange, SourceBinding, Store};
+use crate::{
+    CommitBoundary, DeliveryCoordinate, IngestionError, Manifest, PartitionRange, SourceBinding,
+    Store,
+};
 
 const MAX_SOURCE_MARKER_BYTES: usize = 16_384;
 const MAX_RECORDS: usize = 10_000;
@@ -29,6 +32,18 @@ pub struct ConsumeReport {
     pub committed_records: usize,
     pub duplicate_deliveries: usize,
     pub inserted_variants: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RereadRange {
+    pub partition: i32,
+    pub start_offset: i64,
+    pub end_offset: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RereadReport {
+    pub verified_records: usize,
 }
 
 struct SilentSyntheticContext;
@@ -83,6 +98,16 @@ pub fn consume_bounded(
     manifest: &Manifest,
     store: &mut Store,
 ) -> Result<ConsumeReport, IngestionError> {
+    consume_bounded_observed(config, source, manifest, store, &mut |_| Ok(()))
+}
+
+pub fn consume_bounded_observed(
+    config: &KafkaConfig,
+    source: &SourceBinding,
+    manifest: &Manifest,
+    store: &mut Store,
+    observer: &mut dyn FnMut(CommitBoundary) -> Result<(), IngestionError>,
+) -> Result<ConsumeReport, IngestionError> {
     let deadline = Instant::now()
         .checked_add(config.deadline)
         .ok_or(IngestionError::InvalidConfiguration)?;
@@ -95,7 +120,21 @@ pub fn consume_bounded(
     if source.topic_id.is_some() {
         return Err(IngestionError::SourceMismatch);
     }
-    let consumer: BaseConsumer<SilentSyntheticContext> = ClientConfig::new()
+    let consumer = connect_consumer(config)?;
+    let result = consume_assigned(&consumer, config, source, store, observer, deadline);
+    let cleanup = consumer
+        .unassign()
+        .map_err(|_| IngestionError::KafkaUnavailable);
+    match result {
+        Err(error) => Err(error),
+        Ok(report) => cleanup.map(|()| report),
+    }
+}
+
+fn connect_consumer(
+    config: &KafkaConfig,
+) -> Result<BaseConsumer<SilentSyntheticContext>, IngestionError> {
+    ClientConfig::new()
         .set("bootstrap.servers", &config.bootstrap_servers)
         .set("group.id", "chargeshare-synthetic-sqlite-progress")
         .set("client.id", "chargeshare-synthetic-ingestion")
@@ -113,25 +152,16 @@ pub fn consume_bounded(
         .set("statistics.interval.ms", "0")
         .set("log_level", "0")
         .create_with_context(SilentSyntheticContext)
-        .map_err(|_| IngestionError::KafkaUnavailable)?;
-    let result = consume_assigned(&consumer, config, source, manifest, store, deadline);
-    let cleanup = consumer
-        .unassign()
-        .map_err(|_| IngestionError::KafkaUnavailable);
-    match result {
-        Err(error) => Err(error),
-        Ok(report) => cleanup.map(|()| report),
-    }
+        .map_err(|_| IngestionError::KafkaUnavailable)
 }
 
-fn consume_assigned(
+fn verify_broker_source(
     consumer: &BaseConsumer<SilentSyntheticContext>,
     config: &KafkaConfig,
     source: &SourceBinding,
-    manifest: &Manifest,
-    store: &mut Store,
+    store: &Store,
     deadline: Instant,
-) -> Result<ConsumeReport, IngestionError> {
+) -> Result<Vec<PartitionRange>, IngestionError> {
     let metadata = consumer
         .fetch_metadata(Some(&source.topic), remaining(deadline)?)
         .map_err(|_| source_operation_error(deadline))?;
@@ -185,6 +215,19 @@ fn consume_assigned(
     }
     store.validate_source(&observed, &bounds)?;
     verify_source_marker(&config.source_epoch_path, source)?;
+    Ok(bounds)
+}
+
+fn consume_assigned(
+    consumer: &BaseConsumer<SilentSyntheticContext>,
+    config: &KafkaConfig,
+    source: &SourceBinding,
+    store: &mut Store,
+    observer: &mut dyn FnMut(CommitBoundary) -> Result<(), IngestionError>,
+    deadline: Instant,
+) -> Result<ConsumeReport, IngestionError> {
+    verify_broker_source(consumer, config, source, store, deadline)?;
+    let manifest = store.manifest.clone();
     let mut positions: BTreeMap<_, _> = store
         .positions()?
         .into_iter()
@@ -217,8 +260,8 @@ fn consume_assigned(
             .ok_or(IngestionError::SourceMismatch)?;
         verify_source_marker(&config.source_epoch_path, source)?;
         remaining(deadline)?;
-        let outcome = store.ingest(
-            manifest,
+        let outcome = store.ingest_observed(
+            &manifest,
             DeliveryCoordinate {
                 partition,
                 offset: delivery.offset(),
@@ -226,6 +269,7 @@ fn consume_assigned(
             expected_resume_position,
             delivery.key(),
             delivery.payload().unwrap_or_default(),
+            observer,
         )?;
         positions.insert(partition, outcome.next_offset);
         report.committed_records += 1;
@@ -234,6 +278,114 @@ fn consume_assigned(
         remaining(deadline)?;
     }
     Ok(report)
+}
+
+pub fn reread_bounded(
+    config: &KafkaConfig,
+    source: &SourceBinding,
+    manifest: &Manifest,
+    store: &Store,
+    ranges: &[RereadRange],
+) -> Result<RereadReport, IngestionError> {
+    let deadline = Instant::now()
+        .checked_add(config.deadline)
+        .ok_or(IngestionError::InvalidConfiguration)?;
+    config.validate()?;
+    source.validate()?;
+    if store.manifest.config() != manifest.config() {
+        return Err(IngestionError::ConfigurationMismatch);
+    }
+    verify_source_marker(&config.source_epoch_path, source)?;
+    if source.topic_id.is_some() || ranges.is_empty() || ranges.len() > 16 {
+        return Err(IngestionError::InvalidConfiguration);
+    }
+    let mut positions = BTreeMap::new();
+    let mut count = 0usize;
+    for range in ranges {
+        if range.start_offset < 0
+            || range.end_offset <= range.start_offset
+            || positions
+                .insert(range.partition, (range.start_offset, range.end_offset))
+                .is_some()
+        {
+            return Err(IngestionError::InvalidConfiguration);
+        }
+        let width = usize::try_from(range.end_offset - range.start_offset)
+            .map_err(|_| IngestionError::InvalidConfiguration)?;
+        count = count
+            .checked_add(width)
+            .ok_or(IngestionError::InvalidConfiguration)?;
+        if count > config.max_records {
+            return Err(IngestionError::InvalidConfiguration);
+        }
+        store.validate_reread_range(range.partition, range.start_offset, range.end_offset)?;
+    }
+    let consumer = connect_consumer(config)?;
+    let result = reread_assigned(&consumer, config, source, store, positions, deadline);
+    let cleanup = consumer
+        .unassign()
+        .map_err(|_| IngestionError::KafkaUnavailable);
+    match result {
+        Err(error) => Err(error),
+        Ok(report) => cleanup.map(|()| report),
+    }
+}
+
+fn reread_assigned(
+    consumer: &BaseConsumer<SilentSyntheticContext>,
+    config: &KafkaConfig,
+    source: &SourceBinding,
+    store: &Store,
+    mut positions: BTreeMap<i32, (i64, i64)>,
+    deadline: Instant,
+) -> Result<RereadReport, IngestionError> {
+    let bounds = verify_broker_source(consumer, config, source, store, deadline)?;
+    let mut assignment = TopicPartitionList::new();
+    for (&partition, &(start, end)) in &positions {
+        source.validate_position(partition, start, &bounds)?;
+        source.validate_position(partition, end, &bounds)?;
+        assignment
+            .add_partition_offset(&source.topic, partition, Offset::Offset(start))
+            .map_err(|_| IngestionError::KafkaUnavailable)?;
+    }
+    consumer
+        .assign(&assignment)
+        .map_err(|_| IngestionError::KafkaUnavailable)?;
+    let mut verified_records = 0;
+    while !positions.is_empty() {
+        let delivery = consumer.poll(remaining(deadline)?.min(Duration::from_millis(100)));
+        verify_source_marker(&config.source_epoch_path, source)?;
+        let Some(delivery) = delivery else { continue };
+        let delivery = delivery.map_err(consumer_error)?;
+        let partition = delivery.partition();
+        let &(next, end) = positions
+            .get(&partition)
+            .ok_or(IngestionError::SourceMismatch)?;
+        if delivery.topic() != source.topic || delivery.offset() != next {
+            return Err(IngestionError::RecoveryGap);
+        }
+        store.verify_reread_record(
+            DeliveryCoordinate {
+                partition,
+                offset: next,
+            },
+            delivery.key(),
+            delivery.payload().unwrap_or_default(),
+        )?;
+        verified_records += 1;
+        if next + 1 == end {
+            positions.remove(&partition);
+            let mut pause = TopicPartitionList::new();
+            pause.add_partition(&source.topic, partition);
+            consumer
+                .pause(&pause)
+                .map_err(|_| IngestionError::KafkaUnavailable)?;
+        } else {
+            positions.insert(partition, (next + 1, end));
+        }
+        remaining(deadline)?;
+    }
+    Ok(RereadReport { verified_records })
 }
 
 fn permitted_broker(host: &str, port: i32) -> bool {

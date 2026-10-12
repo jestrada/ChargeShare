@@ -2,8 +2,8 @@
 
 Spec 1 has been approved for implementation and now has an offline Rust suite.
 The verified receiver-to-Kafka harness is described in [local development](local-development.md).
-The [stage-2 ingestion work](https://github.com/jestrada/ChargeShare/issues/12)
-is approved and partially applied; actual receiver-backed ingestion acceptance
+The [stage-2 ingestion acceptance](https://github.com/jestrada/ChargeShare/issues/27)
+has an implemented driver and staged dedicated gate; actual receiver-backed acceptance
 remains pending. Persisted results/API/dashboard reads remain stage 3.
 
 Offline session pricing adds 15 acceptance tests in
@@ -37,8 +37,8 @@ and PR; preserve the existing behavioral scenarios and tests.
 
 ## Durable synthetic ingestion verification
 
-The outer crate adds 64 focused tests. Rebased onto the stage-1 harness, the
-workspace includes 125 Rust tests. Commands and limits are in
+The original outer crate added 64 focused tests and the rebased stage-1 workspace
+included 125 Rust tests. Issue #27 adds ten Rust tests, for 135 total. Commands and limits are in
 [durable ingestion](durable-ingestion.md). Historical local checks on 2026-10-09:
 
 - Complete workspace and unchanged offline wrapper: 115 passed, zero failed/ignored/filtered
@@ -58,11 +58,93 @@ The focused Kafka tests use librdkafka's local mock cluster. Hosted repository
 checks run all ingestion tests through the complete workspace, but their guard
 only requires the ledger/pricing suites; the focused ingestion guard and its four
 failure tests remain local. The inherited transport workflow verifies stage 1,
-without consuming into SQLite. The owned broker epoch binding, actual receiver
-→ Kafka → ingestion → SQLite → scoped replay gate remain pending in the
-[ingestion acceptance issue](https://github.com/jestrada/ChargeShare/issues/12).
+without consuming into SQLite. Issue #27 now implements volume-bound epochs,
+bounded committed-offset reread and the shared actual receiver → Kafka → ingestion
+→ SQLite → scoped replay driver. The dedicated workflow is staged outside
+`.github/workflows/`, and actual receiver-backed acceptance remains pending in the
+[ingestion acceptance issue](https://github.com/jestrada/ChargeShare/issues/27).
 Hosted checks must be verified on each exact published head; historical results
 do not establish that outcome.
+
+### Issue #27 local verification
+
+Commands for supported Linux with a permitted local Docker daemon:
+
+```sh
+mkdir -p .cache/ingestion-acceptance/tmp
+chmod 700 .cache/ingestion-acceptance .cache/ingestion-acceptance/tmp
+export TMPDIR="$PWD/.cache/ingestion-acceptance/tmp"
+nix develop --no-update-lock-file -c cargo fmt --all -- --check
+nix develop --no-update-lock-file -c cargo clippy --workspace --all-targets --locked -- -D warnings
+nix develop --no-update-lock-file -c bash scripts/testing/offline-suite.sh
+nix develop --no-update-lock-file -c bash scripts/testing/ingestion-suite.sh
+nix develop --no-update-lock-file -c python3 scripts/testing/test_ingestion_guard.py
+nix develop --no-update-lock-file -c python3 -m unittest discover -s scripts/dev -p 'test_*.py'
+nix develop --no-update-lock-file -c npm --cache .cache/npm --prefix apps/web ci
+nix develop --no-update-lock-file -c npm run preview:build
+nix develop --no-update-lock-file -c bash scripts/dev/acceptance.sh all
+```
+
+The shared acceptance command requires fresh owned state and manages Tilt
+itself. Expected output ends with `Result: PASS` and requires 0.500000/0.250000
+kWh observed AC, both sessions Unconfirmed and zero eligible energy. It checks
+actual complete/duplicate/out-of-order transport, epoch init/preserve/reset,
+separate consumer restart, kills before/after commit, unchanged reread,
+identity refusal and an actual retained-offset gap. It cannot pass on readiness,
+ACK alone, candidate JSON or direct Kafka production. Only the allowlisted
+summary is public; the actual decoded capture is private for golden review.
+
+On 2026-10-11 in the implementation sandbox:
+
+- Pinned Rust 1.99.0 formatting and warnings-denied workspace Clippy passed.
+- Workspace tests and the focused ingestion wrapper passed in a disposable
+  Bubblewrap user/filesystem namespace, with the repository mounted unchanged:
+  135 Rust tests, zero failed/ignored/filtered. The original sandbox root has
+  unmapped UID 65534; direct tests refused it with `StorageUnavailable` as intended.
+  The namespace supplies a private trusted root. No storage guard was weakened.
+- Python runtime/epoch/acceptance checks passed: 99 tests. The four focused
+  ingestion wrapper failure tests passed, including the increased reread/CLI
+  minimums. Setup, assertion, timeout and cleanup failure paths are local proofs;
+  they do not establish hosted failures.
+- Frontend dependency install and TypeScript/Vite build passed with the pinned
+  Node 24.21.0 tool executable. Fixture frontend behavior is unchanged.
+- Security guard tests and staged/history scans passed before local commits;
+  staged paths and exact diffs were reviewed. Publication scans and terminal
+  hosted checks must accompany the final supervisor-published SHA.
+- `nix develop --no-update-lock-file` refused the read-only Nix database. Rust
+  checks used the available pinned Rust toolchain directly. Pinned shell entry
+  still needs external verification.
+- The actual acceptance command returned `Result: FAIL` at prerequisite checks
+  because the Docker socket is inaccessible. No receiver-backed pass, capture,
+  golden fixture, real epoch/recovery result or hosted run is claimed.
+
+The staged [Ubuntu 24.04 workflow](../ci-27-tmp/ingestion-acceptance.yml) runs
+focused guards and the same bounded command. A maintainer must activate it. Use
+separate workflow-dispatch `setup`, `assertion` and `timeout` proof runs; each
+must fail and tear down its owned resources. The assertion proof expects 0.6 kWh
+for A and must fail against actual 0.5 kWh. Restore `none` in a separate passing
+hosted run. Locally, the equivalent explicit failure command is
+`nix develop --no-update-lock-file -c bash scripts/dev/acceptance.sh all --prove-failure assertion`;
+substitute `setup` or `timeout` for those proofs. Do not wrap expected failures
+as passing hosted jobs. Artifact uploads list summaries/versions only and exclude
+payloads, databases, unrestricted logs and test trust.
+
+The timeout proof now runs at committed topic end immediately after complete
+ingestion, ahead of duplicate and refusal phases. It requires the actual CLI's
+one-second deadline reason, then verifies unchanged state and reports
+`FAIL: timeout`. A focused child-process test establishes that CLI behavior
+against a mocked broker; Python tests require exact refusal reasons, restored
+inputs, independent preservation checks and proof-mode reachability. The separate
+manifest probe establishes incompatible frozen configuration refusal. The
+supervisor reported real execution on `df81b92` through stable reread followed
+by the incorrect epoch-reason expectation; that partial result is not a full
+acceptance pass and does not verify these follow-up commits.
+
+Actual acceptance, reviewed captured golden normalization/rejection tests,
+workflow activation, deliberate hosted failures, separate restored pass and
+terminal checks on the exact published commit remain required. Issue #27 stays
+incomplete until those gates are evidenced. Mermaid source and relative links
+are reviewed; diagram rendering is not verified in this sandbox.
 
 ### Stack rebase verification on 2026-10-10
 
@@ -385,9 +467,14 @@ browser checks, not an automated screenshot regression suite. Full local checks
 passed again: 51 Rust tests, formatting, Clippy, strict OpenSpec validation,
 security guards and the TypeScript/production build.
 
-## Future receiver integration: separate spec
+## Historical future receiver integration checklist
 
-Proposed path: fake vehicle → actual official Tesla Go receiver → selected
+The checklist below retains earlier planning context. The current synthetic
+receiver/Kafka implementation and issue #27's exact 0.5/0.25 kWh acceptance
+supersede its open dispatcher and fixture choices; 10/4 kWh tests are supplementary.
+Live integration remains separately approved future work.
+
+Earlier proposed path: fake vehicle → actual official Tesla Go receiver → selected
 supported dispatcher/broker → Rust adapter → vehicle ledger. This tests transport
 and decoding as well as accounting; a direct JSON injection into Rust is not an
 end-to-end receiver test. Broker selection and adapter details are still open.

@@ -9,7 +9,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
 const RECEIVER_REVISION: &str = "bd076fe1494841707528449560c4a19d0d426da4";
-const BOUNDARY: &str = "synthetic receiver-to-Kafka only; adapter, SQLite and receiver-backed dashboard remain unimplemented";
+const BOUNDARY: &str = "synthetic receiver-to-Kafka transport; durable ingestion has its separate acceptance command; fixture dashboard remains independent";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -95,6 +95,14 @@ fn execute() -> Result<()> {
             let run = RetainedRun { scenario: mode.to_owned(), starting_offsets, expected };
             write_private(runtime.runtime_dir.join("last-run.json"), serde_json::to_vec_pretty(&run)?)?;
             write_private(runtime.runtime_dir.join("normalized.json"), serde_json::to_vec_pretty(&fixtures::normalized(&observed))?)?;
+            if mode == "complete" {
+                write_private(runtime.runtime_dir.join("decoded-capture.json"), serde_json::to_vec_pretty(&serde_json::json!({
+                    "receiver_revision": RECEIVER_REVISION,
+                    "actual_receiver_transport_verified": true,
+                    "topic": "chargeshare_synthetic_V",
+                    "records": fixtures::normalized(&observed),
+                }))?)?;
+            }
             println!("{mode} passed: {} expected ACKs and {} matching decoded records; receiver {RECEIVER_REVISION}; {BOUNDARY}", scenario.frames.len(), observed.len());
         }
         _ => return Err("usage: chargeshare-harness ready|smoke|all|complete|missing|adverse|invalid-auth|replay [--no-send|--inject-missing-output]".into()),

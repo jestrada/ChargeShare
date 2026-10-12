@@ -1,3 +1,5 @@
+mod acceptance;
+
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -8,7 +10,8 @@ use std::time::{Duration, Instant};
 use chargeshare_core::{OwnerId, VehicleId};
 use chargeshare_ingestion::{
     DeliveryCoordinate, IngestionError, KafkaConfig, MAX_MANIFEST_BYTES, Manifest, PartitionStart,
-    SYNTHETIC_TOPIC, SourceBinding, Store, consume_bounded, read_source_marker,
+    RereadRange, SYNTHETIC_TOPIC, SourceBinding, Store, consume_bounded, read_source_marker,
+    reread_bounded,
 };
 use serde::Deserialize;
 
@@ -46,11 +49,86 @@ fn run() -> Result<(), IngestionError> {
         Some("replay") if args.len() == 4 => with_deadline(Duration::from_secs(10), |_| {
             replay_runtime(&args[1], &args[2], &args[3])
         }),
+        Some("reread") if args.len() == 7 => {
+            let partition = args[3]
+                .parse::<i32>()
+                .map_err(|_| IngestionError::InvalidCommand)?;
+            let start_offset = args[4]
+                .parse::<i64>()
+                .map_err(|_| IngestionError::InvalidCommand)?;
+            let end_offset = args[5]
+                .parse::<i64>()
+                .map_err(|_| IngestionError::InvalidCommand)?;
+            let seconds = args[6]
+                .parse::<u64>()
+                .map_err(|_| IngestionError::InvalidCommand)?;
+            if !(1..=120).contains(&seconds) || start_offset < 0 || end_offset <= start_offset {
+                return Err(IngestionError::InvalidCommand);
+            }
+            with_deadline(Duration::from_secs(seconds), |start| {
+                reread_runtime(
+                    &args[1],
+                    &args[2],
+                    RereadRange {
+                        partition,
+                        start_offset,
+                        end_offset,
+                    },
+                    seconds,
+                    start,
+                )
+            })
+        }
+        Some("acceptance-status") if args.len() == 2 => {
+            with_deadline(Duration::from_secs(10), |_| acceptance::status(&args[1]))
+        }
+        Some("verify-decoded") if args.len() == 2 => with_deadline(Duration::from_secs(10), |_| {
+            acceptance::verify_decoded(&args[1])
+        }),
+        Some("consume-probe") if args.len() == 4 => {
+            with_deadline(Duration::from_secs(30), |start| {
+                acceptance::consume_probe(&args[1], &args[2], &args[3], start)
+            })
+        }
         Some("candidate-demo") if args.len() == 1 => {
             with_deadline(Duration::from_secs(10), |_| candidate_demo())
         }
         _ => Err(IngestionError::InvalidCommand),
     }
+}
+
+fn reread_runtime(
+    path: &str,
+    bootstrap_servers: &str,
+    range: RereadRange,
+    seconds: u64,
+    start: Instant,
+) -> Result<(), IngestionError> {
+    let runtime = owned_runtime(path)?;
+    let (manifest, source) = runtime_contract(&runtime)?;
+    let mut config = KafkaConfig {
+        bootstrap_servers: bootstrap_servers.to_owned(),
+        source_epoch_path: runtime.join("source-epoch.json"),
+        max_records: usize::try_from(range.end_offset - range.start_offset)
+            .map_err(|_| IngestionError::InvalidCommand)?,
+        deadline: Duration::from_secs(seconds),
+    };
+    config.validate()?;
+    if !runtime.join("ingestion.sqlite3").is_file() {
+        return Err(IngestionError::StorageUnavailable);
+    }
+    let store = Store::open(&runtime.join("ingestion.sqlite3"), &manifest, &source)?;
+    config.deadline = config
+        .deadline
+        .checked_sub(start.elapsed())
+        .filter(|time| !time.is_zero())
+        .ok_or(IngestionError::Timeout)?;
+    let report = reread_bounded(&config, &source, &manifest, &store, &[range])?;
+    println!(
+        "synthetic bounded reread: verified={} progress=unchanged evidence=unchanged",
+        report.verified_records
+    );
+    Ok(())
 }
 
 fn consume_runtime(

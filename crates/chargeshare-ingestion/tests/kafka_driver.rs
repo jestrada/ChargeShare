@@ -5,13 +5,15 @@ use std::io::Write;
 use std::net::TcpListener;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use chargeshare_core::{OwnerId, VehicleId};
 use chargeshare_ingestion::{
-    DeliveryCoordinate, IngestionError, KafkaConfig, Manifest, PartitionStart, SYNTHETIC_TOPIC,
-    SourceBinding, Store, consume_bounded,
+    CommitBoundary, DeliveryCoordinate, IngestionError, KafkaConfig, Manifest, PartitionStart,
+    RereadRange, SYNTHETIC_TOPIC, SourceBinding, Store, consume_bounded, consume_bounded_observed,
+    reread_bounded,
 };
 use rdkafka::client::ClientContext;
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
@@ -404,6 +406,82 @@ fn unavailable_broker_is_bounded_and_preserves_progress() {
 }
 
 #[test]
+fn cli_at_committed_topic_end_fails_with_exact_deadline_and_preserves_scoped_replay() {
+    let (cluster, fixture) = mock_fixture();
+    publish(&cluster.bootstrap_servers(), &records());
+    let runtime = fixture.directory.join(".local-runtime");
+    fs::DirBuilder::new().mode(0o700).create(&runtime).unwrap();
+    for (name, bytes) in [
+        (
+            "source-epoch.json",
+            serde_json::to_vec(&fixture.source).unwrap(),
+        ),
+        (
+            "manifest.json",
+            include_bytes!("fixtures/manifest-v1.json").to_vec(),
+        ),
+        (
+            "synthetic-runtime.json",
+            br#"{"project_name":"chargeshare-local-0123456789ab","synthetic_only":true}"#.to_vec(),
+        ),
+    ] {
+        OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(runtime.join(name))
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
+    }
+    let database = runtime.join("ingestion.sqlite3");
+    let mut store = Store::open(&database, &fixture.manifest, &fixture.source).unwrap();
+    let mut config = fixture.config(cluster.bootstrap_servers(), 6);
+    config.source_epoch_path = runtime.join("source-epoch.json");
+    consume_bounded(&config, &fixture.source, &fixture.manifest, &mut store).unwrap();
+    let positions = store.positions().unwrap();
+    let statistics = store.statistics().unwrap();
+    let scopes = [
+        (
+            OwnerId::new("owner-a").unwrap(),
+            VehicleId::new("vehicle-a").unwrap(),
+        ),
+        (
+            OwnerId::new("owner-b").unwrap(),
+            VehicleId::new("vehicle-b").unwrap(),
+        ),
+    ];
+    let sessions: Vec<_> = scopes
+        .iter()
+        .map(|(owner, vehicle)| store.sessions(owner, vehicle).unwrap())
+        .collect();
+    assert_eq!(positions[0].next_offset, 6);
+    drop(store);
+    let start = Instant::now();
+    let output = Command::new(env!("CARGO_BIN_EXE_chargeshare-ingestion"))
+        .args([
+            "consume",
+            runtime.to_str().unwrap(),
+            &cluster.bootstrap_servers(),
+            "1",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(start.elapsed() >= Duration::from_millis(900));
+    assert!(start.elapsed() < Duration::from_secs(2));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, b"ingestion: bounded deadline exceeded\n");
+    let recovered = Store::open(&database, &fixture.manifest, &fixture.source).unwrap();
+    assert_eq!(recovered.positions().unwrap(), positions);
+    assert_eq!(recovered.statistics().unwrap(), statistics);
+    for ((owner, vehicle), before) in scopes.iter().zip(sessions) {
+        assert_eq!(recovered.sessions(owner, vehicle).unwrap(), before);
+    }
+}
+
+#[test]
 fn missing_nonprivate_symlinked_or_hardlinked_epoch_markers_fail_before_broker_contact() {
     let fixture = Fixture::new(None);
     let mut store = fixture.open();
@@ -474,4 +552,212 @@ fn bounded_config_rejects_external_names_addresses_and_unbounded_limits() {
     let mut config = fixture.config("127.0.0.1:9092".to_owned(), 1);
     config.deadline = Duration::from_secs(121);
     assert_eq!(config.validate(), Err(IngestionError::InvalidConfiguration));
+}
+
+#[test]
+fn explicit_retained_reread_leaves_scoped_results_evidence_and_next_position_unchanged() {
+    let (cluster, fixture) = mock_fixture();
+    publish(&cluster.bootstrap_servers(), &records());
+    let mut store = fixture.open();
+    let config = fixture.config(cluster.bootstrap_servers(), 6);
+    consume_bounded(&config, &fixture.source, &fixture.manifest, &mut store).unwrap();
+    let before_positions = store.positions().unwrap();
+    let before_statistics = store.statistics().unwrap();
+    let owner = OwnerId::new("owner-a").unwrap();
+    let vehicle = VehicleId::new("vehicle-a").unwrap();
+    let before_summary = store.summary(&owner, &vehicle).unwrap();
+    for _ in 0..2 {
+        let report = reread_bounded(
+            &config,
+            &fixture.source,
+            &fixture.manifest,
+            &store,
+            &[RereadRange {
+                partition: 0,
+                start_offset: 0,
+                end_offset: 6,
+            }],
+        )
+        .unwrap();
+        assert_eq!(report.verified_records, 6);
+        assert_eq!(store.positions().unwrap(), before_positions);
+        assert_eq!(store.statistics().unwrap(), before_statistics);
+        assert_eq!(store.summary(&owner, &vehicle).unwrap(), before_summary);
+    }
+}
+
+#[test]
+fn reread_refuses_uncommitted_invalid_duplicate_and_unbounded_ranges_before_contact() {
+    let fixture = Fixture::new(None);
+    let input = records();
+    let mut store = fixture.open();
+    store
+        .ingest(
+            &fixture.manifest,
+            DeliveryCoordinate {
+                partition: 0,
+                offset: 0,
+            },
+            0,
+            Some(&input[0].0),
+            &input[0].1,
+        )
+        .unwrap();
+    let config = fixture.config("127.0.0.1:1".to_owned(), 6);
+    let valid = RereadRange {
+        partition: 0,
+        start_offset: 0,
+        end_offset: 1,
+    };
+    for (ranges, reason) in [
+        (vec![], IngestionError::InvalidConfiguration),
+        (
+            vec![RereadRange {
+                end_offset: 0,
+                ..valid
+            }],
+            IngestionError::InvalidConfiguration,
+        ),
+        (
+            vec![RereadRange {
+                start_offset: -1,
+                ..valid
+            }],
+            IngestionError::InvalidConfiguration,
+        ),
+        (
+            vec![RereadRange {
+                end_offset: 2,
+                ..valid
+            }],
+            IngestionError::ProgressConflict,
+        ),
+        (
+            vec![RereadRange {
+                end_offset: 7,
+                ..valid
+            }],
+            IngestionError::InvalidConfiguration,
+        ),
+        (
+            vec![RereadRange {
+                partition: 1,
+                ..valid
+            }],
+            IngestionError::SourceMismatch,
+        ),
+        (vec![valid, valid], IngestionError::InvalidConfiguration),
+    ] {
+        assert_eq!(
+            reread_bounded(&config, &fixture.source, &fixture.manifest, &store, &ranges),
+            Err(reason)
+        );
+        assert_eq!(store.positions().unwrap()[0].next_offset, 1);
+        assert_eq!(store.statistics().unwrap().accepted_deliveries, 1);
+    }
+}
+
+#[test]
+fn reread_refuses_changed_committed_disposition_without_modifying_evidence() {
+    let (cluster, fixture) = mock_fixture();
+    let input = records();
+    let mut store = fixture.open();
+    store
+        .ingest(
+            &fixture.manifest,
+            DeliveryCoordinate {
+                partition: 0,
+                offset: 0,
+            },
+            0,
+            Some(&input[0].0),
+            &input[0].1,
+        )
+        .unwrap();
+    let mut changed: serde_json::Value = serde_json::from_slice(&input[0].1).unwrap();
+    changed["data"][3]["value"]["stringValue"] = serde_json::json!("100.01");
+    publish(
+        &cluster.bootstrap_servers(),
+        &[(input[0].0.clone(), serde_json::to_vec(&changed).unwrap())],
+    );
+    let before = store.statistics().unwrap();
+    assert_eq!(
+        reread_bounded(
+            &fixture.config(cluster.bootstrap_servers(), 1),
+            &fixture.source,
+            &fixture.manifest,
+            &store,
+            &[RereadRange {
+                partition: 0,
+                start_offset: 0,
+                end_offset: 1
+            }]
+        ),
+        Err(IngestionError::DeliveryConflict)
+    );
+    assert_eq!(store.positions().unwrap()[0].next_offset, 1);
+    assert_eq!(store.statistics().unwrap(), before);
+}
+
+#[test]
+fn reread_preserves_committed_fixed_rejections_and_refuses_epoch_change() {
+    let (cluster, mut fixture) = mock_fixture();
+    let input = [(b"device-1".to_vec(), b"fictional-rejected-text".to_vec())];
+    publish(&cluster.bootstrap_servers(), &input);
+    let mut store = fixture.open();
+    let config = fixture.config(cluster.bootstrap_servers(), 1);
+    consume_bounded(&config, &fixture.source, &fixture.manifest, &mut store).unwrap();
+    let range = [RereadRange {
+        partition: 0,
+        start_offset: 0,
+        end_offset: 1,
+    }];
+    reread_bounded(&config, &fixture.source, &fixture.manifest, &store, &range).unwrap();
+    assert_eq!(store.statistics().unwrap().rejected_deliveries, 1);
+    fixture.source.epoch = "synthetic-changed-epoch".to_owned();
+    fixture.write_marker();
+    assert_eq!(
+        reread_bounded(&config, &fixture.source, &fixture.manifest, &store, &range),
+        Err(IngestionError::SourceMismatch)
+    );
+    assert_eq!(store.positions().unwrap()[0].next_offset, 1);
+}
+
+#[test]
+fn observed_commit_failure_before_and_after_commit_recovers_atomic_old_or_new_state() {
+    for (boundary, committed) in [
+        (CommitBoundary::BeforeCommit, 0),
+        (CommitBoundary::AfterCommit, 1),
+    ] {
+        let (cluster, fixture) = mock_fixture();
+        publish(&cluster.bootstrap_servers(), &records());
+        let mut store = fixture.open();
+        assert_eq!(
+            consume_bounded_observed(
+                &fixture.config(cluster.bootstrap_servers(), 1),
+                &fixture.source,
+                &fixture.manifest,
+                &mut store,
+                &mut |observed| {
+                    if observed == boundary {
+                        Err(IngestionError::Timeout)
+                    } else {
+                        Ok(())
+                    }
+                }
+            ),
+            Err(IngestionError::Timeout)
+        );
+        drop(store);
+        let recovered = fixture.open();
+        assert_eq!(recovered.positions().unwrap()[0].next_offset, committed);
+        assert_eq!(
+            recovered.statistics().unwrap().accepted_deliveries,
+            committed as u64
+        );
+        assert_eq!(
+            recovered.statistics().unwrap().event_variants,
+            committed as u64
+        );
+    }
 }

@@ -9,6 +9,7 @@ os.putenv('CHARGESHARE_UID', uid)
 os.putenv('CHARGESHARE_GID', gid)
 if config.tilt_subcommand != 'down':
     local('python3 scripts/dev/runtime.py prepare', quiet=False)
+    os.putenv('CHARGESHARE_SOURCE_EPOCH', str(local('python3 scripts/dev/runtime.py source-epoch', quiet=True)).strip())
 local('python3 scripts/dev/runtime.py validate-config', quiet=False)
 if config.tilt_subcommand != 'down' and os.getenv('CHARGESHARE_CI_PREBUILT_RECEIVER') == '1':
     docker_compose(local('python3 scripts/dev/cached_receiver.py compose', quiet=True), project_name=project_name)

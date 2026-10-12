@@ -4,7 +4,10 @@ ChargeShare implements a pure synthetic Rust ledger/pricing core, an independent
 localhost fixture preview, and the approved [stage-2 ingestion crate](durable-ingestion.md).
 Ingestion retains curated fictional evidence and recovery progress in local SQLite
 and rebuilds scoped, unconfirmed sessions. Its candidate/direct/mocked tests pass;
-the actual receiver-to-Kafka-to-SQLite path has not run. No live Tesla account,
+the actual receiver-to-Kafka-to-SQLite acceptance remains unverified. Issue #27
+implements volume-bound source epochs, bounded reread and disposable in-network
+acceptance consumers; its hosted gate is staged awaiting maintainer activation.
+No live Tesla account,
 production authentication or deployment is connected. Domain owner/vehicle checks
 are not authentication or permission for cross-owner sharing.
 
@@ -12,20 +15,25 @@ The separate [stage-1 harness](local-development.md) now verifies synthetic
 authenticated traffic through the official receiver into Kafka on Linux x86_64.
 Its [acceptance evidence](testing.md#complete-linux-acceptance-and-warm-caches)
 covers transport, retained replay, stop/start, reset and cleanup. That traffic
-does not enter the ledger, database or dashboard.
+does not automatically enter the ledger, database or dashboard on Tilt startup.
+The separate explicit acceptance command is implemented to consume it into
+SQLite and scoped replay, with actual execution still pending.
 
 The canonical [ledger](../openspec/specs/vehicle-ledger/spec.md),
 [pricing](../openspec/specs/session-pricing/spec.md) and
 [dashboard](../openspec/specs/local-dashboard/spec.md) contracts remain unchanged.
-The active [ingestion design](../openspec/changes/durable-synthetic-ingestion/design.md)
-and [tasks](../openspec/changes/durable-synthetic-ingestion/tasks.md) retain its
-unfinished integration acceptance. The roadmap is in [the POC plan](plan.md).
+The historical [ingestion design](../openspec/changes/durable-synthetic-ingestion/design.md)
+and [tasks](../openspec/changes/durable-synthetic-ingestion/tasks.md) retain their
+original status. Current acceptance is owned by
+[issue #27](https://github.com/jestrada/ChargeShare/issues/27). The roadmap is in
+[the POC plan](plan.md).
 
 ## Architecture at a glance
 
 Solid arrows show implemented flows exercised by synthetic fixtures, local mock
-Kafka or the verified stage-1 receiver/Kafka harness. Dashed arrows show pending
-integration; they do not indicate running services.
+Kafka or the verified stage-1 receiver/Kafka harness. Dashed arrows show
+implemented actual ingestion awaiting receiver-backed verification, or explicitly
+deferred stage-3 flows. The disposable consumer is started only by acceptance.
 The fixture preview and retained-ingestion view use separate in-memory ledgers.
 
 ```mermaid
@@ -47,8 +55,10 @@ flowchart TB
         client["Fictional upstream test client"] --> receiver["Tesla upstream Go receiver"]
         receiver --> kafka["Apache Kafka<br/>private Compose network"]
     end
-    lifecycle["Pending owned broker epoch lifecycle"] -.-> ingest
-    kafka -.-> ingest
+    lifecycle["Owned runtime<br/>private epoch + immutable volume label"] --> runner["Ephemeral Rust consumer<br/>private network; acceptance only"]
+    kafka -.-> runner
+    sqlite -- "durable next position" --> runner
+    runner -.-> ingest
     sqlite -.-> results["Stage 3: persisted results + pricing<br/>scoped API/dashboard reads"]
 ```
 
@@ -71,7 +81,18 @@ receiver-shaped payloads outside the dependency-free core:
   or fixed rejection reasons, provenance and progress in one WAL/FULL transaction
 - `replay`: all scoped retained variants enter the unchanged core; conflict holds,
   exact energy and Unconfirmed classification are preserved
-- `main`: bounded consume, scoped replay and the explicitly labeled candidate demo
+- `main`/CLI `acceptance`: bounded consume/reread, scoped replay, allowlisted
+  acceptance status, decoded-capture verification and explicit commit probes
+
+`scripts/dev/source_epoch.py` owns marker/volume initialization and refusal,
+within the existing guarded runtime/reset lifecycle. The epoch label is
+immutable and the marker starts partition 0 at offset 0; reset removes the pair
+only after stopped ownership checks, and next initialization creates a new pair.
+`scripts/dev/ingestion_runner.py` validates the private network and launches a
+current-user disposable consumer. `scripts/dev/acceptance.py` owns bounded Tilt
+orchestration, synthetic transport, recovery assertions and owned teardown. No
+persistent service, API, dashboard mode or core infrastructure dependency is added.
+See [the implemented command and proof limits](durable-ingestion.md#shared-end-to-end-acceptance).
 
 SQLite is the sole recovery-position authority. A known rollback changes neither
 evidence nor progress; interrupted commits recover consistent old-or-new state.
@@ -88,11 +109,12 @@ deliberate assertion failure and cleanup; deliberate-failure mode is removed.
 [The recorded evidence](testing.md#complete-linux-acceptance-and-warm-caches)
 covers transport, retained replay, stop/start, reset and cleanup.
 
-Stage-2 runtime integration still needs the owned broker epoch marker, preserving
-it on restart and replacing it on explicit reset. The reviewed Kafka endpoint
-is `kafka:9092`
-inside its private Compose network, with no host listener. An in-network ingestion
-runner and receiver → Kafka → SQLite → scoped replay acceptance are still pending.
+Stage-2 source epochs and an in-network ingestion runner are implemented. The
+reviewed Kafka endpoint remains `kafka:9092` inside its private Compose network,
+with no host listener. Actual receiver → Kafka → SQLite → scoped replay
+verification, a reviewed actual decoded golden fixture and dedicated hosted
+failure/restored passing runs remain pending. The staged workflow is inactive;
+local candidate/mocked checks cannot fulfill those gates.
 [Stage 3](plan.md#stage-3-persisted-charging-results) adds the all-services
 startup/readiness and persisted priced API/dashboard path; it does not make these
 parent or ingestion gates complete by moving them to another PR.

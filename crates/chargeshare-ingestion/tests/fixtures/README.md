@@ -19,3 +19,14 @@ handwritten fictional focused-normalizer test inputs. None is captured vehicle,
 location, credential or account data. Omitting an observed End record leaves its
 annotation unused; charging-complete state, transport resends and silence supply
 no extra event.
+
+## Actual decoded golden handoff
+
+Issue #27's sandbox cannot access Docker, so no actual decoded receiver golden is
+committed by this change. Candidate provenance remains unchanged. On supported
+Linux, run `nix develop --no-update-lock-file -c bash scripts/dev/acceptance.sh all`.
+After successful actual receiver/Kafka multiset and normalizer checks, the private
+capture survives teardown at `.cache/ingestion-acceptance/decoded-capture.json`.
+Review its fictional fields against the pinned receiver contract, add the golden
+here and exercise its normalization and rejection cases before claiming that
+acceptance item. No raw capture is included in hosted artifacts.

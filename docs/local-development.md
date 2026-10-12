@@ -1,8 +1,10 @@
 # Local synthetic receiver environment
 
 This stage adds an official Tesla receiver → Kafka transport harness alongside
-ChargeShare's existing fixture API/dashboard. The receiver does not feed the
-Rust ledger, SQLite or dashboard. A passing test requires the exact expected
+ChargeShare's existing fixture API/dashboard. Ordinary Tilt startup leaves
+ingestion manual and the fixture dashboard independent. Issue #27 adds a shared
+receiver-to-SQLite acceptance command; that actual path remains unverified here.
+A passing transport test requires the exact expected
 receiver acknowledgment **and** matching decoded Kafka records. It makes no
 utility-meter, exactly-once or production-durability claim.
 
@@ -64,6 +66,14 @@ security boundary. Runtime generation has directories 0700/files 0600 under
 ignored `.local-runtime/`; keys are read-only mounts and never image inputs,
 Git content, Nix inputs, system trust or public artifacts.
 
+Preparation now creates a private source-epoch marker, the reviewed ingestion
+manifest and an owned broker volume bearing the same immutable generated epoch
+label. The marker fixes topic, cluster and partition-0 initial offset 0. An older
+unlabeled volume or missing/mismatched pair refuses startup and preserves
+evidence; use explicit stopped owned reset when discarding that synthetic state
+is intended. Ordinary restarts preserve epoch and SQLite. See
+[the lifecycle contract](durable-ingestion.md#owned-broker-source-epoch).
+
 ```sh
 tilt logs kafka receiver
 tilt logs fixture-api fixture-dashboard
@@ -90,7 +100,8 @@ verification command has a 25-second deadline; Kafka record observation is
 20 seconds. TLS/WebSocket connect, reads and writes have 10-second bounds.
 The upstream producer has `acks=all` and a 10-second message timeout, with
 reliable V acknowledgments configured to Kafka. This single-broker development
-policy is separate from future database/offset atomicity and durability.
+policy is separate from the ingestion driver's local SQLite evidence/progress
+atomicity. Receiver-backed ingestion verification is the separate command below.
 
 CI reports allowlisted Tilt resource states, health and dependency blockers as
 they change. A terminal resource failure exits immediately instead of consuming
@@ -151,6 +162,43 @@ semantic results; volatile receipts/offsets are not energy evidence.
 
 ## Automated acceptance and evidence
 
+For issue #27's implemented end-to-end driver, start from a fresh owned runtime:
+
+```sh
+nix develop --no-update-lock-file -c bash scripts/dev/acceptance.sh all
+```
+
+This single command owns its Tilt start/stop, consumer processes, two epoch
+initializations and explicit stopped resets. Run it with Tilt stopped and no
+existing `.local-runtime/` or broker volume. It refuses and preserves existing
+state. If discarding an existing synthetic environment is intended, first run
+`tilt down` and `python3 scripts/dev/runtime.py reset --confirm-synthetic-reset`
+in the pinned shell. No reset is automatic in normal ingestion recovery.
+
+Consumers are disposable containers using the existing pinned Kafka image,
+current-user storage, the existing private Compose network, the Nix-built Rust
+binary and read-only `/nix/store` libraries. No additional Compose service or
+Kafka host port is added. Ownership and run labels constrain signal/teardown.
+The script uses ignored repo-local TMPDIR, Docker client configuration and Tilt
+state by default, accommodating read-only home directories without weakening
+storage ancestor checks. It has a 40-minute outer deadline; ACK stays 10 seconds.
+
+Expected summary includes scoped vehicle A/B observed AC energy
+0.500000/0.250000 kWh, both sessions Unconfirmed, zero eligible energy,
+epoch init/preserve/reset, restart/crash recovery, stable reread, identity and
+retention refusal, and final `Result: PASS`. The summary is in
+`target/ingestion-acceptance-results/summary.md`; private logs and decoded
+capture are in `.cache/ingestion-acceptance/`. Do not upload that cache directory.
+The command has not passed on an actual Docker host in this implementation
+session. Docker socket access and Nix database writes were refused in the
+sandbox; the supervisor must run it externally. See [testing](testing.md#issue-27-local-verification).
+
+The dedicated Ubuntu 24.04 workflow is inactive in
+`ci-27-tmp/ingestion-acceptance.yml`. The maintainer must move it into
+`.github/workflows/` and perform the hosted failure/restored-run proofs described
+in [the handoff](../ci-27-tmp/README.md). Existing transport workflow results below
+establish stage 1 only.
+
 [The integration workflow](../.github/workflows/telemetry-integration.yml)
 runs on every pull request and every push to `main`. It allows one active run
 per PR, cancels superseded PR runs and never cancels main runs; branches without
@@ -161,8 +209,8 @@ triggers `telemetry-smoke`, checks all fixture cases and negative boundaries,
 replays retained records across verifier and service restarts, and compares two
 full clean resets. An overall timeout and exit-preserving cleanup bound the job.
 Only versions, stage summaries and synthetic normalized results are uploaded;
-private material and unrestricted local logs are excluded. Cloudflare,
-ingestion, SQLite and receiver-backed dashboard behavior are not covered.
+private material and unrestricted local logs are excluded. That existing gate
+does not cover ingestion, SQLite, receiver-backed dashboard behavior or Cloudflare.
 
 CI restores pinned Nix store outputs and receiver build layers using GitHub's
 cache before generating test trust. Nix keys include the installer version,
