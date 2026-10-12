@@ -200,7 +200,9 @@ in [the handoff](../ci-27-tmp/README.md). Existing transport workflow results be
 establish stage 1 only.
 
 [The integration workflow](../.github/workflows/telemetry-integration.yml)
-is active for every push and pull request. [Verification steps](workflows/README.md)
+runs on every pull request and every push to `main`. It allows one active run
+per PR, cancels superseded PR runs and never cancels main runs; branches without
+an open PR get no hosted checks. [Verification steps](workflows/README.md)
 describe the deliberate failure proof and restored successful run. It runs using a fresh `ubuntu-24.04` x86_64 VM, its
 host Docker daemon and the same locked shell/Compose/Tilt inputs. It explicitly
 triggers `telemetry-smoke`, checks all fixture cases and negative boundaries,
