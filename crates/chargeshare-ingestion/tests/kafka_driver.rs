@@ -910,7 +910,23 @@ fn http_get(address: std::net::SocketAddr, path: &str) -> (u16, serde_json::Valu
 
 #[test]
 fn owning_process_serves_committed_scopes_and_refuses_leakage_over_http() {
-    let (cluster, fixture) = mock_fixture();
+    let (cluster, mut fixture) = mock_fixture();
+    let sample =
+        Manifest::from_json(include_bytes!("../../../dev/ingestion-manifest.json")).unwrap();
+    let mut config = fixture.manifest.config().clone();
+    config.rate_models = sample.config().rate_models.clone();
+    config.owner_chargers = sample.config().owner_chargers.clone();
+    for charger in &mut config.owner_chargers {
+        let geofence = config
+            .geofences
+            .iter()
+            .find(|geofence| geofence.owner == charger.owner_id)
+            .unwrap();
+        charger.geofence.center = geofence.center.clone();
+        charger.geofence.radius_meters = geofence.radius_meters;
+    }
+    config.geofences.clear();
+    fixture.manifest = Manifest::new(config).unwrap();
     let api = RuntimeApi::start(&fixture, &cluster.bootstrap_servers());
     let empty = api.wait_state("owner-a", "vehicle-a", "empty");
     assert_eq!(empty["sessions"], serde_json::json!([]));
@@ -978,7 +994,35 @@ fn owning_process_serves_committed_scopes_and_refuses_leakage_over_http() {
             ))
             .1
         );
-        let text = result.to_string();
+        assert_eq!(result["pricing"]["rate_models"][0]["plan"], "PGE-EV2-A");
+        let price = &result["sessions"][0]["pricing"];
+        if vehicle == "vehicle-a" {
+            assert_eq!(price["state"], "quoted");
+            assert!(price["hold_reason"].is_null());
+            assert_eq!(price["quote"]["exact_cost"], "0.1127900000000000 USD");
+            assert_eq!(price["quote"]["display_cost"], "$0.11");
+            assert_eq!(
+                result["pricing"]["exact_subtotal"],
+                "0.1127900000000000 USD"
+            );
+            assert_eq!(result["pricing"]["display_subtotal"], "$0.11");
+            let slices = price["quote"]["slices"].as_array().unwrap();
+            assert_eq!(slices.len(), 2);
+            for slice in slices {
+                assert_eq!(slice["model_version"], "pge-ev2-a-2026-03-v1");
+                assert_eq!(slice["season"], "Summer");
+                assert_eq!(slice["period"], "off_peak");
+                assert_eq!(slice["usd_per_kwh"], "0.2255800000 USD/kWh");
+                assert_eq!(slice["utc_offset_seconds"], "-25200");
+            }
+        } else {
+            assert_eq!(price["state"], "ineligible");
+            assert_eq!(price["hold_reason"], "IneligibleSession");
+            assert!(price["quote"].is_null());
+            assert!(result["pricing"]["exact_subtotal"].is_null());
+            assert!(result["pricing"]["display_subtotal"].is_null());
+        }
+        let text = result.to_string().replace("\"utc_offset_seconds\"", "");
         for forbidden in [
             "BatteryLevel",
             "vin",
@@ -986,8 +1030,6 @@ fn owning_process_serves_committed_scopes_and_refuses_leakage_over_http() {
             "device-",
             "offset",
             "createdAt",
-            "price",
-            "owed",
             "kafka:9092",
             "sqlite3",
             "latitude",
@@ -995,7 +1037,7 @@ fn owning_process_serves_committed_scopes_and_refuses_leakage_over_http() {
             "12.3456789",
             "45.6789123",
         ] {
-            assert!(!text.contains(forbidden));
+            assert!(!text.contains(forbidden), "response leaked {forbidden}");
         }
     }
     for path in [
