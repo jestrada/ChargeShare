@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
     inputs:
       prove_failure:
@@ -17,15 +18,63 @@ on:
         default: none
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Metadata-only events (body edits, label changes) get their own group so they never cancel the heavy run.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ contains(fromJSON('["edited","labeled","unlabeled"]'), github.event.action) && 'meta' || 'full' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
+  evidence-check:
+    name: Linked issue evidence
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - name: Require an image comment on linked issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          labels=$(gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name')
+          if grep -qx 'no-evidence' <<<"$labels"; then
+            echo "::notice::PR has the no-evidence label; skipping evidence check."
+            exit 0
+          fi
+          body=$(gh api "repos/$REPO/pulls/$PR" --jq '.body // ""')
+          issues=$(grep -oiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]+#[0-9]+' <<<"$body" | grep -oE '[0-9]+$' | sort -un || true)
+          if [ -z "$issues" ]; then
+            echo "No linked issues; nothing to check."
+            exit 0
+          fi
+          pr_created=$(gh api "repos/$REPO/pulls/$PR" --jq '.created_at')
+          first_commit=$(gh api "repos/$REPO/pulls/$PR/commits?per_page=1" --jq '.[0].commit.committer.date // .[0].commit.author.date')
+          since=$(printf '%s\n%s\n' "$(date -u -d "$pr_created" +%FT%TZ)" "$(date -u -d "$first_commit" +%FT%TZ)" | sort | head -1)
+          echo "Evidence must be posted after $since"
+          fail=0
+          for n in $issues; do
+            count=$(gh api --paginate "repos/$REPO/issues/$n/comments" \
+              --jq "[.[] | select(.created_at > \"$since\") | select(.body | test(\"!\\\\[[^\\\\]]*\\\\]\\\\([^)]+\\\\)|<img\"; \"i\"))] | length" | awk '{s+=$1} END {print s+0}')
+            if [ "$count" -gt 0 ]; then
+              echo "Issue #$n has evidence."
+            else
+              echo "::error::Issue #$n has no comment with an image posted after $since. Add a screenshot comment or apply the no-evidence label."
+              fail=1
+            fi
+          done
+          exit "$fail"
+
   ingestion-acceptance:
     name: Receiver to SQLite scoped replay
+    # Skip the heavy run for metadata-only PR events; code changes still run it.
+    if: github.event_name != 'pull_request' || !contains(fromJSON('["edited","labeled","unlabeled"]'), github.event.action)
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     steps:
