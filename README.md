@@ -11,9 +11,11 @@ Owner/vehicle scope checks are not authentication or approved cross-owner sharin
 physical measurement accuracy is unvalidated. The additive offline pricing milestone
 quotes eligible counter intervals using exact versioned rates, with explicit
 holds and exact priced subtotals. Real utility calendars, bills, monthly statements,
-live collection, receiver-backed ledger integration and deployment remain future work.
-An outer ingestion crate now retains fictional receiver-shaped evidence and scoped
-replay in local SQLite; receiver-backed ingestion acceptance is still pending.
+live collection and deployment remain future work.
+An outer ingestion crate retains fictional receiver-shaped evidence and scoped
+replay in local SQLite. Issue #21 adds one owning ingestion/result process and
+an independent persisted browser mode; actual receiver-backed viewing acceptance
+and browser evidence remain unverified in this sandbox.
 A localhost React/shadcn dashboard presents fictional battery readings and real
 core-calculated sample costs through a loopback Rust API. Its committed dated table
 contains a September public tariff sample and a separately labeled winter estimate.
@@ -32,7 +34,8 @@ The guides in `docs/` are:
 - [Local preview](docs/local-preview.md): launch, interactions and demo limits
 - [Local development](docs/local-development.md): pinned Nix/Tilt synthetic receiver-to-Kafka harness and isolated lifecycle
 - [POC plan](docs/plan.md): three local integration stages, then Cloudflare architecture and Terraform deployment
-- [Durable synthetic ingestion](docs/durable-ingestion.md): normalization, local SQLite recovery, owned source epochs, bounded reread and the shared acceptance command; actual receiver-backed verification remains pending
+- [Durable synthetic ingestion](docs/durable-ingestion.md): normalization, local SQLite recovery, owned source epochs, bounded reread and the shared acceptance command; #27 predecessor evidence and #21 viewing verification limits
+- [Persisted viewing](docs/persisted-viewing.md): scoped 5174/8788 API/dashboard, bounded lifecycle and exact supervisor acceptance/empty/unavailable checklist
 - [Issue tracking](docs/agents/issue-tracker.md): Wayfinder decisions and implementation work through GitHub Issues
 
 Current planning and implementation tracking use GitHub Issues through `gh`.
@@ -56,7 +59,8 @@ Ubuntu 24.04 x86_64 and [archived](openspec/changes/archive/2026-10-10-local-nix
 on 2026-10-10. Its canonical contracts are [local development](openspec/specs/local-development/spec.md)
 and [synthetic telemetry verification](openspec/specs/synthetic-telemetry-harness/spec.md).
 [Testing](docs/testing.md) records transport, retention, reset, cleanup and warm
-cache evidence. Receiver traffic remains separate from the ledger and dashboard.
+cache evidence. The #21 persisted mode connects committed ingestion to a separate
+scoped view; the fixture dashboard remains independent.
 
 ## Develop
 
@@ -74,6 +78,21 @@ npm run preview:dev
 
 Visit **http://127.0.0.1:5173**. Stop both preview processes with Ctrl-C.
 See [local preview](docs/local-preview.md) for prerequisites and boundaries.
+
+On supported Linux x86_64 with permitted Docker and Nix, start persisted viewing:
+
+```sh
+nix develop --no-update-lock-file -c bash scripts/dev/poc.sh up
+nix develop --no-update-lock-file -c bash scripts/dev/poc.sh check
+```
+
+Open **http://127.0.0.1:5174/?owner=owner-a&vehicle=vehicle-a** or the B scope
+`/?owner=owner-b&vehicle=vehicle-b`. Startup sends no fixtures; the finite check
+requires fresh receiver output, committed SQLite and actual scoped HTTP.
+[The reviewer checklist](docs/persisted-viewing.md#supervisor-acceptance) covers
+acceptance, restart/down/reset, empty/unavailable states and required manual
+screenshots. Fixture 5173/8787 remains independent. Persisted viewing displays
+observed AC, Unconfirmed and held eligibility, with no cost or battery fields.
 
 Prerequisites: Rust 1.99.0 through rustup with rustfmt/Clippy, a C linker, Node.js
 24 or newer, npm, Git, Bash, make, curl, tar and SHA-256 tooling. The toolchain is pinned

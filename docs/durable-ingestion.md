@@ -3,11 +3,33 @@
 Stage-2 ingestion merged in [PR #6](https://github.com/jestrada/ChargeShare/pull/6).
 [Issue #27](https://github.com/jestrada/ChargeShare/issues/27) adds the owned source
 epoch, bounded committed-offset reread and a shared receiver-backed acceptance
-command. These mechanisms are implemented with focused tests. Actual
-receiver → Kafka → ingestion → SQLite → scoped replay acceptance remains
-unverified in this sandbox. Its Docker socket is inaccessible. The dedicated
-hosted gate is staged in `ci-27-tmp/`, awaiting maintainer activation and runs.
+command. Issue #27 is closed and records local acceptance on PR #28 `40d97de`
+and hosted acceptance on `1d0d118`. This is inherited issue evidence, not a new
+run. The extended #21 receiver-backed viewing acceptance remains unverified in
+this sandbox; its Docker socket is inaccessible. #21's frontend tests and builds
+are added to the existing ingestion acceptance workflow, staged at
+`ci-21-tmp/ingestion-acceptance.yml` until Joseph swaps it in.
 The existing fixture dashboard stays independent. OpenSpec is paused.
+
+## Owning persisted runtime
+
+Issue #21 adds `chargeshare-ingestion serve` around the unchanged SQLite v1
+schema and core replay. One process keeps one Store for ingestion and scoped
+HTTP requests; it never competes with the bounded CLI or reopens per request.
+The single owner serves reads between transactions, replaying once per response
+so summary and sessions describe one committed snapshot. Old schema-v1 stores
+remain compatible; future/unsupported schema versions still refuse rather than
+silently migrate. Source, mapping, evidence, lock and durability contracts remain.
+
+Results at host `127.0.0.1:8788/api/poc/owners/{owner}/vehicles/{vehicle}/results`
+separate observed AC from eligible energy, validate compound session identity,
+and expose only safe provenance and deterministic semantic revisions. Broker,
+source or storage failure latches unavailable until resolved and restarted.
+No raw records, device aliases, costs or battery state are served. The independent
+persisted dashboard runs 5174 → 8788; fixture preview remains 5173 → 8787.
+See [the complete runtime/API contract](persisted-viewing.md#runtime-and-response-contract),
+[architecture/data flow](architecture.md#architecture-at-a-glance) and
+[exact lifecycle, acceptance and empty/unavailable commands](persisted-viewing.md#supervisor-acceptance).
 
 ## Input and lifecycle contract
 
@@ -98,6 +120,13 @@ frozen manifest, restarts Tilt,
 deletes only this disposable broker's retained records to verify a real gap
 against a private progress-3 snapshot, checks that expired reread refuses, and
 performs an explicit stopped reset followed by new-epoch initialization.
+The additive viewing phase starts the sole long-lived runtime against that empty
+epoch, verifies empty HTTP, sends another fresh complete receiver run, and asserts
+both actual HTTP scopes (0.500000/0.250000 kWh, Unconfirmed, zero eligible energy),
+no leakage, mismatch refusal and stable revisions. Concurrent HTTP reads during
+actual duplicate/out-of-order receiver traffic and owner restart preserve the
+same projection. It verifies committed progress and the separate 5174 entry;
+manual browser screenshots/network comparison remain required.
 
 Changed epochs and missing markers must return `source: broker runtime identity
 mismatch`; a valid manifest with a changed version must return `storage: frozen
@@ -167,13 +196,13 @@ Run `bash scripts/testing/ingestion-suite.sh` for the complete workspace and a
 guarded, allowlisted focused summary. `python3 scripts/testing/test_ingestion_guard.py`
 proves missing/reduced/failed/ignored/filtered suites fail and Cargo failure
 status is preserved. Python runtime/acceptance tests cover epoch and ownership,
-assertions, setup/timeout failures, exact refusal reasons and cleanup. The staged
-dedicated gate uses these checks plus the shared actual acceptance command.
+assertions, setup/timeout failures, exact refusal reasons and cleanup. The existing
+ingestion gate uses these checks plus the shared actual acceptance command.
 
 ## Remaining verification
 
 - Run the actual pinned receiver → Kafka → ingestion → SQLite → scoped replay command on permitted Linux x86_64/Docker and commit a reviewed decoded golden fixture
-- Activate and prove the staged dedicated CI gate, including hosted setup/assertion/timeout failure and separate restored passing runs
+- Swap in the staged ingestion workflow and verify a hosted pass; local setup/assertion/timeout proofs and a restored local pass remain required
 - Record exact published commit and terminal hosted checks; current local commits are unpublished
 - Review and record acceptance evidence in the owning issue and PR before marking the work complete
 

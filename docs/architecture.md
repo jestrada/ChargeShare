@@ -1,23 +1,21 @@
 # Architecture and domain contract
 
 ChargeShare implements a pure synthetic Rust ledger/pricing core, an independent
-localhost fixture preview, and the approved [stage-2 ingestion crate](durable-ingestion.md).
-Ingestion retains curated fictional evidence and recovery progress in local SQLite
-and rebuilds scoped, unconfirmed sessions. Its candidate/direct/mocked tests pass;
-the actual receiver-to-Kafka-to-SQLite acceptance remains unverified. Issue #27
-implements volume-bound source epochs, bounded reread and disposable in-network
-acceptance consumers; its hosted gate is staged awaiting maintainer activation.
-No live Tesla account,
-production authentication or deployment is connected. Domain owner/vehicle checks
-are not authentication or permission for cross-owner sharing.
+localhost fixture preview, durable synthetic ingestion and the scoped persisted
+view in issue [#21](https://github.com/jestrada/ChargeShare/issues/21). One long-lived
+Rust process owns Kafka ingestion, one SQLite Store and scoped committed HTTP
+results. The separate React/shadcn mode serves 5174 → 8788; fixtures remain
+5173 → 8787. Local process/HTTP tests support the implementation. Actual #21
+receiver-backed acceptance, hosted viewing gate and desktop/mobile screenshots
+remain unverified in this sandbox. See [the exact viewing contract and commands](persisted-viewing.md).
 
-The separate [stage-1 harness](local-development.md) now verifies synthetic
-authenticated traffic through the official receiver into Kafka on Linux x86_64.
-Its [acceptance evidence](testing.md#complete-linux-acceptance-and-warm-caches)
-covers transport, retained replay, stop/start, reset and cleanup. That traffic
-does not automatically enter the ledger, database or dashboard on Tilt startup.
-The separate explicit acceptance command is implemented to consume it into
-SQLite and scoped replay, with actual execution still pending.
+The inherited [stage-1 harness](local-development.md) has verified Linux synthetic
+receiver/Kafka transport. Closed issue #27 records predecessor ingestion acceptance
+on `40d97de` locally and `1d0d118` hosted; this inherited evidence is not a #21
+rerun. Its complete ingestion/recovery/refusal chain is retained in the extended shared acceptance command; its historical proof
+limits are in [testing](testing.md). No live Tesla account, authentication,
+vehicle controls, persisted charger review, persisted pricing or deployment is
+connected. Scope checks are not authentication or approved cross-owner sharing.
 
 The canonical [ledger](../openspec/specs/vehicle-ledger/spec.md),
 [pricing](../openspec/specs/session-pricing/spec.md) and
@@ -25,48 +23,50 @@ The canonical [ledger](../openspec/specs/vehicle-ledger/spec.md),
 The historical [ingestion design](../openspec/changes/durable-synthetic-ingestion/design.md)
 and [tasks](../openspec/changes/durable-synthetic-ingestion/tasks.md) retain their
 original status. Current acceptance is owned by
-[issue #27](https://github.com/jestrada/ChargeShare/issues/27). The roadmap is in
+[issues #27](https://github.com/jestrada/ChargeShare/issues/27) and
+[#21](https://github.com/jestrada/ChargeShare/issues/21). The roadmap is in
 [the POC plan](plan.md).
 
 ## Architecture at a glance
 
-Solid arrows show implemented flows exercised by synthetic fixtures, local mock
-Kafka or the verified stage-1 receiver/Kafka harness. Dashed arrows show
-implemented actual ingestion awaiting receiver-backed verification, or explicitly
-deferred stage-3 flows. The disposable consumer is started only by acceptance.
-The fixture preview and retained-ingestion view use separate in-memory ledgers.
+Arrows show runtime evidence/result flow. Solid arrows are implemented boundaries
+exercised locally or inherited verified transport. Dashed receiver → owner marks
+the implemented full receiver-backed viewing path awaiting external acceptance;
+dashed review/pricing nodes remain future work. Only one of the acceptance CLI
+and long-lived owner may hold SQLite at a time.
 
 ```mermaid
 flowchart TB
-    subgraph ingestion_path["Implemented candidate / mocked ingestion - ChargeShare"]
-        candidate["Fictional decoded records"] --> ingest["Rust ingestion<br/>mapping + normalization"]
-        mock["Local mocked Kafka"] --> ingest
-        manifest["Frozen synthetic manifest"] --> ingest
-        ingest --> sqlite[("SQLite<br/>evidence + dispositions + progress")]
-        sqlite --> replay["Scoped core replay<br/>all retained variants"]
-        replay --> cli["CLI sessions<br/>Unconfirmed; zero eligible energy"]
+    client["Synthetic client"] --> receiver["Official pinned receiver"]
+    receiver --> kafka["Kafka: private network; no host port"]
+    kafka -. "full viewing acceptance unverified here" .-> owner
+    subgraph owner["One Rust owning process: chargeshare-ingestion serve"]
+        normalize["Frozen mapping + normalization"] --> sqlite[("SQLite v1: evidence + dispositions + progress")]
+        sqlite --> replay["One committed scoped core replay"]
+        replay --> results["Scoped observed AC + quality + Unconfirmed holds"]
+        results --> api["GET owner / vehicle results: host 127.0.0.1:8788"]
     end
-    subgraph preview_path["Implemented fixture preview - independent of ingestion"]
-        demo["Preview fixtures + sample rates"] --> pricing["Rust core/pricing<br/>exact quotes or holds"]
-        pricing --> api["Loopback Rust demo API"]
-        api --> ui["Local React/shadcn dashboard"]
+    api --> persisted["Dedicated persisted entry: 127.0.0.1:5174"]
+    lifecycle["poc up / check / restart / down / explicit reset"] --> owner
+    lifecycle --> receiver
+    lifecycle --> kafka
+    cli["Preserved bounded acceptance CLI: owner stopped"] --> sqlite
+    subgraph fixture["Independent fixture preview"]
+        demo["Fixtures + sample rates"] --> pricing["Rust exact offline pricing"]
+        pricing --> fixture_api["127.0.0.1:8787 api/demo"]
+        fixture_api --> fixture_ui["127.0.0.1:5173 fixture entry"]
     end
-    subgraph verified_transport["Verified synthetic transport - stage 1"]
-        client["Fictional upstream test client"] --> receiver["Tesla upstream Go receiver"]
-        receiver --> kafka["Apache Kafka<br/>private Compose network"]
-    end
-    lifecycle["Owned runtime<br/>private epoch + immutable volume label"] --> runner["Ephemeral Rust consumer<br/>private network; acceptance only"]
-    kafka -.-> runner
-    sqlite -- "durable next position" --> runner
-    runner -.-> ingest
-    sqlite -.-> results["Stage 3: persisted results + pricing<br/>scoped API/dashboard reads"]
+    sqlite -.-> review["Future #22 deliberate persisted review"]
+    review -.-> persisted_pricing["Future #23 immutable rates + exact pricing"]
 ```
 
-Tesla owns the external receiver software, Apache owns Kafka and SQLite is an
-upstream embedded database. ChargeShare owns their local configuration, the Rust
-adapter/schema/transactions and domain rules. SQLite is a file, not a separate
-server. Existing CLI replay does not populate the fixture dashboard; persisted
-results and reviews remain a separately reviewed stage-3 change.
+SQLite is embedded in the sole owner; requests never reopen it. Rust dependencies
+point inward from ingestion to the pure core. The owner container binds its API
+internally and publishes only IPv4 host loopback; Kafka stays private. The two
+frontend modes share design components but no fixture data or fallback. Empty,
+complete zero evidence, incomplete/held, refused and unavailable remain distinct.
+[The response contract](persisted-viewing.md#runtime-and-response-contract) defines
+bounded errors, deterministic semantic revisions and sanitized provenance.
 
 ## Durable ingestion and recovery boundary
 
@@ -81,6 +81,7 @@ receiver-shaped payloads outside the dependency-free core:
   or fixed rejection reasons, provenance and progress in one WAL/FULL transaction
 - `replay`: all scoped retained variants enter the unchanged core; conflict holds,
   exact energy and Unconfirmed classification are preserved
+- `results`/`viewing`: committed scoped projection, bounded HTTP requests, safe refusal/unavailability and deterministic semantic revisions
 - `main`/CLI `acceptance`: bounded consume/reread, scoped replay, allowlisted
   acceptance status, decoded-capture verification and explicit commit probes
 
@@ -90,8 +91,9 @@ immutable and the marker starts partition 0 at offset 0; reset removes the pair
 only after stopped ownership checks, and next initialization creates a new pair.
 `scripts/dev/ingestion_runner.py` validates the private network and launches a
 current-user disposable consumer. `scripts/dev/acceptance.py` owns bounded Tilt
-orchestration, synthetic transport, recovery assertions and owned teardown. No
-persistent service, API, dashboard mode or core infrastructure dependency is added.
+orchestration, synthetic transport, recovery assertions, actual HTTP viewing and
+owned teardown. `viewing.py` launches the sole runtime; `poc.py` provides bounded
+all-service lifecycle. No core infrastructure dependency is added.
 See [the implemented command and proof limits](durable-ingestion.md#shared-end-to-end-acceptance).
 
 SQLite is the sole recovery-position authority. A known rollback changes neither
@@ -101,7 +103,7 @@ raw JSON, rejected text, names or locations are stored. Private ignored runtime
 files and the [documented filesystem/deadline limits](durable-ingestion.md) bound
 these guarantees; they do not establish backup or cloud durability.
 
-## Pending all-services integration
+## Receiver-backed verification and deferred extensions
 
 [PR #5](https://github.com/jestrada/ChargeShare/pull/5) publishes the verified stage-1
 harness at `33a4568`. Its Linux receiver/Kafka acceptance passes after an observed
@@ -109,15 +111,17 @@ deliberate assertion failure and cleanup; deliberate-failure mode is removed.
 [The recorded evidence](testing.md#complete-linux-acceptance-and-warm-caches)
 covers transport, retained replay, stop/start, reset and cleanup.
 
-Stage-2 source epochs and an in-network ingestion runner are implemented. The
-reviewed Kafka endpoint remains `kafka:9092` inside its private Compose network,
-with no host listener. Actual receiver → Kafka → SQLite → scoped replay
-verification, a reviewed actual decoded golden fixture and dedicated hosted
-failure/restored passing runs remain pending. The staged workflow is inactive;
-local candidate/mocked checks cannot fulfill those gates.
-[Stage 3](plan.md#stage-3-persisted-charging-results) adds the all-services
-startup/readiness and persisted priced API/dashboard path; it does not make these
-parent or ingestion gates complete by moving them to another PR.
+Stage-2 source epochs, the bounded in-network runner and #21 all-service viewing
+are implemented. The Kafka endpoint remains private `kafka:9092`. The extended
+acceptance retains #27 recovery/refusal checks and adds fresh receiver → sole
+owner → committed SQLite → scoped HTTP → dedicated browser entry. This sandbox
+cannot run Docker/Nix orchestration; focused tests do not fulfill that gate.
+#21's frontend tests and builds are added to the existing ingestion acceptance
+workflow, staged at [ci-21-tmp/ingestion-acceptance.yml](../ci-21-tmp/ingestion-acceptance.yml)
+until Joseph swaps it in.
+Manual screenshots and actual network-response comparison remain required.
+Persisted review and exact persisted pricing belong to #22/#23; neither is
+implemented by viewing. No historical planning task is marked complete.
 
 Live vehicle transport, ingress allowlisting before sinks/logs/persistence,
 production authentication and cross-owner sharing need separately approved

@@ -18,8 +18,8 @@ from pathlib import Path
 
 
 COMMAND_TIMEOUT_SECONDS = 15
-REQUIRED_HOST_PORTS = (8787, 5173, 8443, 10350)
-TILT_HOST_PORTS = (8787, 5173, 10350)
+REQUIRED_HOST_PORTS = (8787, 5173, 8443, 10350, 8788, 5174)
+TILT_HOST_PORTS = (8787, 5173, 10350, 5174)
 TILT_SHUTDOWN_TIMEOUT_SECONDS = 30
 TILT_EXEC_TIMEOUT_SECONDS = 3
 SYNTHETIC_LABEL = "dev.chargeshare.synthetic-only"
@@ -407,6 +407,22 @@ def project_containers(runtime, command_runner):
     return containers
 
 
+def persisted_containers(runtime, command_runner):
+    identifiers = command_runner(["docker", "ps", "--all", "--filter", "label=dev.chargeshare.persisted-project=" + runtime.project_name, "--format", "{{.ID}}"], runtime.environment()).split()
+    if not identifiers:
+        return []
+    from ingestion_runner import owned_runner
+    try:
+        containers = json.loads(command_runner(["docker", "inspect", *identifiers], runtime.environment()))
+        owned_runner(containers, runtime.project_name + "-persisted-runtime", runtime.project_name)
+        state = containers[0].get("State", {})
+        if state.get("Running") is not False or state.get("Restarting") or state.get("Paused"):
+            raise RuntimeFailure("Refusing reset while the owning persisted runtime is active.")
+        return containers
+    except (ValueError, KeyError, TypeError, IndexError):
+        raise RuntimeFailure("Cannot establish stopped persisted runtime ownership.") from None
+
+
 def project_broker_volume(runtime, command_runner):
     names = command_runner(["docker", "volume", "ls", "--filter", "label=com.docker.compose.project=" + runtime.project_name, "--format", "{{.Name}}"], runtime.environment()).split()
     if any(name != runtime.broker_volume for name in names):
@@ -461,7 +477,7 @@ def reset_stopped_runtime(runtime, confirmed, command_runner, port_checker):
     refuse_active_tracked_tilt(runtime)
     refuse_active_harness(runtime)
     check_local_docker(runtime, command_runner)
-    containers = project_containers(runtime, command_runner)
+    containers = project_containers(runtime, command_runner) + persisted_containers(runtime, command_runner)
     volume = project_broker_volume(runtime, command_runner)
     scope = {
         "project_name": runtime.project_name,
@@ -475,12 +491,13 @@ def reset_stopped_runtime(runtime, confirmed, command_runner, port_checker):
         raise RuntimeFailure("No data was deleted. To remove exactly this stopped synthetic state, repeat with --confirm-synthetic-reset.")
     port_checker()
     project_containers(runtime, command_runner)
+    persisted_containers(runtime, command_runner)
     if containers:
         command_runner(["docker", "rm", *scope["stopped_containers"]], runtime.environment())
     if volume:
         command_runner(["docker", "volume", "rm", volume], runtime.environment())
     port_checker()
-    if project_containers(runtime, command_runner):
+    if project_containers(runtime, command_runner) or persisted_containers(runtime, command_runner):
         raise RuntimeFailure("Project containers appeared during reset; runtime files were preserved. Stop the environment before retrying.")
     validate_runtime_directory(runtime)
     refuse_active_tracked_tilt(runtime)

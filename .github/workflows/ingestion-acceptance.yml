@@ -2,6 +2,7 @@ name: Durable synthetic ingestion acceptance
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -14,6 +15,10 @@ on:
           - assertion
           - timeout
         default: none
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -52,6 +57,10 @@ jobs:
           nix develop --no-update-lock-file -c bash scripts/testing/ingestion-suite.sh
           nix develop --no-update-lock-file -c python3 scripts/testing/test_ingestion_guard.py
           nix develop --no-update-lock-file -c python3 -m unittest discover -s scripts/dev -p 'test_*.py'
+          nix develop --no-update-lock-file -c npm --cache .cache/npm --prefix apps/web ci
+          nix develop --no-update-lock-file -c npm --prefix apps/web test
+          nix develop --no-update-lock-file -c npm run preview:build
+          nix develop --no-update-lock-file -c npm --prefix apps/web run build:persisted
           sha256sum flake.lock > .cache/ingestion-acceptance/lock-after.txt
           cmp .cache/ingestion-acceptance/lock-before.txt .cache/ingestion-acceptance/lock-after.txt
       - name: Cache only tools before generating test credentials

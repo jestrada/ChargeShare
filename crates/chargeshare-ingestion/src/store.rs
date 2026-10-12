@@ -56,6 +56,7 @@ pub struct Store {
     _owning_lock: OwningLock,
     _runtime_directory: File,
     _database_guard: File,
+    database_path: PathBuf,
 }
 
 impl Store {
@@ -125,9 +126,27 @@ impl Store {
             _owning_lock: owning_lock,
             _runtime_directory: runtime.directory,
             _database_guard: database_guard,
+            database_path: runtime.absolute_path,
         };
         verify_retained_evidence(&store.connection, &store.manifest)?;
         Ok(store)
+    }
+
+    pub(crate) fn source_epoch(&self) -> &str {
+        &self.source.epoch
+    }
+
+    pub(crate) fn validate_live_storage(&self) -> Result<(), IngestionError> {
+        let runtime = RuntimePath::open(&self.database_path)?;
+        runtime.validate_files()?;
+        runtime.verify_file_binding(&runtime.database_name, &self._database_guard)?;
+        let expected =
+            fstat(&self._runtime_directory).map_err(|_| IngestionError::StorageUnavailable)?;
+        let actual = fstat(&runtime.directory).map_err(|_| IngestionError::StorageUnavailable)?;
+        if expected.st_dev != actual.st_dev || expected.st_ino != actual.st_ino {
+            return Err(IngestionError::StorageUnavailable);
+        }
+        Ok(())
     }
 
     pub fn ingest(

@@ -5,6 +5,25 @@ costs. It does not connect vehicles or calculate a household bill. Its Rust API
 constructs synthetic events and calls the same core used by the acceptance tests.
 The browser renders returned money strings without recalculating prices.
 
+## Separate persisted mode
+
+Issue #21 adds a dedicated mode in the same `apps/web` package at 5174 → 8788.
+It uses a separate entry/bundle and reads only explicit owner/vehicle persisted
+results. The fixture experience described below remains 5173 → 8787. Persisted
+mode contains no fixture battery, vehicle state, calendar, rates, costs or owed
+amount; failed reads never load fixtures. Empty, complete zero evidence,
+incomplete/held, refused and unavailable have distinct presentations.
+
+Launch with `nix develop --no-update-lock-file -c bash scripts/dev/poc.sh up`;
+then run `poc.sh check` in the pinned shell for fresh receiver-backed evidence.
+[The persisted guide](persisted-viewing.md) gives exact URLs, empty/unavailable
+reproduction, expected network responses and keyboard/tap screenshot acceptance
+at 1280×1000 and 375×812. This sandbox has not verified those manual screenshots.
+Frontend checks now include `npm --prefix apps/web test` and
+`npm --prefix apps/web run build:persisted`, alongside the unchanged fixture build.
+`npm --prefix apps/web run dev:persisted` starts only the independent 5174 server
+when API-unavailable inspection is wanted; it needs installed dependencies.
+
 ## Run
 
 Use the Rust and Node prerequisites in the [README](../README.md#develop), then:

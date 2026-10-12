@@ -8,7 +8,7 @@ from pathlib import Path
 from runtime import ProjectRuntime, RuntimeFailure, SYNTHETIC_LABEL, run_command
 
 
-RESOURCES = ("kafka", "broker-ready", "receiver", "rust-build", "frontend-install", "fixture-api", "fixture-dashboard", "receiver-ready")
+RESOURCES = ("kafka", "broker-ready", "receiver", "rust-build", "frontend-install", "fixture-api", "fixture-dashboard", "receiver-ready", "persisted-runtime", "persisted-dashboard")
 STATES = {"none", "pending", "in_progress", "ok", "error", "not_applicable"}
 HEALTH_STATES = {"starting", "healthy", "unhealthy"}
 FAILURE_CATEGORIES = {

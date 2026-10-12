@@ -6,9 +6,10 @@ deployment, credentials, spending or vehicle access.
 
 Offline ledger/pricing, fixture preview and stage 1's synthetic receiver/Kafka
 harness are implemented and verified. Stage 2 has independently tested candidate
-normalization, SQLite recovery and mocked Kafka replay; its actual receiver-backed
-ingestion acceptance remains pending. Persisted results and Cloudflare need
-separate changes. See [architecture](architecture.md), [pricing](pricing.md) and
+normalization, SQLite recovery and mocked Kafka replay. Closed issue #27 records
+predecessor receiver-backed acceptance on `40d97de` locally and `1d0d118` hosted.
+Issue #21 implements scoped persisted viewing with focused HTTP/process tests;
+its full receiver-backed viewing, hosted and browser acceptance remain unverified. Persisted reviews/pricing and Cloudflare need separate changes. See [architecture](architecture.md), [pricing](pricing.md) and
 [local preview](local-preview.md) for existing behavior.
 
 Current planning follows the [Wayfinder map](https://github.com/jestrada/ChargeShare/issues/9).
@@ -24,7 +25,7 @@ flowchart LR
     baseline["Implemented baseline<br/>Offline core + fixture preview"]
     harness["1 Verified receiver harness<br/>Nix + Tilt + Kafka"]
     ingestion["2 Partially applied ingestion<br/>Rust adapter + SQLite"]
-    results["3 Future persisted results<br/>Core + API + dashboard"]
+    results["3 Implemented scoped viewing<br/>Full acceptance unverified; review/pricing future"]
     cloudflare["4 Future Cloudflare POC<br/>Architecture + Terraform"]
     baseline --> harness --> ingestion --> results --> cloudflare
 ```
@@ -72,12 +73,13 @@ outside stage 1.
 
 ## Stage 2 Durable Rust ingestion
 
-**Status:** Approved and partially applied in [draft PR #6](https://github.com/jestrada/ChargeShare/pull/6),
-targeting `main` after [PR #5](https://github.com/jestrada/ChargeShare/pull/5) merged.
+**Status:** Implemented and merged in [PR #6](https://github.com/jestrada/ChargeShare/pull/6),
+with the #27 follow-up merged in [PR #28](https://github.com/jestrada/ChargeShare/pull/28).
+The current #21 checkout starts at merged main `ceb74b1`.
 The retained [durable ingestion proposal](../openspec/changes/durable-synthetic-ingestion/proposal.md), [design](../openspec/changes/durable-synthetic-ingestion/design.md),
 [detailed contract](../openspec/changes/durable-synthetic-ingestion/specs/durable-telemetry-ingestion/spec.md)
 and [tasks](../openspec/changes/durable-synthetic-ingestion/tasks.md) preserve the original approved scope and recorded status.
-The [ingestion acceptance issue](https://github.com/jestrada/ChargeShare/issues/12)
+The [ingestion acceptance issue](https://github.com/jestrada/ChargeShare/issues/27)
 owns the current checklist and evidence. Candidate normalization,
 atomic SQLite evidence/progress and scoped replay have focused tests; see the
 [implementation guide](durable-ingestion.md). Stage 1's published head `33a4568`
@@ -109,16 +111,28 @@ their own reviewed contracts before any live input.
 
 ## Stage 3 Persisted charging results
 
-After durable ingestion, propose persisted API/dashboard reads using existing
-core session, eligibility and pricing rules. Retain synthetic labels, review boundaries, visible holds, versioned rates and calculation
-provenance; money arithmetic stays in Rust.
+Issue [#21](https://github.com/jestrada/ChargeShare/issues/21) implements the viewing
+slice: one Rust ingestion/SQLite/HTTP owner and a dedicated persisted frontend
+mode at 5174/8788. Reuse core session/summary policy, expose observed AC,
+Unconfirmed and conservative eligibility holds, and keep fixture mode independent.
+[The contract and exact acceptance checklist](persisted-viewing.md) describe
+implementation, proof limits and reviewer commands. Actual full-path acceptance,
+clean hosted gate and desktop/mobile screenshots remain unverified here.
 
-**Acceptance:** Expected per-vehicle sessions/results across the complete path;
-stable replay/restart without double counting. Missing readings/rates and conflicts
-show held/incomplete results, never invented zeroes. Reject out-of-scope reads and
-reviews. Test persistence/API results rather than treating Kafka success as whole-app
-proof. Real utility calendars, bills, payments, production authentication and cross-owner sharing stay
-outside this local POC; scope checks alone are not authentication.
+Deliberate persisted charger review belongs to
+[#22](https://github.com/jestrada/ChargeShare/issues/22); immutable sample rates and
+exact persisted pricing belong to [#23](https://github.com/jestrada/ChargeShare/issues/23).
+Neither is implemented in viewing. Money arithmetic remains in Rust.
+
+**Acceptance:** Fresh receiver → Kafka → sole owner → committed SQLite → scoped
+HTTP and browser evidence, including replay/restart/crash and concurrent reads.
+Missing/conflicting evidence stays held; complete zero evidence is distinct from
+empty/unavailable. Mismatched scope refuses safely. The shared command keeps all
+#27 phases and adds actual HTTP viewing. Local setup/assertion/timeout proofs
+followed by a restored local pass satisfy Joseph's failure-proof decision; no
+hosted deliberately failing run is required. Clean hosted viewing and manual
+network-response/screenshot comparison still apply. Real utility calendars,
+bills, payments, authentication and cross-owner sharing stay outside this slice.
 
 ## Stage 4 Cloudflare architecture and Terraform deployment
 

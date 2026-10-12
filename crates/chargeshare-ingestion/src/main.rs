@@ -32,6 +32,38 @@ fn main() {
 fn run() -> Result<(), IngestionError> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("serve") if args.len() == 4 => {
+            let runtime = owned_runtime(&args[1])?;
+            let (manifest, source) = runtime_contract(&runtime)?;
+            let address = args[3]
+                .parse::<std::net::SocketAddr>()
+                .map_err(|_| IngestionError::InvalidCommand)?;
+            let private_container = args[1] == "/run/.local-runtime"
+                && args[2] == "kafka:9092"
+                && address == "0.0.0.0:8788".parse().unwrap();
+            if !(address.ip() == std::net::Ipv4Addr::LOCALHOST && address.port() != 0)
+                && !private_container
+            {
+                return Err(IngestionError::InvalidCommand);
+            }
+            let config = KafkaConfig {
+                bootstrap_servers: args[2].clone(),
+                source_epoch_path: runtime.join("source-epoch.json"),
+                max_records: 1,
+                deadline: Duration::from_secs(2),
+            };
+            config.validate()?;
+            let store = Store::open(&runtime.join("ingestion.sqlite3"), &manifest, &source)?;
+            let listener = std::net::TcpListener::bind(address)
+                .map_err(|_| IngestionError::StorageUnavailable)?;
+            chargeshare_ingestion::serve_results(
+                listener,
+                store,
+                config,
+                source,
+                &AtomicBool::new(false),
+            )
+        }
         Some("consume") if args.len() == 5 => {
             let max_records = args[3]
                 .parse::<usize>()

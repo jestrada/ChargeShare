@@ -6,7 +6,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build"
+    "build": "tsc --noEmit && vite build",
+    "dev:persisted": "vite --mode persisted",
+    "build:persisted": "tsc --noEmit && vite build --mode persisted",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "1.8.0",
