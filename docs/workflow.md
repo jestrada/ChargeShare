@@ -30,9 +30,10 @@ agents. This page explains the steps each issue goes through.
    questions, each with a recommended answer. They are posted on the issue with
    the questions at the top.
 3. **Settle the spec.** Joseph answers the questions. The final spec goes into
-   the issue body. Every issue opens with a short `## For Joseph`
-   summary; the full spec sits in a collapsed details block (see
-   [AGENTS.md](../AGENTS.md#issue-and-comment-style)).
+   the issue body, which opens with a short `## For Joseph` summary; the full
+   spec sits in a collapsed details block (see
+   [AGENTS.md](../AGENTS.md#issue-and-comment-style)). Joseph then adds the
+   `spec-approved` label to the issue.
 4. **Build.** Sol (Codex `gpt-6.1-sol`, xhigh) builds the feature on Grok Bot's
    computer in its own git worktree and branch. Scope stays tight. Sol follows
    [code design](code-design.md) and updates only [architecture](architecture.md),
@@ -49,6 +50,8 @@ agents. This page explains the steps each issue goes through.
 7. **Open the PR.** The PR body says `Closes #N`. CI extends the existing
    workflows; features do not add new workflows. The evidence check fails if the
    linked issue has no screenshot comment. The `no-evidence` label skips it.
+   The spec check fails unless the PR links an issue and every linked issue is
+   `spec-approved` (the `no-spec` label skips it, for side tasks).
 8. **Merge.** Joseph reviews and merges. Bots never merge.
 
 ## Side tasks
