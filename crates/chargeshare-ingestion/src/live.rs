@@ -4,7 +4,6 @@ use chargeshare_core::{ChargerGeofence, LocationPoint};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
-use crate::manifest::parse_utc_seconds;
 use crate::schema::storage_error;
 use crate::{
     AcceptedEvidence, CommitOutcome, DeliveryCoordinate, EvidenceProvenance, IngestionError,
@@ -81,6 +80,8 @@ struct AdapterState {
     connection: Option<String>,
     next_position: u64,
     last_time: Option<i64>,
+    #[serde(default)]
+    last_nanoseconds: u32,
     ac_evidence: bool,
 }
 
@@ -244,7 +245,11 @@ fn adapt(
     signal: &Signal,
     is_resend: bool,
 ) -> Result<RecordDisposition, IngestionError> {
-    let late = state.last_time.is_some_and(|last| signal.time < last);
+    let timestamp = parse_utc_timestamp(&signal.created_at)
+        .map_err(|_| IngestionError::InvalidConfiguration)?;
+    let late = state
+        .last_time
+        .is_some_and(|last| timestamp < (last, state.last_nanoseconds));
     let prior = state.previous;
     let current = signal.state.or(prior);
     let starts = state.connection.is_none() && current == Some(ChargeState::Charging);
@@ -280,6 +285,7 @@ fn adapt(
     if !late {
         state.previous = current;
         state.last_time = Some(signal.time);
+        state.last_nanoseconds = timestamp.1;
     }
     let Some(connection) = state.connection.clone() else {
         return Ok(RecordDisposition::Rejected(
@@ -370,7 +376,7 @@ fn decode(
     {
         return Err(RejectionReason::IdentityMismatch);
     }
-    let time = parse_utc_seconds(&payload.created_at)?;
+    let (time, _) = parse_utc_timestamp(&payload.created_at)?;
     let mut signal = Signal {
         vehicle: mapping.vehicle.clone(),
         created_at: payload.created_at,
@@ -457,6 +463,33 @@ fn numeric_text(value: &serde_json::value::RawValue) -> Option<String> {
         "longValue" => value.as_str().map(str::to_owned),
         _ => None,
     }
+}
+
+pub(crate) fn parse_utc_timestamp(input: &str) -> Result<(i64, u32), RejectionReason> {
+    let utc = input
+        .strip_suffix('Z')
+        .or_else(|| input.strip_suffix("+00:00"))
+        .ok_or(RejectionReason::InvalidTimestamp)?;
+    let (seconds, nanoseconds) = match utc.split_once('.') {
+        Some((seconds, fraction)) => {
+            if fraction.is_empty()
+                || fraction.len() > 9
+                || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(RejectionReason::InvalidTimestamp);
+            }
+            let nanoseconds = fraction
+                .parse::<u32>()
+                .map_err(|_| RejectionReason::InvalidTimestamp)?
+                * 10_u32.pow(9 - fraction.len() as u32);
+            (seconds, nanoseconds)
+        }
+        None => (utc, 0),
+    };
+    Ok((
+        crate::manifest::parse_utc_seconds(&format!("{seconds}Z"))?,
+        nanoseconds,
+    ))
 }
 
 fn classify(value: &serde_json::value::RawValue, geofence: ChargerGeofence) -> NormalizedLocation {

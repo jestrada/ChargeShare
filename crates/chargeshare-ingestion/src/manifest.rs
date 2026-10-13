@@ -238,8 +238,12 @@ impl Manifest {
         let mapping = self
             .mapping(&provenance.device)
             .ok_or(RejectionReason::InvalidEvidence)?;
-        let time = parse_utc_seconds(&provenance.created_at)
-            .map_err(|_| RejectionReason::InvalidEvidence)?;
+        let time = if self.is_live() {
+            crate::live::parse_utc_timestamp(&provenance.created_at).map(|(seconds, _)| seconds)
+        } else {
+            parse_utc_seconds(&provenance.created_at)
+        }
+        .map_err(|_| RejectionReason::InvalidEvidence)?;
         let config = &self.config;
         if provenance.owner != mapping.owner
             || provenance.input_contract != config.input_contract

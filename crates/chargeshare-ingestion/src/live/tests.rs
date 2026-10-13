@@ -152,6 +152,136 @@ fn disconnected_charging_complete_and_stopped_each_yield_one_exact_ac_session() 
 }
 
 #[test]
+fn utc_timestamps_accept_optional_fractional_seconds_and_truncate_event_time() {
+    assert_eq!(
+        super::parse_utc_timestamp("1970-01-01T00:00:00Z"),
+        Ok((0, 0))
+    );
+    for (fraction, expected_nanoseconds) in [
+        ("1", 100_000_000),
+        ("12", 120_000_000),
+        ("123", 123_000_000),
+        ("1234", 123_400_000),
+        ("12345", 123_450_000),
+        ("123456", 123_456_000),
+        ("1234567", 123_456_700),
+        ("12345678", 123_456_780),
+        ("123456789", 123_456_789),
+    ] {
+        for suffix in ["Z", "+00:00"] {
+            assert_eq!(
+                super::parse_utc_timestamp(&format!("1970-01-01T00:00:00.{fraction}{suffix}")),
+                Ok((0, expected_nanoseconds))
+            );
+        }
+    }
+    assert_eq!(
+        super::parse_utc_timestamp("1969-12-31T23:59:59.999999999Z"),
+        Ok((-1, 999_999_999))
+    );
+    for invalid in [
+        "1970-01-01T00:00:00.Z",
+        "1970-01-01T00:00:00.1234567890Z",
+        "1970-01-01T00:00:00.123aZ",
+        "1970-01-01T00:00:00.１２３Z",
+        "1970-01-01T00:00:00.123.456Z",
+        "1970-01-01T00:00:00.123",
+        "1970-01-01T00:00:00.123+01:00",
+        "1970-02-30T00:00:00.123Z",
+        "1970-01-01T24:00:00.123Z",
+    ] {
+        assert_eq!(
+            super::parse_utc_timestamp(invalid),
+            Err(crate::RejectionReason::InvalidTimestamp)
+        );
+    }
+}
+
+#[test]
+fn nanosecond_soc_only_resend_outside_a_session_rejects_only_for_missing_association() {
+    let runtime = Runtime::new();
+    let mut record = runtime.records[0].clone();
+    record["payload"] = json!({
+        "data": [{"key": "Soc", "value": {"doubleValue": 99.9}}],
+        "createdAt": "2026-10-13T12:38:54.123456789Z",
+        "vin": "FICTIONAL-VIN-A",
+        "isResend": true
+    });
+    let (signal, _, resend) = super::decode(
+        &runtime.config,
+        &headers(&record),
+        &serde_json::to_vec(&record["payload"]).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(signal.time, 1_791_895_134);
+    assert!(resend);
+    assert_eq!(
+        super::adapt(
+            &runtime.config.manifest().unwrap(),
+            &mut super::AdapterState::default(),
+            &signal,
+            resend
+        ),
+        Ok(crate::RecordDisposition::Rejected(
+            crate::RejectionReason::MissingAssociation
+        ))
+    );
+}
+
+#[test]
+fn fractional_record_ordering_survives_checkpoint_recovery() {
+    let mut runtime = Runtime::new();
+    runtime.records[1]["payload"]["createdAt"] = json!("2026-09-01T12:00:00.900000001Z");
+    runtime.records[2]["payload"]["createdAt"] = json!("2026-09-01T12:00:00.9Z");
+    field_mut(&mut runtime.records[2], "DetailedChargeState")["detailedChargeStateValue"] =
+        json!("DetailedChargeStateComplete");
+    runtime.records[3]["payload"]["createdAt"] = json!("2026-09-01T12:00:00.900000002Z");
+    let manifest = runtime.config.manifest().unwrap();
+    let mut state: super::AdapterState = serde_json::from_str(
+        r#"{"previous":null,"connection":null,"next_position":0,"last_time":null,"ac_evidence":false}"#,
+    )
+    .unwrap();
+    for (index, record) in runtime.records.iter().enumerate() {
+        state = serde_json::from_str(&super::encode(&state).unwrap()).unwrap();
+        let (signal, _, resend) = super::decode(
+            &runtime.config,
+            &headers(record),
+            &serde_json::to_vec(&record["payload"]).unwrap(),
+        )
+        .unwrap();
+        let disposition = super::adapt(&manifest, &mut state, &signal, resend).unwrap();
+        if index == 0 {
+            assert_eq!(
+                disposition,
+                crate::RecordDisposition::Rejected(crate::RejectionReason::MissingAssociation)
+            );
+            continue;
+        }
+        let crate::RecordDisposition::Accepted(evidence) = disposition else {
+            panic!("expected charging evidence");
+        };
+        assert_eq!(evidence.event.position, (index - 1).to_string());
+        assert_eq!(
+            evidence.event.kind,
+            match index {
+                1 => crate::NormalizedEventKind::Start,
+                2 => crate::NormalizedEventKind::Sample,
+                _ => crate::NormalizedEventKind::End,
+            }
+        );
+        assert_eq!(
+            evidence.event.charge_type,
+            if index == 2 {
+                crate::NormalizedChargeType::Ambiguous
+            } else {
+                crate::NormalizedChargeType::Ac
+            }
+        );
+        manifest.validate_evidence(&evidence).unwrap();
+    }
+}
+
+#[test]
 fn unknown_telemetry_fields_are_ignored_without_rejecting_or_retaining_them() {
     let mut runtime = Runtime::new();
     for record in &mut runtime.records {
