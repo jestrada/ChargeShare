@@ -30,12 +30,13 @@ impl Store {
                     .map_err(|_| IngestionError::StorageCorrupt)?,
             );
         }
-        if let Some(charger) = self
-            .manifest
-            .config()
-            .owner_chargers
-            .iter()
-            .find(|charger| charger.owner_id == owner.as_str())
+        if !self.manifest.is_live()
+            && let Some(charger) = self
+                .manifest
+                .config()
+                .owner_chargers
+                .iter()
+                .find(|charger| charger.owner_id == owner.as_str())
         {
             ledger.configure_charger(
                 owner.clone(),

@@ -1,7 +1,7 @@
 # Architecture and domain contract
 
-ChargeShare is a synthetic charging ledger with exact offline pricing, a local
-receiver/Kafka harness, durable Rust ingestion and a scoped browser view.
+ChargeShare provides exact offline pricing, a synthetic local receiver/Kafka
+harness, durable Rust ingestion, a scoped browser view and an opt-in live adapter.
 Ingestion, persisted viewing, automatic location classification and derived
 time-of-use pricing are implemented. No live vehicle, account or production
 service is connected. Setup and checks are in [README](../README.md); contributor
@@ -12,7 +12,7 @@ rules are in [AGENTS](../AGENTS.md) and [code design](code-design.md).
 | Component | Responsibility |
 | --- | --- |
 | `chargeshare-core` | Rust domain: scoped replay, exact energy/money and local-time sample pricing |
-| `chargeshare-ingestion` | Rust normalization, Kafka consumption, SQLite transactions/recovery and committed scoped HTTP results |
+| `chargeshare-ingestion` | Synthetic normalization and live state adaptation, Kafka consumption, SQLite transactions/recovery and committed scoped HTTP results |
 | `chargeshare-harness` | Rust sender/verifier for finite fictional receiver traffic; requires protocol ACKs and matching new Kafka records |
 | `chargeshare-preview` | Independent Rust fixture API with core-calculated sample prices |
 | `apps/web` | React/TypeScript and shadcn; separate persisted and fixture entries/bundles, shared visual components |
@@ -34,8 +34,12 @@ flowchart LR
     receiver --> kafka["Private Kafka: decoded V records"]
     kafka --> normalize
     kafka --> capture["Harness: curated acceptance evidence"]
-    subgraph owner["Single Rust owner: chargeshare-ingestion serve"]
+    kafka --> live
+    private_config["Private live config: mappings + geofence + rates"] --> live
+    subgraph owner["Single Rust owner: serve or live"]
         normalize["Frozen mapping + normalized location/counters"] --> sqlite[("SQLite: evidence + config versions + progress")]
+        live["Live adapter: state transitions + classify and drop coordinates"] --> sqlite
+        private_config --> sanitized_config["Aliases + redacted geofence version + rates"] --> sqlite
         config["Owner charger config + immutable rate histories"] --> sqlite
         sqlite --> replay["Scoped core replay"]
         replay --> classification["Core: automatic session location classification"]
@@ -61,7 +65,8 @@ and concurrent writers are refused.
 
 ## Ports and boundaries
 
-All published listeners bind IPv4 host loopback. Kafka has no host listener.
+All published application listeners bind IPv4 host loopback. Synthetic Kafka has
+no host listener; live mode connects to an already configured broker.
 
 | Endpoint | Boundary |
 | --- | --- |
@@ -83,11 +88,14 @@ not production authentication or permission for cross-owner sharing.
 pair of validated aliases. Malformed scopes return 400, unknown/mismatched scopes
 404, unsupported methods 405, and unavailable results 503. Errors never echo
 rejected values. `/api/poc/ready` reports readiness separately from acceptance.
+`GET /api/poc/scopes` returns only configured owner/vehicle aliases and a
+`synthetic_only` flag. The browser discovers these aliases before requesting
+results; failed discovery clears the available view and retries on refresh.
 There are no aggregate, mutation or pricing endpoints in this API.
 
 Responses contain aliases, exact six-decimal observed/eligible/priced kWh, sessions,
 exact quotes and once-rounded scoped subtotals, quality/exclusion and rate-hold
-reasons, synthetic measurement/estimate labels, allowlisted rate/time provenance
+reasons, mode-specific measurement labels and explicit estimate boundaries, allowlisted rate/time provenance
 and a deterministic semantic revision. Revisions reflect visible domain results
 and provenance, not requests or redelivery; they are not cryptographic tokens.
 No coordinates, raw payload, device identity, credentials, paths, offsets or logs
@@ -197,6 +205,70 @@ checks reject unsafe files. These guarantees assume trusted local Linux/Docker
 and no hostile process with the same UID; they do not establish backups,
 replicated-broker availability or cloud durability. Captures, logs, keys and
 databases stay private; only allowlisted synthetic summaries may be published.
+
+### Live adapter
+
+The approved [#49](https://github.com/jestrada/ChargeShare/issues/49) adapter uses
+the existing receiver's decoded `<topic_namespace>_V` records without fixture
+annotations. Start the ingestion owner and persisted dashboard together from
+the repository root with a private configuration path:
+
+```sh
+python3 scripts/dev/live.py --config /home/box/.config/chargeshare/live.json
+```
+
+The command binds the API to `127.0.0.1:8788` and the dashboard to
+`127.0.0.1:5174`, and stops its child process groups when either service exits
+or the command is interrupted. It requires the Rust/Node tools and installed web
+dependencies. Receiver provisioning, vehicle registration, OAuth, pairing,
+deployment and vehicle control remain separate requests.
+
+Configuration must be an absolute, nonsymlinked private file outside the checkout,
+owned by the current user with a private parent directory. Use mode `0600` for
+the file and `0700` for its parent and database directory; the absolute
+SQLite path also stays outside the checkout. The configuration selects Kafka
+bootstrap servers, topic namespace, a stable `live-` source epoch, device-to-alias
+mappings, one shared charger geofence and the existing explicit rate models.
+[`dev/live-config.example.json`](../dev/live-config.example.json) contains only
+fictional identifiers, coordinates, paths and labeled public sample rates.
+No private configuration is copied into this repository.
+
+`live` owns decoded-field parsing and vehicle state adaptation; the core owns
+location distance, conservative reconstruction and exact energy/pricing policy.
+`DetailedChargeState` transitions from a known noncharging state to Charging
+provide Start. Complete, Stopped or Disconnected while a connection is open
+provide End. Starting mid-charge retains samples with a missing-start hold.
+Silence, zero power and sparse counters create no End. `createdAt` supplies
+integral UTC event time; arrival time and the zero timestamp header do not.
+Late or unknown-state records remain conservative ambiguous evidence.
+
+Energy uses only observed `ACChargingEnergyIn` counter deltas. Positive
+`ACChargingPower` or a valid AC counter establishes AC evidence; power and elapsed
+time never supply energy. A missing final counter leaves the session held with
+`MissingTerminalSample`, preserving earlier observed deltas. Live results label
+this boundary as vehicle-reported AC input counter energy with unvalidated
+physical accuracy, and retain the existing pricing estimate boundary.
+
+Only `DetailedChargeState`, `ACChargingEnergyIn`, `ACChargingPower` and `Location`
+affect adaptation. Unknown telemetry fields, including ChargeState, Odometer and
+Soc, are ignored and discarded while the record is processed. Duplicate consumed
+fields and malformed envelopes reject with fixed reasons. Coordinates are
+validated and classified against the private geofence, then dropped before any
+SQLite write, logging or API response. Storage retains only inside/outside,
+invalid or absent location evidence and aliases; device identity, raw transaction
+IDs and the geofence center never persist. Mapping/geofence fingerprints freeze
+the live configuration because dropped coordinates cannot be reclassified under
+a changed geofence; configuration changes refuse reuse of that dataset.
+
+Per-vehicle transaction fingerprints deduplicate receiver redelivery and resends.
+Identical normalized signals also reuse the original disposition and position.
+Changed signals under a reused transaction identity refuse ingestion. Adapter
+state, curated evidence, deduplication checkpoints and the next partition offset
+commit together in one SQLite transaction. Restart resumes the same session and
+positions. A private source marker binds the live dataset to its epoch, topic,
+cluster and initial partition offsets; expired history or changed source identity
+refuses recovery. Live mode reuses the single SQLite owner, committed snapshot
+API and existing browser pricing contract.
 
 ## Implemented offline ledger
 

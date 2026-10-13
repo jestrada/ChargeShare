@@ -135,7 +135,15 @@ pub(crate) fn validate_rates(config: &mut ManifestConfig) -> Result<(), Rejectio
         if !owners.contains(&charger.owner_id) || !configured.insert(charger.owner_id.clone()) {
             return Err(invalid);
         }
-        charger.geofence.to_core()?;
+        if config.input_contract == crate::live::LIVE_INPUT_CONTRACT {
+            if charger.geofence.center != NormalizedLocation::RedactedGeofence
+                || charger.geofence.radius_meters != 100
+            {
+                return Err(invalid);
+            }
+        } else {
+            charger.geofence.to_core()?;
+        }
         if charger.rate_model_versions.len() > 64 {
             return Err(invalid);
         }

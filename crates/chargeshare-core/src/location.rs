@@ -44,6 +44,8 @@ pub enum LocationSample {
     Missing,
     Invalid,
     Valid(LocationPoint),
+    InsideGeofence,
+    OutsideGeofence,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

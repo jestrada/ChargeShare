@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { classificationLabel, reasonLabel, evidenceLabel, parseResults, resultPath, scopes, pricingBoundary, pricingHoldLabel } from "../src/persisted.ts"
+import { classificationLabel, reasonLabel, evidenceLabel, parseResults, parseScopes, resultPath, scopes, pricingBoundary, pricingHoldLabel } from "../src/persisted.ts"
 
 function result() {
   return {
@@ -16,6 +16,28 @@ function result() {
 test("persisted client only constructs an explicitly scoped persisted route", () => {
   assert.equal(resultPath(scopes[0]), "/api/poc/owners/owner-a/vehicles/vehicle-a/results")
   assert.equal(resultPath({ owner: "a/b", vehicle: "v?" }), "/api/poc/owners/a%2Fb/vehicles/v%3F/results")
+})
+test("configured scope discovery accepts live aliases and refuses private or malformed fields", () => {
+  const value = { synthetic_only: false, scopes: [{ owner: "fictional-owner", vehicle: "fictional-vehicle" }] }
+  assert.deepEqual(parseScopes(value), value)
+  assert.deepEqual(parseScopes({ synthetic_only: true, scopes }), { synthetic_only: true, scopes })
+  for (const invalid of [null, {}, { ...value, synthetic_only: "false" }, { ...value, scopes: [] },
+    { ...value, latitude: 12.3456789 }, { ...value, scopes: [...value.scopes, ...value.scopes] },
+    { ...value, scopes: [{ ...value.scopes[0], vin: "FICTIONAL-VIN-A" }] },
+    { ...value, scopes: [{ owner: "a/b", vehicle: "fictional-vehicle" }] }]) {
+    assert.throws(() => parseScopes(invalid))
+  }
+})
+test("live results retain their counter boundary and exact quotes without synthetic labeling", () => {
+  const value = quotedResult()
+  value.evidence_boundary = "Vehicle-reported AC input counter energy; physical accuracy unvalidated"
+  value.provenance.source = "live-receiver-kafka"
+  value.provenance.source_epoch = "live-fictional-charger-v1"
+  const parsed = parseResults(value, scopes[0])
+  assert.equal(parsed.pricing.display_subtotal, "$0.11")
+  assert.equal(parsed.provenance.source, "live-receiver-kafka")
+  value.evidence_boundary = result().evidence_boundary
+  assert.throws(() => parseResults(value, scopes[0]))
 })
 test("scoped energy strings are preserved and another scope is refused", () => {
   assert.equal(parseResults(result(), scopes[0]).observed_ac_kwh, "0.500000")

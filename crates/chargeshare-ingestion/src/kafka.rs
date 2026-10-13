@@ -9,6 +9,7 @@ use rdkafka::client::ClientContext;
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
+use rdkafka::message::Headers;
 use rdkafka::{Message, Offset, TopicPartitionList};
 
 use crate::{
@@ -166,10 +167,9 @@ fn verify_broker_source(
         .fetch_metadata(Some(&source.topic), remaining(deadline)?)
         .map_err(|_| source_operation_error(deadline))?;
     if metadata.brokers().is_empty()
-        || metadata
-            .brokers()
-            .iter()
-            .any(|broker| !permitted_broker(broker.host(), broker.port()))
+        || metadata.brokers().iter().any(|broker| {
+            !source.epoch.starts_with("live-") && !permitted_broker(broker.host(), broker.port())
+        })
     {
         return Err(IngestionError::SourceMismatch);
     }
@@ -573,6 +573,7 @@ pub(crate) struct LiveIngestion {
     config: KafkaConfig,
     source: SourceBinding,
     verified_at: Instant,
+    live_config: Option<crate::live_config::LiveConfig>,
 }
 
 impl LiveIngestion {
@@ -612,6 +613,44 @@ impl LiveIngestion {
             config,
             source,
             verified_at: Instant::now(),
+            live_config: None,
+        })
+    }
+
+    pub(crate) fn connect_live(
+        live_config: crate::live_config::LiveConfig,
+        source: SourceBinding,
+        store: &Store,
+    ) -> Result<Self, IngestionError> {
+        let config = live_config.kafka_config();
+        verify_source_marker(&config.source_epoch_path, &source)?;
+        let consumer = connect_consumer(&config)?;
+        verify_broker_source(
+            &consumer,
+            &config,
+            &source,
+            store,
+            Instant::now() + config.deadline,
+        )?;
+        let mut assignment = TopicPartitionList::new();
+        for position in store.positions()? {
+            assignment
+                .add_partition_offset(
+                    &source.topic,
+                    position.partition,
+                    Offset::Offset(position.next_offset),
+                )
+                .map_err(|_| IngestionError::KafkaUnavailable)?;
+        }
+        consumer
+            .assign(&assignment)
+            .map_err(|_| IngestionError::KafkaUnavailable)?;
+        Ok(Self {
+            consumer,
+            config,
+            source,
+            verified_at: Instant::now(),
+            live_config: Some(live_config),
         })
     }
 
@@ -640,17 +679,127 @@ impl LiveIngestion {
             .into_iter()
             .find(|position| position.partition == delivery.partition())
             .ok_or(IngestionError::SourceMismatch)?;
-        let manifest = store.manifest.clone();
-        store.ingest(
-            &manifest,
-            DeliveryCoordinate {
-                partition: delivery.partition(),
-                offset: delivery.offset(),
-            },
-            position.next_offset,
-            delivery.key(),
-            delivery.payload().unwrap_or_default(),
-        )?;
+        let coordinate = DeliveryCoordinate {
+            partition: delivery.partition(),
+            offset: delivery.offset(),
+        };
+        if let Some(config) = &self.live_config {
+            let headers = delivery
+                .headers()
+                .map(|headers| {
+                    headers
+                        .iter()
+                        .map(|header| {
+                            (
+                                header.key.to_owned(),
+                                header.value.unwrap_or_default().to_vec(),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            store.ingest_live(
+                config,
+                coordinate,
+                position.next_offset,
+                &headers,
+                delivery.payload().unwrap_or_default(),
+            )?;
+        } else {
+            let manifest = store.manifest.clone();
+            store.ingest(
+                &manifest,
+                DeliveryCoordinate {
+                    partition: delivery.partition(),
+                    offset: delivery.offset(),
+                },
+                position.next_offset,
+                delivery.key(),
+                delivery.payload().unwrap_or_default(),
+            )?;
+        }
         Ok(())
     }
+}
+
+pub(crate) fn live_source(
+    config: &crate::live_config::LiveConfig,
+) -> Result<SourceBinding, IngestionError> {
+    let kafka = config.kafka_config();
+    let path = &kafka.source_epoch_path;
+    if path.exists() {
+        let source = read_source_marker(path)?;
+        if source.epoch != config.source_epoch
+            || source.topic != format!("{}_V", config.topic_namespace)
+        {
+            return Err(IngestionError::SourceMismatch);
+        }
+        return Ok(source);
+    }
+    if config.database.exists() {
+        return Err(IngestionError::SourceMismatch);
+    }
+    let parent = path.parent().ok_or(IngestionError::InvalidConfiguration)?;
+    if fs::canonicalize(parent).map_err(|_| IngestionError::InvalidConfiguration)? != parent {
+        return Err(IngestionError::InvalidConfiguration);
+    }
+    validate_private_marker_metadata(
+        &fs::metadata(parent).map_err(|_| IngestionError::InvalidConfiguration)?,
+        false,
+    )?;
+    let consumer = connect_consumer(&kafka)?;
+    let topic = format!("{}_V", config.topic_namespace);
+    let metadata = consumer
+        .fetch_metadata(Some(&topic), kafka.deadline)
+        .map_err(|_| IngestionError::KafkaUnavailable)?;
+    let matching: Vec<_> = metadata
+        .topics()
+        .iter()
+        .filter(|candidate| candidate.name() == topic)
+        .collect();
+    if matching.len() != 1 || matching[0].error().is_some() {
+        return Err(IngestionError::SourceMismatch);
+    }
+    let cluster_id = consumer
+        .client()
+        .fetch_cluster_id(kafka.deadline)
+        .ok_or(IngestionError::SourceMismatch)?;
+    let mut partitions = Vec::new();
+    for partition in matching[0].partitions() {
+        let (low, _) = consumer
+            .fetch_watermarks(&topic, partition.id(), kafka.deadline)
+            .map_err(|_| IngestionError::KafkaUnavailable)?;
+        if low != 0 || partition.error().is_some() {
+            return Err(IngestionError::RecoveryGap);
+        }
+        partitions.push(crate::PartitionStart {
+            partition: partition.id(),
+            initial_offset: 0,
+        });
+    }
+    partitions.sort_by_key(|partition| partition.partition);
+    let source = SourceBinding {
+        epoch: config.source_epoch.clone(),
+        topic,
+        cluster_id: Some(cluster_id),
+        topic_id: None,
+        partitions,
+    };
+    source.validate()?;
+    let bytes = serde_json::to_vec(&source).map_err(|_| IngestionError::InvalidConfiguration)?;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|_| IngestionError::SourceMismatch)?;
+    file.write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|_| IngestionError::StorageUnavailable)?;
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| IngestionError::StorageUnavailable)?;
+    Ok(source)
 }

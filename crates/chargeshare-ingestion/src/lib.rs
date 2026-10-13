@@ -10,9 +10,13 @@ pub use stream::{
 mod rates;
 pub use rates::{ChargerGeofenceConfig, OwnerChargerConfig, RateModelConfig, RatePeriodConfig};
 
+mod live;
+mod live_config;
 mod manifest;
 mod model;
 mod normalize;
+
+pub use live_config::run_live;
 
 pub use manifest::{Annotation, DeviceMapping, Manifest, ManifestConfig, OwnerGeofence};
 pub use model::{

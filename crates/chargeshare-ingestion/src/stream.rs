@@ -44,9 +44,12 @@ impl SourceBinding {
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
         };
-        if !self.epoch.starts_with("synthetic-")
+        let live = self.epoch.starts_with("live-")
+            && valid_alias(&self.topic)
+            && self.topic.ends_with("_V");
+        if !(self.epoch.starts_with("synthetic-") || live)
             || !valid_alias(&self.epoch)
-            || self.topic != SYNTHETIC_TOPIC
+            || (!live && self.topic != SYNTHETIC_TOPIC)
             || self.partitions.is_empty()
             || self.partitions.len() > 16
             || self

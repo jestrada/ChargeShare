@@ -80,22 +80,23 @@ pub(crate) fn classify_location(
     evidence: &[ConnectionEvidence<'_>],
     geofence: Option<ChargerGeofence>,
 ) -> (ChargerClassification, ClassificationReason) {
-    let Some(geofence) = geofence else {
-        return (
-            ChargerClassification::Held,
-            ClassificationReason::LocationUnavailable,
-        );
-    };
     let mut samples = BTreeMap::<u64, LocationCoverage>::new();
     let mut conflicting = false;
     for entry in evidence {
         let sample = samples.entry(entry.event.position).or_default();
-        if let LocationSample::Valid(point) = entry.event.location {
-            if geofence.contains(point) {
-                sample.inside = true;
-            } else {
-                sample.outside = true;
+        match entry.event.location {
+            LocationSample::InsideGeofence => sample.inside = true,
+            LocationSample::OutsideGeofence => sample.outside = true,
+            LocationSample::Valid(point) => {
+                if let Some(geofence) = geofence {
+                    if geofence.contains(point) {
+                        sample.inside = true;
+                    } else {
+                        sample.outside = true;
+                    }
+                }
             }
+            LocationSample::Missing | LocationSample::Invalid => {}
         }
         conflicting |= entry.is_conflicting;
     }

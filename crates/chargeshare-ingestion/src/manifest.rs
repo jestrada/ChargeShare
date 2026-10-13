@@ -129,8 +129,10 @@ impl Manifest {
         ] {
             OwnerId::new(version).map_err(|_| RejectionReason::InvalidManifest)?;
         }
-        if config.input_contract != INPUT_CONTRACT_VERSION
-            || config.normalizer_version != NORMALIZER_VERSION
+        if !(config.input_contract == INPUT_CONTRACT_VERSION
+            && config.normalizer_version == NORMALIZER_VERSION
+            || config.input_contract == crate::live::LIVE_INPUT_CONTRACT
+                && config.normalizer_version == crate::live::LIVE_NORMALIZER_VERSION)
             || config.timestamp_version != TIMESTAMP_VERSION
         {
             return Err(RejectionReason::IncompatibleVersion);
@@ -238,9 +240,6 @@ impl Manifest {
             .ok_or(RejectionReason::InvalidEvidence)?;
         let time = parse_utc_seconds(&provenance.created_at)
             .map_err(|_| RejectionReason::InvalidEvidence)?;
-        let annotation = self
-            .annotation(&mapping.device, time)
-            .ok_or(RejectionReason::InvalidEvidence)?;
         let config = &self.config;
         if provenance.owner != mapping.owner
             || provenance.input_contract != config.input_contract
@@ -248,17 +247,36 @@ impl Manifest {
             || provenance.manifest_version != config.manifest_version
             || provenance.normalizer_version != config.normalizer_version
             || provenance.timestamp_version != config.timestamp_version
-            || provenance.created_at != annotation.created_at
             || evidence.event.vehicle != mapping.vehicle
-            || evidence.event.position != annotation.position
-            || evidence.event.connection != annotation.connection
-            || evidence.event.kind != annotation.kind
-            || evidence.event.charge_type != annotation.charge_type
             || evidence.event.time != time
         {
             return Err(RejectionReason::InvalidEvidence);
         }
+        if self.is_live() {
+            if matches!(
+                evidence.event.location,
+                Some(NormalizedLocation::Valid { .. })
+            ) {
+                return Err(RejectionReason::InvalidEvidence);
+            }
+        } else {
+            let annotation = self
+                .annotation(&mapping.device, time)
+                .ok_or(RejectionReason::InvalidEvidence)?;
+            if provenance.created_at != annotation.created_at
+                || evidence.event.position != annotation.position
+                || evidence.event.connection != annotation.connection
+                || evidence.event.kind != annotation.kind
+                || evidence.event.charge_type != annotation.charge_type
+            {
+                return Err(RejectionReason::InvalidEvidence);
+            }
+        }
         Ok(())
+    }
+
+    pub(crate) fn is_live(&self) -> bool {
+        self.config.input_contract == crate::live::LIVE_INPUT_CONTRACT
     }
 
     pub(crate) fn mapping(&self, device: &str) -> Option<&DeviceMapping> {

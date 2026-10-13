@@ -17,7 +17,7 @@ use crate::{
     RejectionReason, SourceBinding, normalize,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum RecordDisposition {
     Accepted(Box<AcceptedEvidence>),
     Rejected(RejectionReason),
@@ -132,6 +132,9 @@ impl Store {
             database_path: runtime.absolute_path,
         };
         verify_retained_evidence(&store.connection, &store.manifest)?;
+        if store.manifest.is_live() {
+            crate::live::initialize(&store.connection)?;
+        }
         Ok(store)
     }
 
@@ -210,6 +213,23 @@ impl Store {
         coordinate: DeliveryCoordinate,
         expected_resume_position: i64,
         disposition: RecordDisposition,
+        observer: &mut dyn FnMut(CommitBoundary) -> Result<(), IngestionError>,
+    ) -> Result<CommitOutcome, IngestionError> {
+        self.commit_with_checkpoint(
+            coordinate,
+            expected_resume_position,
+            disposition,
+            None,
+            observer,
+        )
+    }
+
+    pub(crate) fn commit_with_checkpoint(
+        &mut self,
+        coordinate: DeliveryCoordinate,
+        expected_resume_position: i64,
+        disposition: RecordDisposition,
+        checkpoint: Option<&crate::live::LiveCheckpoint>,
         observer: &mut dyn FnMut(CommitBoundary) -> Result<(), IngestionError>,
     ) -> Result<CommitOutcome, IngestionError> {
         if coordinate.partition < 0 || coordinate.offset < 0 || expected_resume_position < 0 {
@@ -296,6 +316,9 @@ impl Store {
             .map_err(storage_error)?;
         if changed != 1 {
             return Err(IngestionError::ProgressConflict);
+        }
+        if let Some(checkpoint) = checkpoint {
+            checkpoint.save(&transaction)?;
         }
         observer(CommitBoundary::BeforeCommit)?;
         transaction.commit().map_err(storage_error)?;

@@ -1,0 +1,253 @@
+{
+  "synthetic_only": true,
+  "records": [
+    {
+      "headers": {
+        "vin": "FICTIONAL-VIN-A",
+        "txid": "fictional-0",
+        "txtype": "V",
+        "timestamp": "0",
+        "receivedat": "0",
+        "version": "1"
+      },
+      "payload": {
+        "data": [
+          {
+            "key": "DetailedChargeState",
+            "value": {
+              "detailedChargeStateValue": "DetailedChargeStateDisconnected"
+            }
+          },
+          {
+            "key": "ACChargingEnergyIn",
+            "value": {
+              "stringValue": "100"
+            }
+          },
+          {
+            "key": "ACChargingPower",
+            "value": {
+              "doubleValue": 0
+            }
+          },
+          {
+            "key": "Location",
+            "value": {
+              "locationValue": {
+                "latitude": 12.3456789,
+                "longitude": 45.6789123
+              }
+            }
+          },
+          {
+            "key": "ChargeState",
+            "value": {
+              "stringValue": "Disconnected"
+            }
+          },
+          {
+            "key": "Odometer",
+            "value": {
+              "doubleValue": 1000
+            }
+          },
+          {
+            "key": "Soc",
+            "value": {
+              "doubleValue": 50
+            }
+          }
+        ],
+        "createdAt": "2026-09-01T11:59:00Z",
+        "vin": "FICTIONAL-VIN-A",
+        "isResend": false
+      }
+    },
+    {
+      "headers": {
+        "vin": "FICTIONAL-VIN-A",
+        "txid": "fictional-1",
+        "txtype": "V",
+        "timestamp": "0",
+        "receivedat": "0",
+        "version": "1"
+      },
+      "payload": {
+        "data": [
+          {
+            "key": "DetailedChargeState",
+            "value": {
+              "detailedChargeStateValue": "DetailedChargeStateCharging"
+            }
+          },
+          {
+            "key": "ACChargingEnergyIn",
+            "value": {
+              "stringValue": "100"
+            }
+          },
+          {
+            "key": "ACChargingPower",
+            "value": {
+              "doubleValue": 7.2
+            }
+          },
+          {
+            "key": "Location",
+            "value": {
+              "locationValue": {
+                "latitude": 12.3456789,
+                "longitude": 45.6789123
+              }
+            }
+          },
+          {
+            "key": "ChargeState",
+            "value": {
+              "stringValue": "Charging"
+            }
+          },
+          {
+            "key": "Odometer",
+            "value": {
+              "doubleValue": 1000
+            }
+          },
+          {
+            "key": "Soc",
+            "value": {
+              "doubleValue": 50
+            }
+          }
+        ],
+        "createdAt": "2026-09-01T12:00:00Z",
+        "vin": "FICTIONAL-VIN-A",
+        "isResend": false
+      }
+    },
+    {
+      "headers": {
+        "vin": "FICTIONAL-VIN-A",
+        "txid": "fictional-2",
+        "txtype": "V",
+        "timestamp": "0",
+        "receivedat": "0",
+        "version": "1"
+      },
+      "payload": {
+        "data": [
+          {
+            "key": "DetailedChargeState",
+            "value": {
+              "detailedChargeStateValue": "DetailedChargeStateCharging"
+            }
+          },
+          {
+            "key": "ACChargingEnergyIn",
+            "value": {
+              "stringValue": "100.25"
+            }
+          },
+          {
+            "key": "ACChargingPower",
+            "value": {
+              "doubleValue": 7.2
+            }
+          },
+          {
+            "key": "Location",
+            "value": {
+              "locationValue": {
+                "latitude": 12.3456789,
+                "longitude": 45.6789123
+              }
+            }
+          },
+          {
+            "key": "ChargeState",
+            "value": {
+              "stringValue": "Charging"
+            }
+          },
+          {
+            "key": "Odometer",
+            "value": {
+              "doubleValue": 1000
+            }
+          },
+          {
+            "key": "Soc",
+            "value": {
+              "doubleValue": 50
+            }
+          }
+        ],
+        "createdAt": "2026-09-01T12:05:00Z",
+        "vin": "FICTIONAL-VIN-A",
+        "isResend": false
+      }
+    },
+    {
+      "headers": {
+        "vin": "FICTIONAL-VIN-A",
+        "txid": "fictional-3",
+        "txtype": "V",
+        "timestamp": "0",
+        "receivedat": "0",
+        "version": "1"
+      },
+      "payload": {
+        "data": [
+          {
+            "key": "DetailedChargeState",
+            "value": {
+              "detailedChargeStateValue": "DetailedChargeStateComplete"
+            }
+          },
+          {
+            "key": "ACChargingEnergyIn",
+            "value": {
+              "stringValue": "100.50"
+            }
+          },
+          {
+            "key": "ACChargingPower",
+            "value": {
+              "doubleValue": 0
+            }
+          },
+          {
+            "key": "Location",
+            "value": {
+              "locationValue": {
+                "latitude": 12.3456789,
+                "longitude": 45.6789123
+              }
+            }
+          },
+          {
+            "key": "ChargeState",
+            "value": {
+              "stringValue": "Complete"
+            }
+          },
+          {
+            "key": "Odometer",
+            "value": {
+              "doubleValue": 1000
+            }
+          },
+          {
+            "key": "Soc",
+            "value": {
+              "doubleValue": 50
+            }
+          }
+        ],
+        "createdAt": "2026-09-01T12:10:00Z",
+        "vin": "FICTIONAL-VIN-A",
+        "isResend": false
+      }
+    }
+  ]
+}

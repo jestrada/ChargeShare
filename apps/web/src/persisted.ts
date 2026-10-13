@@ -73,16 +73,26 @@ function isEligible(session: SessionResult) {
 export function resultPath(scope: Scope) {
   return `/api/poc/owners/${encodeURIComponent(scope.owner)}/vehicles/${encodeURIComponent(scope.vehicle)}/results`
 }
+export function parseScopes(value: unknown): { synthetic_only: boolean; scopes: Scope[] } {
+  const object = value as { synthetic_only: boolean; scopes: Scope[] }
+  if (!hasExactKeys(object, ["synthetic_only", "scopes"]) || typeof object.synthetic_only !== "boolean" ||
+      !Array.isArray(object.scopes) || !object.scopes.length || object.scopes.length > 256 ||
+      object.scopes.some(scope => !hasExactKeys(scope, ["owner", "vehicle"]) || !alias(scope.owner) || !alias(scope.vehicle)) ||
+      new Set(object.scopes.map(scope => scope.vehicle)).size !== object.scopes.length) {
+    throw new Error("Persisted scopes unavailable")
+  }
+  return object
+}
 export function parseResults(value: unknown, scope: Scope): ScopedResults {
   const object = value as ScopedResults
   const energy = (value: unknown) => typeof value === "string" && /^\d+\.\d{6}$/.test(value)
   const reasons = (value: unknown, allowed: string[]) => Array.isArray(value) && value.every(reason => allowed.includes(reason))
   if (!hasExactKeys(object, resultKeys) || object.owner !== scope.owner || object.vehicle !== scope.vehicle ||
       !["empty", "held", "eligible"].includes(object.state) || !energy(object.observed_ac_kwh) || !energy(object.eligible_shared_charger_kwh) ||
-      object.evidence_boundary !== "Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated" ||
+      !["Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated", "Vehicle-reported AC input counter energy; physical accuracy unvalidated"].includes(object.evidence_boundary) ||
       typeof object.revision !== "string" || !/^results-v1-[a-f0-9]{16}$/.test(object.revision) ||
       !Array.isArray(object.sessions) || (object.state === "empty") !== (object.sessions.length === 0) ||
-      !hasExactKeys(object.provenance, provenanceKeys) || object.provenance.source !== "synthetic-receiver-kafka" ||
+      !hasExactKeys(object.provenance, provenanceKeys) || !["synthetic-receiver-kafka", "live-receiver-kafka"].includes(object.provenance.source) ||
       object.provenance.calculation_version !== "scoped-core-replay-v2" ||
       !provenanceKeys.every(key => typeof object.provenance[key as keyof ScopedResults["provenance"]] === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(object.provenance[key as keyof ScopedResults["provenance"]])) ||
       object.sessions.some(session => !hasExactKeys(session, sessionKeys) || session.vehicle !== scope.vehicle ||
@@ -99,6 +109,8 @@ export function parseResults(value: unknown, scope: Scope): ScopedResults {
   }
   if (object.sessions.length && (object.state === "eligible") !== object.sessions.every(isEligible)) throw new Error("Persisted results unavailable")
   if (!object.sessions.some(isEligible) && object.eligible_shared_charger_kwh !== "0.000000") throw new Error("Persisted results unavailable")
+  if ((object.provenance.source === "live-receiver-kafka") !==
+      (object.evidence_boundary === "Vehicle-reported AC input counter energy; physical accuracy unvalidated")) throw new Error("Persisted results unavailable")
   validatePricing(object)
   return object
 }

@@ -32,6 +32,18 @@ fn main() {
 fn run() -> Result<(), IngestionError> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("live") if args.len() == 2 => {
+            let path = Path::new(&args[1]);
+            let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .and_then(Path::parent)
+                .ok_or(IngestionError::InvalidConfiguration)?;
+            if !path.is_absolute() || path.starts_with(checkout) {
+                return Err(IngestionError::InvalidConfiguration);
+            }
+            reject_symlink_ancestors(path)?;
+            chargeshare_ingestion::run_live(&read_private_file(path, MAX_MANIFEST_BYTES)?)
+        }
         Some("serve") if args.len() == 4 => {
             let runtime = owned_runtime(&args[1])?;
             let (manifest, source) = runtime_contract(&runtime)?;

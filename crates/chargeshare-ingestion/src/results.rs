@@ -208,7 +208,11 @@ fn results_from_replay(
         } else {
             "held"
         },
-        evidence_boundary: summary.evidence_label,
+        evidence_boundary: if manifest.is_live() {
+            "Vehicle-reported AC input counter energy; physical accuracy unvalidated"
+        } else {
+            summary.evidence_label
+        },
         observed_ac_kwh: kwh(summary.observed_ac),
         eligible_shared_charger_kwh: kwh(summary.eligible_shared_charger),
         pricing: PricingResult {
@@ -247,7 +251,11 @@ fn results_from_replay(
         },
         sessions,
         provenance: ResultProvenance {
-            source: "synthetic-receiver-kafka",
+            source: if manifest.is_live() {
+                "live-receiver-kafka"
+            } else {
+                "synthetic-receiver-kafka"
+            },
             source_epoch: source_epoch.to_owned(),
             input_contract: config.input_contract.clone(),
             mapping_version: config.mapping_version.clone(),

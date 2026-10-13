@@ -1,21 +1,43 @@
 import { useEffect, useState } from "react"
 import { Button } from "./components/ui/button"
-import { classificationLabel, evidenceLabel, pricingHoldLabel, parseResults, reasonLabel, resultPath, scopes, type Scope, type ScopedResults } from "./persisted"
+import { classificationLabel, evidenceLabel, pricingHoldLabel, parseResults, parseScopes, reasonLabel, resultPath, type Scope, type ScopedResults } from "./persisted"
 
 type View = { scope: string; state: "loading" | "unavailable" | "refused" } |
   { scope: string; state: "available"; results: ScopedResults }
 
-function initialScope(): Scope {
+function initialScope(): Scope | null {
   const params = new URLSearchParams(window.location.search)
-  return { owner: params.get("owner") ?? scopes[0].owner, vehicle: params.get("vehicle") ?? scopes[0].vehicle }
+  if (!params.has("owner") && !params.has("vehicle")) return null
+  return { owner: params.get("owner") ?? "", vehicle: params.get("vehicle") ?? "" }
 }
 
 export function PersistedApp() {
   const [scope, setScope] = useState(initialScope)
   const [refresh, setRefresh] = useState(0)
-  const key = `${scope.owner}/${scope.vehicle}`
+  const [configured, setConfigured] = useState<{ synthetic_only: boolean; scopes: Scope[] } | null>(null)
+  const key = scope ? `${scope.owner}/${scope.vehicle}` : ""
+  const scopesAvailable = configured !== null
   const [view, setView] = useState<View>({ scope: key, state: "loading" })
   useEffect(() => {
+    const controller = new AbortController()
+    let active = true
+    const timeout = window.setTimeout(() => controller.abort(), 5000)
+    fetch("/api/poc/scopes", { signal: controller.signal, cache: "no-store" })
+      .then(async response => {
+        if (!response.ok) throw new Error("Persisted scopes unavailable")
+        const next = parseScopes(await response.json())
+        if (active) {
+          setConfigured(next)
+          setScope(previous => previous ?? next.scopes[0])
+        }
+      }).catch(() => {
+        if (active) { setConfigured(null); setView({ scope: key, state: "unavailable" }) }
+      }).finally(() => window.clearTimeout(timeout))
+    return () => { active = false; controller.abort(); window.clearTimeout(timeout) }
+  }, [refresh])
+  useEffect(() => {
+    const poll = window.setTimeout(() => setRefresh(value => value + 1), 10000)
+    if (!scope || !scopesAvailable) return () => window.clearTimeout(poll)
     const controller = new AbortController()
     let active = true
     setView(previous => previous.scope === key && previous.state === "available" ? previous : { scope: key, state: "loading" })
@@ -31,10 +53,10 @@ export function PersistedApp() {
       })
       .catch(() => { if (active) setView({ scope: key, state: "unavailable" }) })
       .finally(() => window.clearTimeout(timeout))
-    const poll = window.setTimeout(() => setRefresh(value => value + 1), 10000)
     return () => { active = false; controller.abort(); window.clearTimeout(timeout); window.clearTimeout(poll) }
-  }, [scope, key, refresh])
-  const current: View = view.scope === key ? view : { scope: key, state: "loading" }
+  }, [scope, key, refresh, scopesAvailable])
+  const current: View = !scopesAvailable && view.state === "available" ? { scope: key, state: "unavailable" } :
+    view.scope === key ? view : { scope: key, state: "loading" }
   function chooseScope(next: Scope) {
     setScope(next)
     const params = new URLSearchParams({ owner: next.owner, vehicle: next.vehicle })
@@ -43,19 +65,19 @@ export function PersistedApp() {
   return <div className="app-shell persisted-shell">
     <a className="skip-link" href="#persisted-results">Skip to persisted results</a>
     <header className="persisted-heading">
-      <div><p className="persisted-label">Persisted · Synthetic</p><h1>Charging evidence</h1></div>
+      <div><p className="persisted-label">Persisted{configured ? configured.synthetic_only ? " · Synthetic" : " · Live" : ""}</p><h1>Charging evidence</h1></div>
       <Button className="control" variant="outline" onClick={() => setRefresh(value => value + 1)}>Refresh results</Button>
     </header>
     <section className="glass persisted-panel" aria-label="Owner and vehicle scope">
       <h2>View one owner and vehicle</h2>
       <div className="persisted-scopes" role="group" aria-label="Select scope">
-        {scopes.map(option => <Button key={option.vehicle} className="control" variant={scope.owner === option.owner && scope.vehicle === option.vehicle ? "default" : "outline"}
-          aria-pressed={scope.owner === option.owner && scope.vehicle === option.vehicle} onClick={() => chooseScope(option)}>
+        {(configured?.scopes ?? []).map(option => <Button key={option.vehicle} className="control" variant={scope?.owner === option.owner && scope?.vehicle === option.vehicle ? "default" : "outline"}
+          aria-pressed={scope?.owner === option.owner && scope?.vehicle === option.vehicle} onClick={() => chooseScope(option)}>
           {option.owner} / {option.vehicle}
         </Button>)}
       </div>
-      <p className="persisted-scope">Selected scope: <strong>{scope.owner} / {scope.vehicle}</strong></p>
-      <p className="muted">Synthetic vehicle-reported AC energy; physical accuracy unvalidated.</p>
+      {scope && <p className="persisted-scope">Selected scope: <strong>{scope.owner} / {scope.vehicle}</strong></p>}
+      <p className="muted">Vehicle-reported AC input counter energy; physical accuracy unvalidated.</p>
     </section>
     <main id="persisted-results" aria-live="polite" aria-busy={current.state === "loading"}>
       {current.state === "loading" && <section className="glass persisted-panel"><h2>Reading committed evidence…</h2></section>}
@@ -68,7 +90,7 @@ export function PersistedApp() {
 
 function Results({ results }: { results: ScopedResults }) {
   if (results.state === "empty") return <section className="glass persisted-panel">
-    <h2>No committed sessions</h2><p>This scope has no retained session evidence yet. Start the finite receiver check to populate synthetic evidence.</p>
+    <h2>No committed sessions</h2><p>This scope has no retained session evidence yet.</p>
     <RateProvenance results={results} />
     <Provenance results={results} />
   </section>
