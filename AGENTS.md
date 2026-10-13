@@ -147,6 +147,11 @@ pull requests only (never on pushes to `main`). When a PR body links an issue wi
 linked issue with at least one screenshot/image (`![..](..)` or `<img>`) after
 starting the PR. If evidence does not apply, apply the `no-evidence` label instead.
 
+The same job also checks spec approval: the PR must link at least one issue with a
+closing keyword, and every linked issue must carry `spec-approved` (only Joseph adds
+it). PRs without a spec issue (docs, CI, tooling) use the `no-spec` label. Labeling
+an issue does not re-trigger the check; re-run the job or edit the PR afterward.
+
 ## Issue and comment style
 
 Keep issues and comments short and plain; Joseph reads the top only.
@@ -161,3 +166,12 @@ Keep issues and comments short and plain; Joseph reads the top only.
   one screenshot, then details collapsed.
 - Do not repeat information. Keep internal IDs, hashes and jargon out of the top
   section.
+
+## Public repo safety
+
+This repository is public. Never put secrets or personal/infrastructure details in
+code, commits, PRs, issues, comments or screenshots: VINs, real vehicle data or
+locations, client IDs/secrets, tokens, keys, home/public/tailnet IPs, device
+hostnames, tailnet names, relay hostnames or cloud resource IDs. Use placeholders
+such as `<pi-hostname>`, `<relay-hostname>` and `<vin>`. Real config lives only on
+the Pi. Screenshots of real data stay off GitHub; post synthetic ones.
