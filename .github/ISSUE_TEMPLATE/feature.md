@@ -16,6 +16,8 @@ Decisions:
 
 Status: <drafting | waiting on Joseph | building | ready for review>
 
+<!-- Building starts only after Joseph adds the spec-approved label. -->
+
 <details>
 <summary>Full spec</summary>
 
