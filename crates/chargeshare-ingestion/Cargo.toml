@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[[example]]
+name = "dashboard-fixture"
+path = "../../dev/fixtures/dashboard.rs"
+
 [dependencies]
 chargeshare-core = { path = "../chargeshare-core" }
 fs2 = "=0.4.3"

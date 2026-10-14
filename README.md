@@ -1,10 +1,48 @@
 # ChargeShare
 
-A Rust charging ledger for sharing a home charger. The local proof of concept
-sends fictional telemetry through the official receiver and Kafka into SQLite,
-then shows scoped sessions in a React/shadcn dashboard. An independent fixture
-preview demonstrates exact offline pricing with labeled sample rates. Everything
-is synthetic; no live vehicle or account is connected.
+A Rust charging ledger for sharing a home charger, with a React/shadcn dashboard
+for monthly energy and estimated cost. The local demo and screenshots use
+synthetic telemetry and labeled public sample rates. An
+[opt-in live adapter](docs/architecture.md#live-adapter) is also implemented;
+vehicle and account setup remain separate.
+
+![ChargeShare desktop dashboard showing monthly charging with synthetic data](docs/images/dashboard-desktop.png)
+
+<details>
+<summary>Mobile preview (synthetic data)</summary>
+
+<img src="docs/images/dashboard-mobile.png" alt="ChargeShare mobile dashboard with synthetic charging data" width="240">
+
+</details>
+
+## How it works
+
+The [receiver-to-dashboard flow](docs/architecture.md#architecture-at-a-glance):
+
+```text
+Tesla Fleet Telemetry -> official receiver -> Kafka -> ingestion (Rust)
+  -> SQLite (retained normalized events) -> rebuilt sessions + geofence match
+  -> configured time-of-use pricing -> dashboard
+```
+
+SQLite retains normalized source events; Rust [rebuilds sessions](crates/chargeshare-ingestion/src/replay.rs)
+from that evidence and applies [shared-charger location geofence matching](docs/architecture.md#durable-ingestion-and-recovery).
+The [live adapter](docs/architecture.md#live-adapter) retains location classifications
+and discards raw payloads and coordinates before storage.
+
+Eligible sessions are [priced in Rust](docs/architecture.md#persisted-time-of-use-pricing)
+with configured time-of-use rates, such as the labeled PG&E EV2-A sample in
+`America/Los_Angeles`. Allocation of counter energy across rate periods is
+estimated using elapsed UTC time.
+
+The [dashboard](apps/web/src/components/monthly-charging.tsx) shows monthly D3 daily
+stacked bars for Off-peak, Part-peak and Peak, a cost/kWh toggle and day details.
+Only quoted shared-charger energy contributes to totals; held sessions are
+excluded with a notice, and partial coverage is flagged.
+
+[Energy is vehicle-reported AC input](docs/architecture.md#measurement-boundary),
+with unvalidated physical accuracy. Costs are energy-only estimates excluding
+fees and taxes, not bills.
 
 ## Quickstart
 
@@ -17,22 +55,17 @@ Run from the repository root; first startup can take several minutes.
 nix develop --no-update-lock-file -c bash scripts/dev/poc.sh up
 ```
 
-Open **http://127.0.0.1:5174**. Startup sends no fixtures, so a fresh dataset is
-empty. Populate and check the receiver → Kafka → SQLite → HTTP path:
+Open the [persisted dashboard](docs/architecture.md#ports-and-boundaries) on local
+port **5174**. Startup sends no fixtures, so a fresh dataset is empty. Populate
+and check the receiver → Kafka → SQLite → HTTP path:
 
 ```sh
 nix develop --no-update-lock-file -c bash scripts/dev/poc.sh check
 ```
 
-Choose `owner-a` / `vehicle-a` or `owner-b` / `vehicle-b` in the dashboard. The
-complete sample has 0.500000 / 0.250000 observed AC kWh. Use the compact
-owner/vehicle selector to view monthly daily bars by Off-peak, Part-peak and Peak.
-Bars default to estimated cost; switch to kWh and hover, tap or select a day for
-its breakdown. Monthly totals include only quoted shared-charger energy; held
-sessions are excluded with a notice, and partial coverage is flagged. Rates are
-public samples, energy is vehicle-reported AC input with unvalidated physical
-accuracy, and estimated charging cost is not a bill. Configuration and useful
-session information are separate from the chart.
+Choose a fictional owner/vehicle pair in the dashboard selector. Bars default to
+estimated cost; switch to kWh and hover, tap or select a day for its breakdown.
+Configuration, sample-rate provenance and session quality details are below the chart.
 
 Restart or stop while preserving evidence:
 
@@ -49,7 +82,30 @@ nix develop --no-update-lock-file -c bash scripts/dev/poc.sh reset --confirm-syn
 ```
 
 Without the confirmation flag, `reset` lists its scope and refuses deletion.
-The independent fixture preview is at http://127.0.0.1:5173 while the stack runs.
+The independent fixture preview uses local port **5173** while the stack runs.
+
+### Screenshot dataset without Docker
+
+[The deterministic generator](dev/fixtures/dashboard.py) creates June–September
+2026 charging history for fictional `owner-a` / `vehicle-a`, using the existing
+fictional shared-charger coordinates and labeled public sample rates.
+**Synthetic data for demos and screenshots only; not real.**
+
+With the Rust/Node tools and web dependencies installed, run from the repository
+root. Use a fresh output directory for each export:
+
+```sh
+mkdir -p .cache
+python3 dev/fixtures/dashboard.py > .cache/dashboard-input.json
+cargo run --locked -p chargeshare-ingestion --example dashboard-fixture -- .cache/dashboard-input.json .cache/dashboard-demo
+python3 -m http.server 8788 --bind 127.0.0.1 --directory .cache/dashboard-demo/http
+```
+
+In a second terminal, run `npm --prefix apps/web run dev:persisted` and open local
+port **5174**. The Rust example ingests decoded fictional records into SQLite and
+exports the persisted dashboard's usual JSON, with monthly history calculated as
+of September 30, 2026. The HTTP server serves only that snapshot; receiver/Kafka
+transport is not exercised. Generated data and SQLite stay in ignored `.cache/`.
 
 ## Tests
 
@@ -63,6 +119,7 @@ bash scripts/testing/offline-suite.sh
 bash scripts/testing/ingestion-suite.sh
 python3 scripts/testing/test_ingestion_guard.py
 python3 -m unittest discover -s scripts/dev -p 'test_*.py'
+python3 -m unittest discover -s dev/fixtures -p 'test_*.py'
 npm --prefix apps/web ci
 npm --prefix apps/web test
 npm run preview:build
@@ -87,6 +144,7 @@ record run results in the owning GitHub issue or PR.
 ## Documentation
 
 - [Architecture](docs/architecture.md): components, data flow, ports, domain contracts and decisions.
+- [Pricing](docs/architecture.md#persisted-time-of-use-pricing): configured sample rates, local-time allocation and estimate boundaries.
 - [Code design](docs/code-design.md): design-phase guidance for cohesive Rust modules and inward dependencies.
 - [Workflow](docs/workflow.md): how each feature goes from issue to merged PR.
 
