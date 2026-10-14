@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -76,15 +77,17 @@ class AssertionTests(unittest.TestCase):
             "location-mixed": ("Held", "LocationAmbiguous"),
             "location-partial": ("Held", "LocationAmbiguous"),
         }
+        manifest = json.loads((Path(__file__).resolve().parents[2] / "dev/ingestion-manifest.json").read_bytes())
+        bounds = {(annotation["connection"], annotation["kind"]): str(int(datetime.fromisoformat(annotation["created_at"]).timestamp())) for annotation in manifest["annotations"] if annotation["device"] == "device-1"}
         sessions = []
         for connection, (classification, reason) in expected.items():
-            sessions.append({"vehicle":"vehicle-a", "connection":connection, "start_utc_seconds":"1788264000", "end_utc_seconds":"1788264600", "classification":classification, "classification_reason":reason, "evidence_state":"complete", "observed_ac_kwh":"0.500000", "eligible_shared_charger_kwh":"0.500000" if classification == "SharedCharger" else "0.000000", "quality_flags":[], "exclusion_reasons":[] if classification == "SharedCharger" else ["OtherCharger" if classification == "OtherCharger" else reason]})
+            sessions.append({"vehicle":"vehicle-a", "connection":connection, "start_utc_seconds":bounds[(connection, "start")], "end_utc_seconds":bounds[(connection, "end")], "classification":classification, "classification_reason":reason, "evidence_state":"complete", "observed_ac_kwh":"0.500000", "eligible_shared_charger_kwh":"0.500000" if classification == "SharedCharger" else "0.000000", "quality_flags":[], "exclusion_reasons":[] if classification == "SharedCharger" else ["OtherCharger" if classification == "OtherCharger" else reason]})
         from test_viewing import complete_results
         for session in sessions:
             session["pricing"] = complete_results()["sessions"][0]["pricing"] if session["classification"] == "SharedCharger" else {"state": "ineligible", "hold_reason": "IneligibleSession", "quote": None}
         result = {"monthly": {}, "pricing": {}, "owner":"owner-a", "vehicle":"vehicle-a", "state":"held", "observed_ac_kwh":"3.500000", "eligible_shared_charger_kwh":"1.000000", "evidence_boundary":"synthetic", "revision":"synthetic", "provenance":{}, "sessions":sessions}
         acceptance.assert_location_sessions(result, expected, "1.000000")
-        for change in [lambda value: value.update(eligible_shared_charger_kwh="0.000000"), lambda value: value["sessions"][0].update(classification="OtherCharger"), lambda value: value["sessions"][0].update(classification_reason="LocationUnavailable"), lambda value: value["sessions"][0].update(latitude=12.3456789), lambda value: value["sessions"][0].update(quality_flags=["ConflictingEvidence"]), lambda value: value["sessions"][2].update(pricing={"state": "quoted", "hold_reason": None, "quote": {"exact_cost": "0.1 USD"}})]:
+        for change in [lambda value: value.update(eligible_shared_charger_kwh="0.000000"), lambda value: value["sessions"][0].update(classification="OtherCharger"), lambda value: value["sessions"][0].update(classification_reason="LocationUnavailable"), lambda value: value["sessions"][0].update(latitude=12.3456789), lambda value: value["sessions"][0].update(quality_flags=["ConflictingEvidence"]), lambda value: value["sessions"][2].update(pricing={"state": "quoted", "hold_reason": None, "quote": {"exact_cost": "0.1 USD"}}), lambda value: value["sessions"][2].update(start_utc_seconds="1788264000"), lambda value: value["sessions"][2].update(end_utc_seconds="1788264600"), lambda value: value["sessions"][2].pop("start_utc_seconds"), lambda value: value["sessions"][2].pop("end_utc_seconds")]:
             changed = json.loads(json.dumps(result))
             change(changed)
             with self.assertRaisesRegex(acceptance.AcceptanceFailure, "location-classification"):
