@@ -488,8 +488,8 @@ fn rebuild_replays_original_offsets_into_a_separate_versioned_dataset() {
         producer.send(BaseRecord::to("unit_V").partition(0).key("device-a").payload(&payload).headers(headers)).unwrap();
     }
     producer.flush(Duration::from_secs(5)).unwrap();
-    let directory =
-        std::env::temp_dir().join(format!("chargeshare-inline-rebuild-{}", std::process::id()));
+    let directory = std::path::Path::new("/tmp")
+        .join(format!("chargeshare-inline-rebuild-{}", std::process::id()));
     for path in [
         &directory,
         &directory.join("original"),
