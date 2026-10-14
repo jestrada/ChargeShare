@@ -11,11 +11,11 @@ rules are in [AGENTS](../AGENTS.md) and [code design](code-design.md).
 
 | Component | Responsibility |
 | --- | --- |
-| `chargeshare-core` | Rust domain: scoped replay, exact energy/money and local-time sample pricing |
+| `chargeshare-core` | Rust domain: scoped replay, exact energy/money and local-time sample pricing and monthly charging aggregation |
 | `chargeshare-ingestion` | Synthetic normalization and live state adaptation, Kafka consumption, SQLite transactions/recovery and committed scoped HTTP results |
 | `chargeshare-harness` | Rust sender/verifier for finite fictional receiver traffic; requires protocol ACKs and matching new Kafka records |
 | `chargeshare-preview` | Independent Rust fixture API with core-calculated sample prices |
-| `apps/web` | React/TypeScript and shadcn; separate persisted and fixture entries/bundles, shared visual components |
+| `apps/web` | React/TypeScript and shadcn; separate persisted and fixture entries/bundles; D3 scale/shape modules for daily stacked bars |
 | External receiver and Kafka | Pinned official Go Fleet Telemetry receiver and private single-broker synthetic transport |
 | `scripts/dev` and Tilt | Owned startup, readiness, source epochs, finite acceptance, shutdown and explicit reset |
 
@@ -46,13 +46,15 @@ flowchart LR
         config["Owner charger config + immutable rate histories"] --> sqlite
         sqlite --> replay["Scoped core replay"]
         replay --> classification["Core: automatic session location classification"]
-        classification --> results["Committed energy + eligibility + quotes + provenance"]
+        classification --> results["Committed energy + eligibility + quotes + monthly history + provenance"]
         classification --> pricing["Core: observed-window coverage + local-time splits + exact quotes + holds"]
         sqlite --> pricing
+        pricing --> monthly["Core: exact period/day/month totals + evidence notices"]
+        monthly --> results
         pricing --> results
         results --> api["Scoped HTTP: host loopback 8788"]
     end
-    api --> persisted["Persisted browser entry: 5174"]
+    api --> persisted["Persisted browser: 5174, D3 monthly bars + compact vehicle selector"]
     subgraph fixture["Independent fixture preview"]
         demo["Fictional events + sample rates"] --> offline["Core exact offline pricing"]
         offline --> fixture_api["Fixture API: loopback 8787"]
@@ -99,7 +101,7 @@ There are no aggregate, mutation or pricing endpoints in this API.
 Responses contain aliases, exact six-decimal observed/eligible/priced kWh, sessions,
 exact quotes and once-rounded scoped subtotals, quality/exclusion and rate-hold
 reasons, mode-specific measurement labels and explicit estimate boundaries, allowlisted rate/time provenance
-and a deterministic semantic revision. Revisions reflect visible domain results
+and a deterministic semantic revision. Revisions reflect visible domain results, the local calendar day
 and provenance, not requests or redelivery; they are not cryptographic tokens.
 No coordinates, raw payload, device identity, credentials, paths, offsets or logs
 are served. Session results include `SharedCharger`, `OtherCharger` or `Held` and
@@ -107,6 +109,39 @@ are served. Session results include `SharedCharger`, `OtherCharger` or `Held` an
 The overall state is empty, eligible when every session is eligible, or held when
 any session remains held or excluded. Results provenance identifies the loaded
 geofence version; classification reasons are separate from evidence quality.
+
+The existing results response includes `monthly` history derived in the core
+from the same scoped committed quotes, without new persistence, repricing or
+energy reallocation. The adapter supplies the current UTC clock instant; the
+core resolves `today` in `America/Los_Angeles`. The current month comes first,
+followed by months with dated retained evidence, newest first. Each month returns
+calendar bounds and every calendar day, including empty and marked future days.
+Ordered Off-peak, Part-peak and Peak totals retain six-decimal kWh and exact USD;
+each period/day/month display cost rounds its exact subtotal once. Only quoted
+shared-charger slices contribute energy/cost. Totals are absent when no quotes
+exist; quoted zero energy keeps an explicit zero total. Evidence counts and
+quality flags distinguish held, other-charger, partial and complete-zero evidence.
+Quoted partial evidence marks only the observed slice days. Unquoted and zero
+sessions use available connection/counter bounds for calendar placement, with
+half-open connection spans; undated evidence has a separate count. Session
+responses expose available UTC start/end bounds in both modes. Counts represent
+unique sessions within each day/month, so a crossing session can appear in
+multiple calendar summaries. `results-v2` revisions include these additions and
+advance on a local calendar rollover; replay provenance is `scoped-core-replay-v3`.
+
+D3's `d3-scale` and `d3-shape` position the browser's daily stacks using returned
+exact totals converted to numbers only for geometry. Bars toggle between
+estimated cost and kWh, defaulting to cost. Hover, tap and keyboard selection
+share one returned day breakdown; a full-width day selector provides larger
+phone targets. Monthly totals sit alongside charts on desktop and below them
+on narrow screens. Held sessions are excluded with a small notice, and
+other-charger energy remains excluded. Scope changes clear charts and selected
+days while preserving refresh, timeout and unavailable/refused behavior.
+Configuration exposes only the charger label, rate plan, effective dates,
+timezone, period rates and public sample source. Session quality and pricing
+information remain reachable; connection IDs, semantic revisions, source epochs,
+internal version dumps and geofence configuration are hidden in the owner view.
+No geofence radius/center fields are added.
 
 The persisted UI separates empty, complete zero, incomplete/held, refused and
 unavailable states. Scope changes hide prior results; failed reads clear them.

@@ -1,5 +1,6 @@
 use chargeshare_core::{
-    ChargerClassification, Energy, OwnerId, PricingError, PricingHold, QualityFlag, Session,
+    CHARGING_PERIODS, ChargerClassification, ChargingEvidence, ChargingTotal, Energy,
+    MonthlyHistory, MonthlyHistoryError, OwnerId, PricingError, PricingHold, QualityFlag, Session,
     TOU_CALCULATION_VERSION, TimeOfUseQuote, VehicleId,
 };
 use serde::Serialize;
@@ -16,6 +17,7 @@ pub struct ScopedResults {
     pub eligible_shared_charger_kwh: String,
     pub sessions: Vec<SessionResult>,
     pub pricing: PricingResult,
+    pub monthly: MonthlyResult,
     pub provenance: ResultProvenance,
     pub revision: String,
 }
@@ -24,6 +26,8 @@ pub struct ScopedResults {
 pub struct SessionResult {
     pub vehicle: String,
     pub connection: String,
+    pub start_utc_seconds: Option<String>,
+    pub end_utc_seconds: Option<String>,
     pub classification: &'static str,
     pub classification_reason: String,
     pub evidence_state: &'static str,
@@ -46,6 +50,131 @@ pub struct CounterCoverageResult {
     pub partial_start: bool,
     pub partial_end: bool,
     pub quantization: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ChargingTotalResult {
+    pub ac_kwh: String,
+    pub exact_cost: String,
+    pub display_cost: String,
+}
+
+impl From<ChargingTotal> for ChargingTotalResult {
+    fn from(total: ChargingTotal) -> Self {
+        Self {
+            ac_kwh: kwh(total.energy),
+            exact_cost: total.exact_cost.to_string(),
+            display_cost: display_usd(total.exact_cost.round_half_up_to_cents()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PeriodTotalResult {
+    pub period: &'static str,
+    #[serde(flatten)]
+    pub total: ChargingTotalResult,
+}
+
+fn period_totals(periods: [ChargingTotal; 3]) -> Vec<PeriodTotalResult> {
+    CHARGING_PERIODS
+        .into_iter()
+        .zip(periods)
+        .map(|(period, total)| PeriodTotalResult {
+            period,
+            total: total.into(),
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ChargingEvidenceResult {
+    pub quoted_sessions: usize,
+    pub held_sessions: usize,
+    pub other_sessions: usize,
+    pub partial_sessions: usize,
+    pub complete_zero_sessions: usize,
+    pub quality_flags: Vec<String>,
+}
+
+impl From<ChargingEvidence> for ChargingEvidenceResult {
+    fn from(evidence: ChargingEvidence) -> Self {
+        Self {
+            quoted_sessions: evidence.quoted_sessions,
+            held_sessions: evidence.held_sessions,
+            other_sessions: evidence.other_sessions,
+            partial_sessions: evidence.partial_sessions,
+            complete_zero_sessions: evidence.complete_zero_sessions,
+            quality_flags: evidence
+                .quality_flags
+                .iter()
+                .map(|flag| format!("{flag:?}"))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DayResult {
+    pub local_date: String,
+    pub future: bool,
+    pub periods: Vec<PeriodTotalResult>,
+    pub total: Option<ChargingTotalResult>,
+    pub evidence: ChargingEvidenceResult,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MonthResult {
+    pub month: String,
+    pub first_date: String,
+    pub last_date: String,
+    pub periods: Vec<PeriodTotalResult>,
+    pub total: Option<ChargingTotalResult>,
+    pub evidence: ChargingEvidenceResult,
+    pub days: Vec<DayResult>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MonthlyResult {
+    pub timezone: &'static str,
+    pub today: String,
+    pub evidence: ChargingEvidenceResult,
+    pub undated_sessions: usize,
+    pub months: Vec<MonthResult>,
+}
+
+impl From<MonthlyHistory> for MonthlyResult {
+    fn from(history: MonthlyHistory) -> Self {
+        Self {
+            timezone: "America/Los_Angeles",
+            today: history.today.to_string(),
+            evidence: history.evidence.into(),
+            undated_sessions: history.undated_sessions,
+            months: history
+                .months
+                .into_iter()
+                .map(|month| MonthResult {
+                    month: month.first_date.format("%Y-%m").to_string(),
+                    first_date: month.first_date.to_string(),
+                    last_date: month.last_date.to_string(),
+                    periods: period_totals(month.periods),
+                    total: (month.evidence.quoted_sessions > 0).then(|| month.total.into()),
+                    evidence: month.evidence.into(),
+                    days: month
+                        .days
+                        .into_iter()
+                        .map(|day| DayResult {
+                            local_date: day.local_date.to_string(),
+                            future: day.future,
+                            periods: period_totals(day.periods),
+                            total: (day.evidence.quoted_sessions > 0).then(|| day.total.into()),
+                            evidence: day.evidence.into(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
 }
 
 pub const LIVE_QUANTIZATION: &str = "Live counters quantized once to 0.000001 kWh, decimal half-up";
@@ -196,6 +325,19 @@ fn results_from_replay(
             }
             PricingError::Ledger(_) => IngestionError::DomainReplay,
         })?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| IngestionError::DomainReplay)?
+        .as_secs();
+    let monthly = prices
+        .monthly_history(i64::try_from(now).map_err(|_| IngestionError::DomainReplay)?)
+        .map_err(|error| match error {
+            MonthlyHistoryError::Calendar => IngestionError::DomainReplay,
+            MonthlyHistoryError::EnergyOverflow | MonthlyHistoryError::Money(_) => {
+                IngestionError::PricingOverflow
+            }
+        })?
+        .into();
     let mut sessions = Vec::new();
     for priced in prices.sessions {
         if priced.session.id.vehicle != *vehicle || priced.session.owner != *owner {
@@ -271,6 +413,7 @@ fn results_from_replay(
             ineligible_session_count,
         },
         sessions,
+        monthly,
         provenance: ResultProvenance {
             source: if manifest.is_live() {
                 "live-receiver-kafka"
@@ -282,7 +425,7 @@ fn results_from_replay(
             mapping_version: config.mapping_version.clone(),
             manifest_version: config.manifest_version.clone(),
             normalizer_version: config.normalizer_version.clone(),
-            calculation_version: "scoped-core-replay-v2",
+            calculation_version: "scoped-core-replay-v3",
             geofence_version: config.geofence_version.clone(),
         },
         revision: String::new(),
@@ -291,7 +434,7 @@ fn results_from_replay(
     let hash = canonical.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
     });
-    result.revision = format!("results-v1-{hash:016x}");
+    result.revision = format!("results-v2-{hash:016x}");
     Ok(result)
 }
 
@@ -310,6 +453,8 @@ impl From<Session> for SessionResult {
             },
             vehicle: session.id.vehicle.as_str().to_owned(),
             connection: session.id.connection.as_str().to_owned(),
+            start_utc_seconds: session.start_time.map(|time| time.to_string()),
+            end_utc_seconds: session.end_time.map(|time| time.to_string()),
             classification: match session.classification {
                 ChargerClassification::Held => "Held",
                 ChargerClassification::SharedCharger => "SharedCharger",
@@ -489,6 +634,15 @@ mod tests {
         );
         assert_ne!(held.revision, before.revision);
         let zero = response(&replay_fixture(&future, true), &future, "a");
+        let month = zero
+            .monthly
+            .months
+            .iter()
+            .find(|month| month.month == "2026-09")
+            .unwrap();
+        assert_eq!(month.evidence.complete_zero_sessions, 1);
+        assert_eq!(month.days[0].total.as_ref().unwrap().display_cost, "$0.00");
+        assert_eq!(month.days[0].evidence.complete_zero_sessions, 1);
         assert_eq!(zero.sessions[0].evidence_state, "complete_zero");
         assert_eq!(zero.pricing.display_subtotal.as_deref(), Some("$0.00"));
         assert_eq!(

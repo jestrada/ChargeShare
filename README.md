@@ -25,9 +25,14 @@ nix develop --no-update-lock-file -c bash scripts/dev/poc.sh check
 ```
 
 Choose `owner-a` / `vehicle-a` or `owner-b` / `vehicle-b` in the dashboard. The
-complete sample has 0.500000 / 0.250000 observed AC kWh; sessions currently stay
-`Unconfirmed` with zero eligible energy. Automatic location classification is
-planned in [#22](https://github.com/jestrada/ChargeShare/issues/22).
+complete sample has 0.500000 / 0.250000 observed AC kWh. Use the compact
+owner/vehicle selector to view monthly daily bars by Off-peak, Part-peak and Peak.
+Bars default to estimated cost; switch to kWh and hover, tap or select a day for
+its breakdown. Monthly totals include only quoted shared-charger energy; held
+sessions are excluded with a notice, and partial coverage is flagged. Rates are
+public samples, energy is vehicle-reported AC input with unvalidated physical
+accuracy, and estimated charging cost is not a bill. Configuration and useful
+session information are separate from the chart.
 
 Restart or stop while preserving evidence:
 
