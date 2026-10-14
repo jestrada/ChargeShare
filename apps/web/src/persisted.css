@@ -36,3 +36,50 @@
 .persisted-panel, .persisted-energy dd, .persisted-scopes .control { overflow-wrap: anywhere; min-width: 0; }
 .persisted-scopes .control { white-space: normal; height: auto; }
 .persisted-coverage { display: grid; gap: 8px; min-width: 0; }
+
+.persisted-controls { display: flex; align-items: end; gap: 8px; min-width: 0; }
+.persisted-selector, .charging-day-selector { display: grid; gap: 4px; min-width: 0; font-size: 14px; }
+.persisted-selector select, .charging-day-selector select { min-height: 44px; max-width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--background); color: var(--foreground); font: inherit; }
+.persisted-selector select { width: 210px; }
+.monthly-charging { display: grid; gap: 16px; min-width: 0; }
+.charging-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.charging-toolbar > div { display: flex; gap: 4px; }
+.charging-legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 14px; }
+.charging-legend span { display: flex; align-items: center; gap: 6px; }
+.charging-legend i { width: 12px; height: 12px; border-radius: 3px; }
+.period-off_peak { fill: #3687a1; background: #3687a1; }
+.period-part_peak { fill: #c7902f; background: #c7902f; }
+.period-peak { fill: #a765a8; background: #a765a8; }
+.charging-notice { font-size: 14px; }
+.charging-month { border-top: 1px solid var(--border); padding-top: 16px; display: grid; gap: 12px; min-width: 0; }
+.charging-month-row { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 20px; }
+.charging-chart { min-width: 0; }
+.charging-chart svg { display: block; width: 100%; overflow: visible; }
+.charging-chart text { fill: var(--muted-foreground); font-size: 14px; }
+.charging-grid line { stroke: var(--border); }
+.charging-hit { fill: transparent; }
+.charging-future .charging-hit { fill: var(--muted-foreground); opacity: 0.08; }
+.charging-bar { cursor: pointer; }
+.charging-bar:focus { outline: none; }
+.charging-bar:focus-visible .charging-hit, .charging-bar[aria-pressed="true"] .charging-hit { stroke: var(--primary); stroke-width: 2; }
+.charging-day-selector { margin-top: 8px; }
+.charging-day-selector select { width: 100%; }
+.charging-month-total, .charging-breakdown { display: grid; gap: 12px; min-width: 0; }
+.charging-month-total dt, .charging-breakdown dt { color: var(--muted-foreground); font-size: 14px; }
+.charging-month-total dd { font-size: 18px; font-variant-numeric: tabular-nums; }
+.charging-month-total > div:first-child dd { font-size: 26px; }
+.charging-day-detail { border: 1px solid var(--border); border-radius: 8px; padding: 16px; display: grid; gap: 8px; }
+.charging-breakdown { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.persisted-history > summary { cursor: pointer; padding: 12px 0; min-height: 44px; }
+@media (max-width: 700px) {
+  .persisted-heading h1 { font-size: 28px; }
+  .persisted-controls { width: 100%; }
+  .persisted-selector { flex: 1; }
+  .persisted-selector select { width: 100%; }
+  .persisted-panel { padding: 16px; }
+  .charging-month-row { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .charging-month-total { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .charging-month-total > div:first-child dd { font-size: 22px; }
+  .charging-chart text { font-size: 28px; }
+  .charging-breakdown { grid-template-columns: minmax(0, 1fr); }
+}

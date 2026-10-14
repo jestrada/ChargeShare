@@ -109,6 +109,38 @@ fn selected_shared_charger_rates_price_isolated_owner_scopes_and_restart_replay_
     assert_eq!(b.pricing.display_subtotal.as_deref(), Some("$0.06"));
     assert_eq!(a.pricing.charger_id, b.pricing.charger_id);
     assert_eq!(a.pricing.rate_models, b.pricing.rate_models);
+    for result in [&a, &b] {
+        let month = result
+            .monthly
+            .months
+            .iter()
+            .find(|month| month.month == "2026-09")
+            .unwrap();
+        let total = month.total.as_ref().unwrap();
+        assert_eq!(total.ac_kwh, result.pricing.priced_ac_kwh);
+        assert_eq!(
+            Some(&total.exact_cost),
+            result.pricing.exact_subtotal.as_ref()
+        );
+        assert_eq!(
+            Some(&total.display_cost),
+            result.pricing.display_subtotal.as_ref()
+        );
+        assert_eq!(month.days.len(), 30);
+        assert_eq!(month.days[0].total, month.total);
+        assert!(month.days[1..].iter().all(|day| day.total.is_none()));
+        assert_eq!(month.evidence.quoted_sessions, 1);
+        assert_eq!(result.monthly.evidence.held_sessions, 0);
+        assert_eq!(result.monthly.undated_sessions, 0);
+        assert_eq!(
+            result.sessions[0].start_utc_seconds.as_deref(),
+            Some("1788264000")
+        );
+        assert_eq!(
+            result.sessions[0].end_utc_seconds.as_deref(),
+            Some("1788264600")
+        );
+    }
     assert_eq!(a.observed_ac_kwh, "0.500000");
     assert_eq!(b.observed_ac_kwh, "0.250000");
     assert_eq!(a.eligible_shared_charger_kwh, a.observed_ac_kwh);
@@ -220,6 +252,23 @@ fn missing_selected_coverage_holds_the_whole_session_without_changing_eligibilit
     assert_eq!(held.sessions[0].pricing.quote, None);
     assert_eq!(held.pricing.exact_subtotal, None);
     assert_eq!(held.pricing.display_subtotal, None);
+    assert_eq!(held.monthly.evidence.held_sessions, 1);
+    let month = held
+        .monthly
+        .months
+        .iter()
+        .find(|month| month.month == "2026-09")
+        .unwrap();
+    assert_eq!(month.evidence.held_sessions, 1);
+    assert_eq!(month.days[0].evidence.held_sessions, 1);
+    assert!(month.total.is_none());
+    assert!(month.days.iter().all(|day| day.total.is_none()));
+    assert!(
+        month
+            .periods
+            .iter()
+            .all(|period| period.total.ac_kwh == "0.000000")
+    );
     assert_eq!(held.observed_ac_kwh, before.observed_ac_kwh);
     assert_eq!(
         held.eligible_shared_charger_kwh,

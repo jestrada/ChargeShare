@@ -17,9 +17,10 @@ def complete_results(owner="owner-a", vehicle="vehicle-a", energy="0.500000"):
     eligible = energy if shared else "0.000000"
     result = {
         "owner": owner, "vehicle": vehicle, "state": "eligible" if shared else "held", "evidence_boundary": "Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated",
-        "observed_ac_kwh": energy, "eligible_shared_charger_kwh": eligible, "revision": "results-v1-0123456789abcdef",
-        "provenance": {"source": "synthetic-receiver-kafka", "source_epoch": "synthetic-epoch", "input_contract": "tesla-v-bd076fe-v1", "mapping_version": "fictional-mapping-v1", "manifest_version": "fictional-manifest-v1", "normalizer_version": "chargeshare-normalizer-v1", "calculation_version": "scoped-core-replay-v2", "geofence_version": "fictional-geofence-v1"},
-        "sessions": [{"vehicle": vehicle, "connection": "connection-1", "classification": "SharedCharger" if shared else "OtherCharger", "classification_reason": "InsideGeofence" if shared else "OutsideGeofence", "evidence_state": "complete", "observed_ac_kwh": energy, "eligible_shared_charger_kwh": eligible, "quality_flags": [], "exclusion_reasons": [] if shared else ["OtherCharger"]}],
+        "observed_ac_kwh": energy, "eligible_shared_charger_kwh": eligible, "revision": "results-v2-0123456789abcdef",
+        "provenance": {"source": "synthetic-receiver-kafka", "source_epoch": "synthetic-epoch", "input_contract": "tesla-v-bd076fe-v1", "mapping_version": "fictional-mapping-v1", "manifest_version": "fictional-manifest-v1", "normalizer_version": "chargeshare-normalizer-v1", "calculation_version": "scoped-core-replay-v3", "geofence_version": "fictional-geofence-v1"},
+        "monthly": {},
+        "sessions": [{"vehicle": vehicle, "connection": "connection-1", "start_utc_seconds": "1788264000", "end_utc_seconds": "1788264600", "classification": "SharedCharger" if shared else "OtherCharger", "classification_reason": "InsideGeofence" if shared else "OutsideGeofence", "evidence_state": "complete", "observed_ac_kwh": energy, "eligible_shared_charger_kwh": eligible, "quality_flags": [], "exclusion_reasons": [] if shared else ["OtherCharger"]}],
     }
     index = 0 if owner == "owner-a" else 1
     golden = viewing.PRICING_GOLDEN
@@ -45,7 +46,7 @@ class HttpAcceptanceTests(unittest.TestCase):
         with mock.patch.object(viewing, "scoped_results", side_effect=[first, first, second, second]), mock.patch.object(viewing, "http_document", return_value={"error": "scope_refused"}) as get:
             self.assertEqual(viewing.assert_http_scopes(), [first, second])
             get.assert_called_once_with("/api/poc/owners/owner-a/vehicles/vehicle-b/results", 404)
-        changed = dict(first, revision="results-v1-aaaaaaaaaaaaaaaa")
+        changed = dict(first, revision="results-v2-aaaaaaaaaaaaaaaa")
         with mock.patch.object(viewing, "scoped_results", side_effect=[first, changed]), self.assertRaisesRegex(runtime.RuntimeFailure, "revision"):
             viewing.assert_http_scopes()
         with mock.patch.object(viewing, "scoped_results", return_value=first), self.assertRaises(runtime.RuntimeFailure):

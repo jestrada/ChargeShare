@@ -5,6 +5,7 @@ mod identity;
 mod ledger;
 mod location;
 mod money;
+mod monthly;
 mod pricing;
 mod session;
 mod tariff;
@@ -17,6 +18,10 @@ pub use identity::{ConnectionId, OwnerId, SessionId, VehicleId};
 pub use ledger::{Ledger, SessionReasons, Summary};
 pub use location::{ChargerGeofence, LocationPoint, LocationSample};
 pub use money::{ExactUsd, MoneyError, UsdCents, UsdRate};
+pub use monthly::{
+    CHARGING_PERIODS, ChargingDay, ChargingEvidence, ChargingMonth, ChargingTotal, MonthlyHistory,
+    MonthlyHistoryError,
+};
 pub use pricing::{
     CostLine, PricingError, PricingHold, PricingSummary, SessionPricing, SessionQuote,
 };

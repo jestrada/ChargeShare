@@ -33,6 +33,8 @@ export type CounterCoverage = {
 export type SessionResult = {
   vehicle: string
   connection: string
+  start_utc_seconds: string | null
+  end_utc_seconds: string | null
   classification: "SharedCharger" | "OtherCharger" | "Held"
   classification_reason: "InsideGeofence" | "OutsideGeofence" | "LocationUnavailable" | "LocationAmbiguous"
   evidence_state: "complete" | "complete_zero" | "incomplete" | "partial"
@@ -50,6 +52,7 @@ export type ScopedResults = Scope & {
   eligible_shared_charger_kwh: string
   sessions: SessionResult[]
   pricing: PricingResult
+  monthly: MonthlyHistory
   revision: string
   provenance: {
     source: string
@@ -62,6 +65,26 @@ export type ScopedResults = Scope & {
     geofence_version: string
   }
 }
+export const chargingPeriods = ["off_peak", "part_peak", "peak"] as const
+export type ChargingPeriod = typeof chargingPeriods[number]
+export type ChargingTotal = { ac_kwh: string; exact_cost: string; display_cost: string }
+export type PeriodTotal = ChargingTotal & { period: ChargingPeriod }
+export type ChargingEvidence = {
+  quoted_sessions: number; held_sessions: number; other_sessions: number
+  partial_sessions: number; complete_zero_sessions: number; quality_flags: string[]
+}
+export type ChargingDay = {
+  local_date: string; future: boolean; periods: PeriodTotal[]
+  total: ChargingTotal | null; evidence: ChargingEvidence
+}
+export type ChargingMonth = {
+  month: string; first_date: string; last_date: string; days: ChargingDay[]
+  periods: PeriodTotal[]; total: ChargingTotal | null; evidence: ChargingEvidence
+}
+export type MonthlyHistory = {
+  timezone: string; today: string; months: ChargingMonth[]
+  evidence: ChargingEvidence; undated_sessions: number
+}
 export const scopes: Scope[] = [
   { owner: "owner-a", vehicle: "vehicle-a" },
   { owner: "owner-b", vehicle: "vehicle-b" },
@@ -69,8 +92,8 @@ export const scopes: Scope[] = [
 const qualityReasons = ["InsufficientCounterReadings", "MissingConnectionStart", "MissingConnectionEnd", "MissingBaseline", "MissingTerminalSample", "CounterRollback", "ConflictingEvidence", "InvalidBoundaryOrder", "InvalidCounter(Invalid)", "InvalidCounter(Negative)", "InvalidCounter(UnsupportedPrecision)", "InvalidCounter(Overflow)"]
 const exclusionReasons = ["LocationUnavailable", "LocationAmbiguous", "OtherCharger", "DcEvidence", "AmbiguousChargeType"]
 const classificationReasons = { SharedCharger: ["InsideGeofence"], OtherCharger: ["OutsideGeofence"], Held: ["LocationUnavailable", "LocationAmbiguous"] }
-const resultKeys = ["owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "revision", "provenance", "pricing"]
-const sessionKeys = ["vehicle", "connection", "classification", "classification_reason", "evidence_state", "observed_ac_kwh", "eligible_shared_charger_kwh", "quality_flags", "exclusion_reasons", "pricing"]
+const resultKeys = ["owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "revision", "provenance", "pricing", "monthly"]
+const sessionKeys = ["vehicle", "connection", "start_utc_seconds", "end_utc_seconds", "classification", "classification_reason", "evidence_state", "observed_ac_kwh", "eligible_shared_charger_kwh", "quality_flags", "exclusion_reasons", "pricing"]
 const provenanceKeys = ["source", "source_epoch", "input_contract", "mapping_version", "manifest_version", "normalizer_version", "calculation_version", "geofence_version"]
 function hasExactKeys(value: unknown, keys: string[]) {
   return !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === keys.length && Object.keys(value).every(key => keys.includes(key))
@@ -99,12 +122,13 @@ export function parseResults(value: unknown, scope: Scope): ScopedResults {
   if (!hasExactKeys(object, resultKeys) || object.owner !== scope.owner || object.vehicle !== scope.vehicle ||
       !["empty", "held", "eligible"].includes(object.state) || !energy(object.observed_ac_kwh) || !energy(object.eligible_shared_charger_kwh) ||
       !["Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated", "Vehicle-reported AC input counter energy; physical accuracy unvalidated"].includes(object.evidence_boundary) ||
-      typeof object.revision !== "string" || !/^results-v1-[a-f0-9]{16}$/.test(object.revision) ||
+      typeof object.revision !== "string" || !/^results-v2-[a-f0-9]{16}$/.test(object.revision) ||
       !Array.isArray(object.sessions) || (object.state === "empty") !== (object.sessions.length === 0) ||
       !hasExactKeys(object.provenance, provenanceKeys) || !["synthetic-receiver-kafka", "live-receiver-kafka"].includes(object.provenance.source) ||
-      object.provenance.calculation_version !== "scoped-core-replay-v2" ||
+      object.provenance.calculation_version !== "scoped-core-replay-v3" ||
       !provenanceKeys.every(key => typeof object.provenance[key as keyof ScopedResults["provenance"]] === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(object.provenance[key as keyof ScopedResults["provenance"]])) ||
       object.sessions.some(session => !hasExactKeys(session, object.provenance.source === "live-receiver-kafka" ? [...sessionKeys, "coverage"] : sessionKeys) || !validCoverage(session, object.provenance.source === "live-receiver-kafka") || session.vehicle !== scope.vehicle ||
+        ![session.start_utc_seconds, session.end_utc_seconds].every(epochSeconds) ||
         !/^[A-Za-z0-9_-]{1,64}$/.test(session.connection) ||
         !Object.hasOwn(classificationReasons, session.classification) ||
         !classificationReasons[session.classification].includes(session.classification_reason) ||
@@ -121,6 +145,7 @@ export function parseResults(value: unknown, scope: Scope): ScopedResults {
   if ((object.provenance.source === "live-receiver-kafka") !==
       (object.evidence_boundary === "Vehicle-reported AC input counter energy; physical accuracy unvalidated")) throw new Error("Persisted results unavailable")
   validatePricing(object)
+  validateMonthly(object)
   return object
 }
 function validCoverage(session: SessionResult, live: boolean) {
@@ -163,7 +188,9 @@ export function reasonLabel(reason: string) {
 }
 
 const alias = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value)
-const date = (value: unknown) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
+const date = (value: unknown) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+  Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
+const epochSeconds = (value: unknown) => value === null || typeof value === "string" && /^-?\d+$/.test(value)
 const localTime = (value: unknown) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/.test(value)
 const energyString = (value: unknown) => typeof value === "string" && /^\d+\.\d{6}$/.test(value)
 const exactCost = (value: unknown) => typeof value === "string" && /^\d+\.\d{16} USD$/.test(value)
@@ -220,4 +247,74 @@ export function pricingHoldLabel(reason: string | null) {
   if (reason === "UnresolvedRateBoundary") return "Rate held: a time boundary could not be resolved."
   if (reason === "NonIncreasingTime") return "Rate held: counter timestamps do not increase."
   return "No quote: automatic classification or evidence quality excludes this session."
+}
+
+function validateMonthly(results: ScopedResults) {
+  const refuse = () => { throw new Error("Persisted results unavailable") }
+  const history = results.monthly
+  const counts = ["quoted_sessions", "held_sessions", "other_sessions", "partial_sessions", "complete_zero_sessions"] as const
+  function validEvidence(evidence: ChargingEvidence) {
+    return hasExactKeys(evidence, [...counts, "quality_flags"]) &&
+      counts.every(key => Number.isSafeInteger(evidence[key]) && evidence[key] >= 0 && evidence[key] <= results.sessions.length) &&
+      evidence.partial_sessions + evidence.complete_zero_sessions <= evidence.quoted_sessions &&
+      Array.isArray(evidence.quality_flags) && evidence.quality_flags.every(flag => qualityReasons.includes(flag)) &&
+      new Set(evidence.quality_flags).size === evidence.quality_flags.length
+  }
+  function validTotal(total: ChargingTotal, period = false) {
+    return hasExactKeys(total, period ? ["period", "ac_kwh", "exact_cost", "display_cost"] : ["ac_kwh", "exact_cost", "display_cost"]) &&
+      energyString(total.ac_kwh) && exactCost(total.exact_cost) && displayCost(total.display_cost)
+  }
+  function validSummary(summary: { total: ChargingTotal | null; periods: PeriodTotal[]; evidence: ChargingEvidence }) {
+    return validEvidence(summary.evidence) && (summary.total === null ? summary.evidence.quoted_sessions === 0 : summary.evidence.quoted_sessions > 0 && validTotal(summary.total)) &&
+      Array.isArray(summary.periods) && summary.periods.length === 3 &&
+      summary.periods.every((period, index) => validTotal(period, true) && period.period === chargingPeriods[index] &&
+        (summary.total !== null || period.ac_kwh === "0.000000" && period.exact_cost === "0.0000000000000000 USD" && period.display_cost === "$0.00"))
+  }
+  if (!hasExactKeys(history, ["timezone", "today", "months", "evidence", "undated_sessions"]) ||
+      history.timezone !== "America/Los_Angeles" || !date(history.today) || !validEvidence(history.evidence) ||
+      !Number.isSafeInteger(history.undated_sessions) || history.undated_sessions < 0 || history.undated_sessions > results.sessions.length ||
+      !Array.isArray(history.months) || !history.months.length || history.months[0]?.month !== history.today.slice(0, 7)) refuse()
+  const evidence = history.evidence
+  const undatedSessions = results.sessions.filter(session => session.start_utc_seconds === null && session.end_utc_seconds === null &&
+    !session.coverage?.first_counter_utc_seconds && !session.coverage?.last_counter_utc_seconds && !session.pricing.quote?.slices.length).length
+  if (evidence.quoted_sessions !== results.pricing.quoted_session_count ||
+      history.undated_sessions !== undatedSessions ||
+      evidence.other_sessions !== results.sessions.filter(session => session.classification === "OtherCharger").length ||
+      evidence.held_sessions !== results.sessions.length - evidence.quoted_sessions - evidence.other_sessions ||
+      evidence.partial_sessions !== results.sessions.filter(session => session.pricing.state === "quoted" && session.evidence_state === "partial").length ||
+      evidence.complete_zero_sessions !== results.sessions.filter(session => session.pricing.state === "quoted" && session.evidence_state === "complete_zero").length) refuse()
+  const seen = new Set<string>()
+  for (const [index, month] of history.months.entries()) {
+    if (!hasExactKeys(month, ["month", "first_date", "last_date", "days", "periods", "total", "evidence"]) ||
+        typeof month.month !== "string" || !/^\d{4}-\d{2}$/.test(month.month) || seen.has(month.month) ||
+        index > 1 && month.month >= history.months[index - 1].month ||
+        !date(month.first_date) || month.first_date !== `${month.month}-01` || !date(month.last_date) || month.last_date.slice(0, 7) !== month.month ||
+        !validSummary(month) || !Array.isArray(month.days)) refuse()
+    seen.add(month.month)
+    const next = new Date(`${month.last_date}T00:00:00Z`)
+    next.setUTCDate(next.getUTCDate() + 1)
+    if (next.toISOString().slice(8, 10) !== "01" || month.days.length !== Number(month.last_date.slice(8))) refuse()
+    if (index && !month.days.some(day => day.evidence && day.evidence.quoted_sessions + day.evidence.held_sessions + day.evidence.other_sessions > 0)) refuse()
+    for (const [dayIndex, day] of month.days.entries()) {
+      if (!hasExactKeys(day, ["local_date", "future", "periods", "total", "evidence"]) ||
+          day.local_date !== `${month.month}-${String(dayIndex + 1).padStart(2, "0")}` ||
+          typeof day.future !== "boolean" || day.future !== (day.local_date > history.today) || !validSummary(day) ||
+          counts.some(key => day.evidence[key] > month.evidence[key] || month.evidence[key] > history.evidence[key])) refuse()
+    }
+  }
+  for (const session of results.sessions) {
+    for (const slice of session.pricing.quote?.slices ?? []) {
+      const day = history.months.find(month => month.month === slice.local_date.slice(0, 7))?.days.find(day => day.local_date === slice.local_date)
+      if (!day || !day.evidence.quoted_sessions || !day.total) refuse()
+    }
+  }
+}
+
+export function periodLabel(period: string) {
+  return { off_peak: "Off-peak", part_peak: "Part-peak", peak: "Peak" }[period as ChargingPeriod] ?? period.replaceAll("_", " ")
+}
+
+export function dayLabel(day: ChargingDay) {
+  const evidence = day.evidence
+  return `${day.local_date}: ${day.total ? `${day.total.ac_kwh} kWh, estimated charging cost ${day.total.display_cost}` : "No quoted charging"}${day.future ? " · Future day" : ""}${evidence.complete_zero_sessions ? " · Complete zero-energy evidence" : ""}${evidence.partial_sessions ? " · Partial coverage" : ""}${evidence.held_sessions ? " · Held sessions excluded" : ""}${evidence.other_sessions ? " · Other charger excluded" : ""}`
 }

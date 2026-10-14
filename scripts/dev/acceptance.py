@@ -44,12 +44,12 @@ def assert_coordinate_privacy(text, checkout):
 
 
 def assert_location_sessions(result, expected, eligible):
-    if set(result) != {"owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "provenance", "revision", "pricing"} or result["owner"] != "owner-a" or result["vehicle"] != "vehicle-a" or result["state"] != "held" or result["observed_ac_kwh"] != "3.500000" or result["eligible_shared_charger_kwh"] != eligible or len(result["sessions"]) != len(expected):
+    if set(result) != {"owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "provenance", "revision", "pricing", "monthly"} or result["owner"] != "owner-a" or result["vehicle"] != "vehicle-a" or result["state"] != "held" or result["observed_ac_kwh"] != "3.500000" or result["eligible_shared_charger_kwh"] != eligible or len(result["sessions"]) != len(expected):
         raise AcceptanceFailure("location-classification")
     sessions = {session["connection"]: session for session in result["sessions"]}
     for connection, (classification, reason) in expected.items():
         exclusions = [] if classification == "SharedCharger" else ["OtherCharger" if classification == "OtherCharger" else reason]
-        session = {"vehicle": "vehicle-a", "connection": connection, "classification": classification, "classification_reason": reason, "evidence_state": "complete", "observed_ac_kwh": "0.500000", "eligible_shared_charger_kwh": "0.500000" if classification == "SharedCharger" else "0.000000", "quality_flags": [], "exclusion_reasons": exclusions}
+        session = {"vehicle": "vehicle-a", "connection": connection, "start_utc_seconds": "1788264000", "end_utc_seconds": "1788264600", "classification": classification, "classification_reason": reason, "evidence_state": "complete", "observed_ac_kwh": "0.500000", "eligible_shared_charger_kwh": "0.500000" if classification == "SharedCharger" else "0.000000", "quality_flags": [], "exclusion_reasons": exclusions}
         actual = sessions.get(connection, {})
         if {key: value for key, value in actual.items() if key != "pricing"} != session:
             raise AcceptanceFailure("location-classification")

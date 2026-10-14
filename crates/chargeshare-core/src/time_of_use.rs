@@ -991,4 +991,268 @@ mod tests {
             timestamp("2026-09-06T12:00:00Z")
         );
     }
+
+    #[test]
+    fn monthly_history_conserves_slices_across_midnight_dst_and_rate_versions() {
+        let mut first = model();
+        first.effective_from = "2024-01-01".to_owned();
+        first.effective_until = Some("2026-10-01".to_owned());
+        let mut second = model();
+        second.id = "synthetic-v2".to_owned();
+        second.effective_from = "2026-10-01".to_owned();
+        for period in &mut second.periods {
+            period.rate = UsdRate::parse_per_kwh("0.004").unwrap();
+        }
+        let rates = RateModelHistory::new(vec![
+            RateModelVersion::new(first).unwrap(),
+            RateModelVersion::new(second).unwrap(),
+        ])
+        .unwrap();
+        let (ledger, vehicle) = ledger(&[
+            ("2024-02-29T20:00:00Z", "2024-02-29T21:00:00Z", "0"),
+            ("2026-03-08T09:30:00Z", "2026-03-08T10:30:00Z", "1"),
+            ("2026-09-01T21:30:00Z", "2026-09-01T23:30:00Z", "2"),
+            ("2026-10-01T06:30:00Z", "2026-10-01T07:30:00Z", "1"),
+            ("2026-11-01T08:30:00Z", "2026-11-01T09:30:00Z", "1"),
+            ("2026-11-01T10:30:00Z", "2026-11-01T11:30:00Z", "1"),
+        ]);
+        let pricing = ledger.time_of_use_pricing(&vehicle, &rates).unwrap();
+        let history = pricing
+            .monthly_history(timestamp("2026-12-02T00:00:00Z"))
+            .unwrap();
+        assert_eq!(
+            history
+                .months
+                .iter()
+                .map(|month| month.first_date.to_string())
+                .collect::<Vec<_>>(),
+            [
+                "2026-12-01",
+                "2026-11-01",
+                "2026-10-01",
+                "2026-09-01",
+                "2026-03-01",
+                "2024-02-01"
+            ]
+        );
+        assert_eq!(history.months[0].days.len(), 31);
+        assert_eq!(history.months[1].days.len(), 30);
+        assert_eq!(history.months[5].days.len(), 29);
+        assert!(!history.months[0].days[0].future);
+        assert!(history.months[0].days[1].future);
+        assert_eq!(history.months[0].evidence.quoted_sessions, 0);
+        assert_eq!(
+            history.months[1].days[0].total.energy,
+            Energy::parse_kwh("2").unwrap()
+        );
+        assert_eq!(
+            history.months[1].days[0]
+                .total
+                .exact_cost
+                .round_half_up_to_cents()
+                .as_cents(),
+            1
+        );
+        assert_eq!(history.months[1].evidence.quoted_sessions, 2);
+        assert_eq!(
+            history.months[3].days[0]
+                .periods
+                .map(|total| total.energy.to_string()),
+            ["0.500000 kWh", "1.000000 kWh", "0.500000 kWh"]
+        );
+        assert_eq!(history.months[3].evidence.quoted_sessions, 2);
+        assert_eq!(
+            history.months[5].days[28].evidence.complete_zero_sessions,
+            1
+        );
+        let mut total = crate::ChargingTotal::default();
+        for month in &history.months {
+            let day_energy = month
+                .days
+                .iter()
+                .try_fold(Energy::ZERO, |sum, day| sum.checked_add(day.total.energy))
+                .unwrap();
+            assert_eq!(month.total.energy, day_energy);
+            let day_cost = month
+                .days
+                .iter()
+                .try_fold(ExactUsd::ZERO, |sum, day| {
+                    sum.checked_add(day.total.exact_cost)
+                })
+                .unwrap();
+            assert_eq!(month.total.exact_cost, day_cost);
+            for day in &month.days {
+                assert_eq!(
+                    day.total.energy,
+                    day.periods
+                        .iter()
+                        .try_fold(Energy::ZERO, |sum, total| sum.checked_add(total.energy))
+                        .unwrap()
+                );
+                assert_eq!(
+                    day.total.exact_cost,
+                    day.periods
+                        .iter()
+                        .try_fold(ExactUsd::ZERO, |sum, total| sum
+                            .checked_add(total.exact_cost))
+                        .unwrap()
+                );
+            }
+            let period_energy = month
+                .periods
+                .iter()
+                .try_fold(Energy::ZERO, |sum, period| sum.checked_add(period.energy))
+                .unwrap();
+            assert_eq!(month.total.energy, period_energy);
+            let period_cost = month
+                .periods
+                .iter()
+                .try_fold(ExactUsd::ZERO, |sum, period| {
+                    sum.checked_add(period.exact_cost)
+                })
+                .unwrap();
+            assert_eq!(month.total.exact_cost, period_cost);
+            total.energy = total.energy.checked_add(month.total.energy).unwrap();
+            total.exact_cost = total
+                .exact_cost
+                .checked_add(month.total.exact_cost)
+                .unwrap();
+        }
+        assert_eq!(total.energy, pricing.priced_energy);
+        assert_eq!(total.exact_cost, pricing.exact_subtotal);
+        assert_eq!(
+            history,
+            pricing
+                .monthly_history(timestamp("2026-12-02T00:00:00Z"))
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn monthly_history_keeps_holds_other_chargers_zero_and_undated_evidence_separate() {
+        let (ledger, vehicle) = ledger(&[("2026-09-01T12:00:00Z", "2026-09-01T12:10:00Z", "1")]);
+        let mut pricing = ledger
+            .time_of_use_pricing(&vehicle, &RateModelHistory::new(vec![]).unwrap())
+            .unwrap();
+        let mut other = pricing.sessions[0].clone();
+        other.session.classification = crate::ChargerClassification::OtherCharger;
+        other.quote = Err(PricingHold::IneligibleSession);
+        pricing.sessions.push(other);
+        let mut undated = pricing.sessions[0].clone();
+        undated.session.start_time = None;
+        undated.session.end_time = None;
+        pricing.sessions.push(undated);
+        let history = pricing
+            .monthly_history(timestamp("2026-09-02T12:00:00Z"))
+            .unwrap();
+        assert_eq!(history.evidence.held_sessions, 2);
+        assert_eq!(history.evidence.other_sessions, 1);
+        assert_eq!(history.undated_sessions, 1);
+        assert_eq!(history.months[0].days[0].evidence.held_sessions, 1);
+        assert_eq!(history.months[0].days[0].evidence.other_sessions, 1);
+        assert!(
+            history.months[0]
+                .days
+                .iter()
+                .all(|day| day.total.energy == Energy::ZERO
+                    && day.total.exact_cost == ExactUsd::ZERO
+                    && day.evidence.quoted_sessions == 0)
+        );
+        assert_eq!(
+            pricing.monthly_history(i64::MAX),
+            Err(crate::MonthlyHistoryError::Calendar)
+        );
+    }
+
+    #[test]
+    fn monthly_history_flags_only_the_quoted_partial_counter_days() {
+        let (mut ledger, vehicle) = ledger(&[]);
+        ledger.use_observed_counter_window(&vehicle).unwrap();
+        for (index, (time, kind, counter)) in [
+            ("2026-09-01T06:00:00Z", EventKind::Start, None),
+            ("2026-09-01T12:00:00Z", EventKind::Sample, Some("1")),
+            ("2026-09-01T13:00:00Z", EventKind::Sample, Some("2")),
+            ("2026-09-02T08:00:00Z", EventKind::End, None),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            ledger
+                .ingest(Event {
+                    vehicle: Some(vehicle.clone()),
+                    connection: ConnectionId::new("partial-window").unwrap(),
+                    position: index as u64,
+                    time: timestamp(time),
+                    kind,
+                    charge_type: ChargeType::Ac,
+                    counter: counter.map(CounterReading::parse_kwh),
+                    location: LocationSample::InsideGeofence,
+                })
+                .unwrap();
+        }
+        let pricing = ledger.time_of_use_pricing(&vehicle, &history()).unwrap();
+        let monthly = pricing
+            .monthly_history(timestamp("2026-09-03T12:00:00Z"))
+            .unwrap();
+        assert_eq!(monthly.months.len(), 1);
+        assert_eq!(monthly.evidence.partial_sessions, 1);
+        assert_eq!(monthly.months[0].days[0].evidence.partial_sessions, 1);
+        assert_eq!(monthly.months[0].days[1].evidence.partial_sessions, 0);
+        assert_eq!(
+            monthly.months[0].total.energy,
+            Energy::parse_kwh("1").unwrap()
+        );
+    }
+
+    #[test]
+    fn monthly_calendar_rollover_and_half_open_holds_preserve_evidence_without_extra_days() {
+        let (ledger, vehicle) = ledger(&[("2026-10-01T06:30:00Z", "2026-10-01T07:00:00Z", "1")]);
+        let pricing = ledger
+            .time_of_use_pricing(&vehicle, &RateModelHistory::new(vec![]).unwrap())
+            .unwrap();
+        let before = pricing
+            .monthly_history(timestamp("2026-10-01T06:59:59Z"))
+            .unwrap();
+        let after = pricing
+            .monthly_history(timestamp("2026-10-01T07:00:00Z"))
+            .unwrap();
+        assert_eq!(before.months.len(), 1);
+        assert_eq!(before.today.to_string(), "2026-09-30");
+        assert_eq!(after.months.len(), 2);
+        assert_eq!(after.today.to_string(), "2026-10-01");
+        assert_eq!(after.months[0].evidence.held_sessions, 0);
+        assert_eq!(after.months[1], before.months[0]);
+        assert_eq!(after.months[1].days[29].evidence.held_sessions, 1);
+        let future = pricing
+            .monthly_history(timestamp("2026-08-01T12:00:00Z"))
+            .unwrap();
+        assert_eq!(future.months[0].first_date.to_string(), "2026-08-01");
+        assert_eq!(future.months[1].first_date.to_string(), "2026-09-01");
+        assert!(future.months[1].days.iter().all(|day| day.future));
+    }
+
+    #[test]
+    fn monthly_totals_refuse_energy_and_cost_overflow_without_partial_history() {
+        let (ledger, vehicle) = ledger(&[("2026-09-01T12:00:00Z", "2026-09-01T12:10:00Z", "1")]);
+        let mut pricing = ledger.time_of_use_pricing(&vehicle, &history()).unwrap();
+        let maximum_energy = Energy::parse_kwh("18446744073709.551615").unwrap();
+        pricing.sessions[0].quote.as_mut().unwrap().slices[0].energy = maximum_energy;
+        pricing.sessions.push(pricing.sessions[0].clone());
+        assert_eq!(
+            pricing.monthly_history(timestamp("2026-09-02T12:00:00Z")),
+            Err(crate::MonthlyHistoryError::EnergyOverflow)
+        );
+        let maximum_cost = UsdRate::parse_per_kwh("1844674407.3709551615")
+            .unwrap()
+            .cost_for(maximum_energy);
+        for session in &mut pricing.sessions {
+            let slice = &mut session.quote.as_mut().unwrap().slices[0];
+            slice.energy = Energy::parse_kwh("1").unwrap();
+            slice.exact_cost = maximum_cost;
+        }
+        assert_eq!(
+            pricing.monthly_history(timestamp("2026-09-02T12:00:00Z")),
+            Err(crate::MonthlyHistoryError::Money(MoneyError::CostOverflow))
+        );
+    }
 }
