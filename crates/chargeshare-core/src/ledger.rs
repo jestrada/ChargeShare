@@ -35,6 +35,7 @@ pub struct Ledger {
     owners: BTreeMap<VehicleId, OwnerId>,
     events: BTreeMap<VehicleId, BTreeMap<u64, BTreeSet<Event>>>,
     geofences: BTreeMap<OwnerId, ChargerGeofence>,
+    observed_window_vehicles: BTreeSet<VehicleId>,
 }
 
 impl Ledger {
@@ -64,6 +65,12 @@ impl Ledger {
 
     pub fn configure_charger(&mut self, owner: OwnerId, geofence: ChargerGeofence) {
         self.geofences.insert(owner, geofence);
+    }
+
+    pub fn use_observed_counter_window(&mut self, vehicle: &VehicleId) -> Result<(), LedgerError> {
+        self.owner(vehicle)?;
+        self.observed_window_vehicles.insert(vehicle.clone());
+        Ok(())
     }
 
     pub fn sessions(&self, scope: &VehicleId) -> Result<Vec<Session>, LedgerError> {
@@ -137,6 +144,7 @@ impl Ledger {
                 &evidence,
                 classification,
                 reason,
+                self.observed_window_vehicles.contains(scope),
             )?);
         }
         Ok(sessions)

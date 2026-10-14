@@ -10,15 +10,24 @@ use crate::{IngestionError, KafkaConfig, SourceBinding, Store};
 
 pub fn serve_results(
     listener: TcpListener,
-    mut store: Store,
+    store: Store,
     config: KafkaConfig,
     source: SourceBinding,
+    stop: &AtomicBool,
+) -> Result<(), IngestionError> {
+    let driver = LiveIngestion::connect(config, source, &store)?;
+    serve_with_driver(listener, store, driver, stop)
+}
+
+pub(crate) fn serve_with_driver(
+    listener: TcpListener,
+    mut store: Store,
+    mut driver: LiveIngestion,
     stop: &AtomicBool,
 ) -> Result<(), IngestionError> {
     listener
         .set_nonblocking(true)
         .map_err(|_| IngestionError::StorageUnavailable)?;
-    let mut driver = LiveIngestion::connect(config, source, &store)?;
     let mut failure = None;
     while !stop.load(Ordering::SeqCst) {
         if failure.is_none() {
@@ -29,7 +38,7 @@ pub fn serve_results(
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(_) => return Err(IngestionError::StorageUnavailable),
         }
-        if failure.is_some() {
+        if failure.is_some() || store.validate_live_storage().is_err() {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
@@ -102,11 +111,31 @@ fn route(request: &str, store: &Store, failure: Option<IngestionError>) -> (u16,
         return if failure.is_none() && store.validate_live_storage().is_ok() {
             (
                 200,
-                "{\"state\":\"ready\",\"synthetic_only\":true}".to_owned(),
+                format!(
+                    "{{\"state\":\"ready\",\"synthetic_only\":{}}}",
+                    !store.manifest.is_live()
+                ),
             )
         } else {
             safe_error(503, "results_unavailable")
         };
+    }
+    if parts[1] == "/api/poc/scopes" {
+        if failure.is_some() {
+            return safe_error(503, "results_unavailable");
+        }
+        let scopes: Vec<_> = store
+            .manifest
+            .config()
+            .mappings
+            .iter()
+            .map(|mapping| serde_json::json!({"owner": mapping.owner, "vehicle": mapping.vehicle}))
+            .collect();
+        return (
+            200,
+            serde_json::json!({"synthetic_only": !store.manifest.is_live(), "scopes": scopes})
+                .to_string(),
+        );
     }
     let path: Vec<_> = parts[1].split('/').collect();
     if path.len() != 8

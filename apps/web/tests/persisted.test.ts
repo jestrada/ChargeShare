@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { classificationLabel, reasonLabel, evidenceLabel, parseResults, resultPath, scopes, pricingBoundary, pricingHoldLabel } from "../src/persisted.ts"
+import { classificationLabel, reasonLabel, evidenceLabel, observationTime, parseResults, parseScopes, resultPath, scopes, pricingBoundary, livePricingBoundary, liveQuantization, pricingHoldLabel } from "../src/persisted.ts"
 
 function result() {
   return {
@@ -17,12 +17,60 @@ test("persisted client only constructs an explicitly scoped persisted route", ()
   assert.equal(resultPath(scopes[0]), "/api/poc/owners/owner-a/vehicles/vehicle-a/results")
   assert.equal(resultPath({ owner: "a/b", vehicle: "v?" }), "/api/poc/owners/a%2Fb/vehicles/v%3F/results")
 })
+test("configured scope discovery accepts live aliases and refuses private or malformed fields", () => {
+  const value = { synthetic_only: false, scopes: [{ owner: "fictional-owner", vehicle: "fictional-vehicle" }] }
+  assert.deepEqual(parseScopes(value), value)
+  assert.deepEqual(parseScopes({ synthetic_only: true, scopes }), { synthetic_only: true, scopes })
+  for (const invalid of [null, {}, { ...value, synthetic_only: "false" }, { ...value, scopes: [] },
+    { ...value, latitude: 12.3456789 }, { ...value, scopes: [...value.scopes, ...value.scopes] },
+    { ...value, scopes: [{ ...value.scopes[0], vin: "FICTIONAL-VIN-A" }] },
+    { ...value, scopes: [{ owner: "a/b", vehicle: "fictional-vehicle" }] }]) {
+    assert.throws(() => parseScopes(invalid))
+  }
+})
+test("live results retain their counter boundary and exact quotes without synthetic labeling", () => {
+  const value = quotedResult()
+  value.evidence_boundary = "Vehicle-reported AC input counter energy; physical accuracy unvalidated"
+  value.provenance.source = "live-receiver-kafka"
+  value.provenance.source_epoch = "live-fictional-charger-v1"
+  value.pricing.estimate_boundary = livePricingBoundary
+  value.sessions[0].coverage = { connection_start_utc_seconds: "1788264000", connection_end_utc_seconds: "1788264600", first_counter_utc_seconds: "1788264000", last_counter_utc_seconds: "1788264600", usable_readings: 2, partial_start: false, partial_end: false, quantization: liveQuantization }
+  const parsed = parseResults(value, scopes[0])
+  assert.equal(parsed.pricing.display_subtotal, "$0.11")
+  assert.equal(parsed.provenance.source, "live-receiver-kafka")
+  value.evidence_boundary = result().evidence_boundary
+  assert.throws(() => parseResults(value, scopes[0]))
+})
 test("scoped energy strings are preserved and another scope is refused", () => {
   assert.equal(parseResults(result(), scopes[0]).observed_ac_kwh, "0.500000")
   assert.throws(() => parseResults(result(), scopes[1]))
   const changed = result()
   changed.sessions[0].vehicle = "vehicle-b"
   assert.throws(() => parseResults(changed, scopes[0]))
+})
+
+test("live partial coverage keeps exact zero quotes, quantization and readable UTC times", () => {
+  const value: any = result()
+  Object.assign(value, { state: "eligible", observed_ac_kwh: "0.000000", eligible_shared_charger_kwh: "0.000000", evidence_boundary: "Vehicle-reported AC input counter energy; physical accuracy unvalidated" })
+  value.provenance.source = "live-receiver-kafka"
+  Object.assign(value.pricing, { state: "quoted", estimate_boundary: livePricingBoundary, exact_subtotal: "0.0000000000000000 USD", display_subtotal: "$0.00", quoted_session_count: 1, ineligible_session_count: 0 })
+  Object.assign(value.sessions[0], { classification: "SharedCharger", classification_reason: "InsideGeofence", evidence_state: "partial", observed_ac_kwh: "0.000000", eligible_shared_charger_kwh: "0.000000", exclusion_reasons: [], quality_flags: ["MissingBaseline", "MissingTerminalSample"],
+    pricing: { state: "quoted", hold_reason: null, quote: { exact_cost: "0.0000000000000000 USD", display_cost: "$0.00", slices: [] } },
+    coverage: { connection_start_utc_seconds: "0", connection_end_utc_seconds: "180", first_counter_utc_seconds: "60", last_counter_utc_seconds: "120", usable_readings: 2, partial_start: true, partial_end: true, quantization: liveQuantization } })
+  const parsed = parseResults(value, scopes[0])
+  assert.equal(parsed.pricing.display_subtotal, "$0.00")
+  assert.match(evidenceLabel(parsed.sessions[0]), /Partial coverage/)
+  assert.equal(observationTime("60"), "1970-01-01 00:01:00 UTC")
+  assert.equal(observationTime(null), "Unavailable")
+  for (const change of [
+    (changed: any) => { changed.sessions[0].coverage.usable_readings = 1 },
+    (changed: any) => { changed.sessions[0].coverage.first_counter_utc_seconds = null },
+    (changed: any) => { changed.sessions[0].coverage.partial_start = false },
+    (changed: any) => { changed.sessions[0].coverage.quantization = "Exact physical energy" },
+    (changed: any) => { changed.sessions[0].coverage.location = {} },
+    (changed: any) => { changed.sessions[0].evidence_state = "complete" },
+    (changed: any) => { changed.sessions[0].quality_flags.push("ConflictingEvidence") },
+  ]) { const changed = structuredClone(value); change(changed); assert.throws(() => parseResults(changed, scopes[0])) }
 })
 test("empty and valid zero evidence remain distinct from incomplete held evidence", () => {
   const empty = { ...result(), state: "empty", sessions: [], observed_ac_kwh: "0.000000", pricing: { ...result().pricing, state: "empty", ineligible_session_count: 0 } }

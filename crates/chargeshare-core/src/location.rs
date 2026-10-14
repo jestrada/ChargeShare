@@ -44,6 +44,8 @@ pub enum LocationSample {
     Missing,
     Invalid,
     Valid(LocationPoint),
+    InsideGeofence,
+    OutsideGeofence,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,7 +56,7 @@ pub struct ChargerGeofence {
 
 impl ChargerGeofence {
     pub fn new(center: LocationPoint, radius_meters: u32) -> Option<Self> {
-        (radius_meters == 100).then_some(Self {
+        (radius_meters > 0).then_some(Self {
             center,
             radius_meters,
         })
@@ -69,5 +71,34 @@ impl ChargerGeofence {
                 * (longitude_delta / 2.0).sin().powi(2);
         let distance = 2.0 * EARTH_RADIUS_METERS * haversine.clamp(0.0, 1.0).sqrt().asin();
         distance <= f64::from(self.radius_meters) + 1e-8
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_positive_integer_radius_includes_its_boundary_and_excludes_points_beyond_it() {
+        let center = LocationPoint::new(0.0, 0.0).unwrap();
+        assert!(ChargerGeofence::new(center, 0).is_none());
+        for radius in [1, 99, 100, 101, 250] {
+            let geofence = ChargerGeofence::new(center, radius).unwrap();
+            assert!(
+                geofence.contains(
+                    LocationPoint::new((f64::from(radius) / EARTH_RADIUS_METERS).to_degrees(), 0.0)
+                        .unwrap()
+                )
+            );
+            assert!(
+                !geofence.contains(
+                    LocationPoint::new(
+                        ((f64::from(radius) + 0.001) / EARTH_RADIUS_METERS).to_degrees(),
+                        0.0
+                    )
+                    .unwrap()
+                )
+            );
+        }
     }
 }

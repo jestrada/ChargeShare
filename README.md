@@ -8,7 +8,7 @@ is synthetic; no live vehicle or account is connected.
 
 ## Quickstart
 
-Use Linux x86_64 with **Nix** (`nix-command` and `flakes` enabled) and a running
+Use Linux x86_64 or aarch64 with **Nix** (`nix-command` and `flakes` enabled) and a running
 local **Docker** daemon your user can access. Nix supplies the pinned development
 tools; it does not install or start Docker. Remote Docker contexts are refused.
 Run from the repository root; first startup can take several minutes.

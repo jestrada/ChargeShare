@@ -10,7 +10,7 @@ from unittest import mock
 
 import runtime
 import source_epoch
-from test_runtime import FakeDocker
+from test_runtime import FakeDocker, synthetic_pins
 
 
 class EpochDocker(FakeDocker):
@@ -32,6 +32,8 @@ class SourceEpochTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.project = runtime.ProjectRuntime.at(self.temporary.name)
+        (self.project.checkout / "dev").mkdir()
+        (self.project.checkout / "dev/upstream-pins.json").write_text(json.dumps(synthetic_pins()))
         self.docker = EpochDocker(self.project)
         self.environment = mock.patch.dict(os.environ, {"DOCKER_HOST": "", "DOCKER_CONTEXT": ""})
         self.environment.start()
@@ -108,7 +110,7 @@ class SourceEpochTests(unittest.TestCase):
     def test_frozen_manifest_is_installed_once_and_changes_never_overwrite_evidence(self):
         self.initialize()
         dev = self.project.checkout / "dev"
-        dev.mkdir()
+        dev.mkdir(exist_ok=True)
         manifest = dev / "ingestion-manifest.json"
         manifest.write_text(json.dumps({"manifest_version": "fictional-v1"}))
         source_epoch.ensure_manifest(self.project)
@@ -121,7 +123,7 @@ class SourceEpochTests(unittest.TestCase):
     def test_new_geofence_version_loads_without_overwriting_frozen_settings_or_evidence(self):
         self.initialize()
         dev = self.project.checkout / "dev"
-        dev.mkdir()
+        dev.mkdir(exist_ok=True)
         path = dev / "ingestion-manifest.json"
         original = {"manifest_version":"fictional-v1", "geofence_version":"fictional-geofence-v1", "geofences":[{"owner":"owner-a", "center":{"status":"valid", "latitude":"12.3456789", "longitude":"45.6789123"}, "radius_meters":100}]}
         path.write_text(json.dumps(original))

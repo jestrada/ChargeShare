@@ -3,7 +3,7 @@ import os
 import uuid
 from pathlib import Path
 
-from runtime import RuntimeFailure, SYNTHETIC_LABEL, read_json_file, run_command
+from runtime import RuntimeFailure, SYNTHETIC_LABEL, host_platform, pinned_image, read_json_file, run_command
 from source_epoch import verify_source_epoch
 
 
@@ -31,7 +31,7 @@ def runner_command(runtime, name, run_id, arguments, directory=None, command_run
         raise RuntimeFailure("Ingestion storage must remain inside this owned runtime.")
     pins = read_json_file(runtime.checkout / "dev" / "upstream-pins.json", "Reviewed ingestion runner input")
     return [
-        "docker", "run", "--rm", "--name", name, "--platform", "linux/amd64",
+        "docker", "run", "--rm", "--name", name, "--platform", host_platform(),
         "--network", network, "--user", str(os.getuid()) + ":" + str(os.getgid()),
         "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--label", SYNTHETIC_LABEL + "=true", "--label", RUN_LABEL + "=" + run_id,
@@ -39,7 +39,7 @@ def runner_command(runtime, name, run_id, arguments, directory=None, command_run
         "--mount", "type=bind,src=" + str(binary) + ",dst=/run/ingestion,readonly",
         "--mount", "type=bind,src=" + str(directory) + ",dst=/run/.local-runtime",
         "--workdir", "/run", "--entrypoint", "/run/ingestion",
-        pins["kafka_image"]["reference"], *arguments,
+        pinned_image(pins, "kafka_image"), *arguments,
     ]
 
 

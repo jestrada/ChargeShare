@@ -5,8 +5,9 @@ import json
 import os
 import platform
 import re
-import signal
+import shlex
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -100,12 +101,17 @@ class ProjectRuntime:
 
     def environment(self):
         environment = os.environ.copy()
+        pins = read_json_file(self.checkout / "dev" / "upstream-pins.json", "Reviewed upstream input pins")
         environment.update({
             "CHARGESHARE_PROJECT_NAME": self.project_name,
             "CHARGESHARE_RUNTIME_DIR": str(self.directory),
             "CHARGESHARE_BROKER_VOLUME": self.broker_volume,
             "CHARGESHARE_UID": str(os.getuid()),
             "CHARGESHARE_GID": str(os.getgid()),
+            "CHARGESHARE_PLATFORM": host_platform(),
+            "CHARGESHARE_KAFKA_IMAGE": pinned_image(pins, "kafka_image"),
+            "CHARGESHARE_RECEIVER_BUILD_IMAGE": pinned_image(pins, "receiver_build_image"),
+            "CHARGESHARE_RECEIVER_RUNTIME_IMAGE": pinned_image(pins, "receiver_runtime_image"),
         })
         from source_epoch import read_marker
 
@@ -157,8 +163,24 @@ def validate_receiver_configuration(runtime):
 def check_supported_platform(system=None, machine=None):
     system = platform.system() if system is None else system
     machine = platform.machine() if machine is None else machine
-    if system != "Linux" or machine.lower() not in {"x86_64", "amd64"}:
-        raise RuntimeFailure("Unsupported host platform: this harness currently requires Linux x86_64.")
+    if system != "Linux" or machine.lower() not in {"x86_64", "amd64", "aarch64", "arm64"}:
+        raise RuntimeFailure("Unsupported host platform: this harness requires Linux x86_64 or aarch64.")
+    return "linux/" + ("amd64" if machine.lower() in {"x86_64", "amd64"} else "arm64")
+
+
+def host_platform():
+    return check_supported_platform()
+
+
+def pinned_image(pins, name):
+    try:
+        reference = pins[name]["reference" if host_platform() == "linux/amd64" else "arm64_reference"]
+    except (KeyError, TypeError):
+        raise RuntimeFailure("Reviewed upstream pins do not identify the host-platform image.") from None
+    repository = "apache/kafka" if name == "kafka_image" else "docker.io/library/golang"
+    if not isinstance(reference, str) or not re.fullmatch(re.escape(repository) + r":[^@]+@sha256:[0-9a-f]{64}", reference):
+        raise RuntimeFailure("Reviewed upstream images must pin official inputs by immutable digest.")
+    return reference
 
 
 def check_local_docker(runtime, command_runner=run_command):
@@ -171,8 +193,11 @@ def check_local_docker(runtime, command_runner=run_command):
         raise RuntimeFailure("Docker daemon is stopped, inaccessible or unresponsive. Start a permitted local daemon and ensure your user can access it; no host settings were changed.") from None
     except (json.JSONDecodeError, TypeError):
         raise RuntimeFailure("Docker daemon returned unreadable platform information.") from None
-    if not isinstance(daemon, dict) or daemon.get("OSType") != "linux" or str(daemon.get("Architecture", "")).lower() not in {"x86_64", "amd64"}:
-        raise RuntimeFailure("Unsupported Docker platform: this harness requires Linux x86_64 containers.")
+    if not isinstance(daemon, dict) or daemon.get("OSType") != "linux" or str(daemon.get("Architecture", "")).lower() not in {"x86_64", "amd64", "aarch64", "arm64"}:
+        raise RuntimeFailure("Unsupported Docker platform: this harness requires Linux x86_64 or aarch64 containers.")
+    daemon_platform = "linux/" + ("amd64" if daemon["Architecture"].lower() in {"x86_64", "amd64"} else "arm64")
+    if daemon_platform != host_platform():
+        raise RuntimeFailure("Docker daemon platform must match the host platform.")
     docker_context = os.environ.get("DOCKER_CONTEXT", "")
     if not docker_host or docker_context:
         try:
@@ -240,7 +265,7 @@ def validate_compose_configuration(runtime, configuration):
         raise RuntimeFailure("Unsafe Compose configuration: unexpected synthetic service graph.")
     pins = read_json_file(runtime.checkout / "dev" / "upstream-pins.json", "Reviewed upstream input pins")
     try:
-        kafka_image = pins["kafka_image"]["reference"]
+        kafka_image = pinned_image(pins, "kafka_image")
         receiver_revision = pins["receiver_source"]["revision"]
         source_repository = pins["receiver_source"]["repository"]
     except (KeyError, TypeError):
@@ -249,7 +274,10 @@ def validate_compose_configuration(runtime, configuration):
         raise RuntimeFailure("Reviewed local service inputs must pin official Kafka and receiver sources.")
     if services["kafka"].get("image") != kafka_image or services["kafka"].get("build"):
         raise RuntimeFailure("Unsafe Compose configuration: Kafka must use its exact reviewed immutable image.")
-    expected_receiver_build = {"context": str(runtime.checkout / "dev"), "dockerfile": "receiver.Dockerfile"}
+    expected_receiver_build = {"context": str(runtime.checkout / "dev"), "dockerfile": "receiver.Dockerfile", "args": {
+        "RECEIVER_BUILD_IMAGE": pinned_image(pins, "receiver_build_image"),
+        "RECEIVER_RUNTIME_IMAGE": pinned_image(pins, "receiver_runtime_image"),
+    }}
     if services["receiver"].get("image") != runtime.project_name + "-receiver:" + receiver_revision[:7] or services["receiver"].get("build") != expected_receiver_build:
         raise RuntimeFailure("Unsafe Compose configuration: receiver must use its reviewed project-local build inputs.")
     receiver_port_count = 0
@@ -257,8 +285,8 @@ def validate_compose_configuration(runtime, configuration):
         if not isinstance(service, dict):
             raise RuntimeFailure("Unsafe Compose configuration: service definitions must be objects.")
         require_synthetic_labels(service, service_name)
-        if service.get("platform") != "linux/amd64" or service.get("volumes_from"):
-            raise RuntimeFailure("Unsafe Compose configuration: service platform and mounts must remain isolated Linux amd64 inputs.")
+        if service.get("platform") != host_platform() or service.get("volumes_from"):
+            raise RuntimeFailure("Unsafe Compose configuration: service platform must match the host platform and mounts must remain isolated.")
         if service.get("privileged") or service.get("network_mode") or service.get("pid") or service.get("ipc") or service.get("devices") or service.get("cap_add"):
             raise RuntimeFailure("Unsafe Compose configuration: host access and expanded container privileges are excluded.")
         if service.get("environment"):
@@ -376,7 +404,7 @@ def validate_live_configuration(runtime, command_runner=run_command):
     daemon = check_local_docker(runtime, command_runner)
     resolved_compose_configuration(runtime, command_runner)
     project_broker_volume(runtime, command_runner)
-    return {"synthetic_only": True, "host": "Linux x86_64", "docker_version": daemon.get("ServerVersion", "unknown"), "project_name": runtime.project_name}
+    return {"synthetic_only": True, "host": "Linux " + ("x86_64" if host_platform() == "linux/amd64" else "aarch64"), "docker_version": daemon.get("ServerVersion", "unknown"), "project_name": runtime.project_name}
 
 
 def preflight(runtime, command_runner=run_command, port_checker=check_ports_available):
@@ -726,7 +754,7 @@ def launch_tilt(runtime, binary, arguments):
     if not arguments:
         raise RuntimeFailure("Tilt launcher requires a command.")
     if is_tilt_help_request(arguments):
-        return subprocess.call([str(binary), *arguments], cwd=runtime.checkout, env=runtime.environment())
+        return subprocess.call([str(binary), *arguments], cwd=runtime.checkout, env=os.environ.copy())
     action, arguments = normalized_tilt_arguments(runtime, arguments)
     if action == "down":
         check_supported_platform()
@@ -785,7 +813,7 @@ def main(arguments=None):
         except KeyboardInterrupt:
             return 130
     parser = argparse.ArgumentParser(description="Guard this checkout's synthetic local harness and disposable runtime state.")
-    parser.add_argument("action", choices=("identity", "project-name", "runtime-dir", "certificate-directory", "prepare", "preflight", "validate-config", "validate-live-config", "source-epoch", "reset"))
+    parser.add_argument("action", choices=("identity", "project-name", "runtime-dir", "compose-environment", "certificate-directory", "prepare", "preflight", "validate-config", "validate-live-config", "source-epoch", "reset"))
     parser.add_argument("--confirm-synthetic-reset", action="store_true")
     options = parser.parse_args(arguments)
     if options.confirm_synthetic_reset and options.action != "reset":
@@ -797,6 +825,10 @@ def main(arguments=None):
             print(runtime.project_name)
         elif options.action == "runtime-dir":
             print(runtime.directory)
+        elif options.action == "compose-environment":
+            environment = runtime.environment()
+            for name in ("CHARGESHARE_PLATFORM", "CHARGESHARE_KAFKA_IMAGE", "CHARGESHARE_RECEIVER_BUILD_IMAGE", "CHARGESHARE_RECEIVER_RUNTIME_IMAGE"):
+                print("export " + name + "=" + shlex.quote(environment[name]))
         elif options.action == "certificate-directory":
             print(ensure_certificate_directory(runtime))
         elif options.action == "prepare":

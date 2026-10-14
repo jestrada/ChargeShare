@@ -559,6 +559,66 @@ mod tests {
     }
 
     #[test]
+    fn live_partial_edges_quote_actual_counter_times_without_extending_energy_to_state_boundaries()
+    {
+        let (mut ledger, vehicle) = ledger(&[]);
+        ledger.use_observed_counter_window(&vehicle).unwrap();
+        for (index, (time, kind, counter, charge_type)) in [
+            (
+                "2026-09-01T12:00:00Z",
+                EventKind::Start,
+                None,
+                ChargeType::Unknown,
+            ),
+            (
+                "2026-09-01T12:05:00Z",
+                EventKind::Sample,
+                Some("10"),
+                ChargeType::Unknown,
+            ),
+            (
+                "2026-09-01T12:10:00Z",
+                EventKind::Sample,
+                Some("10.5"),
+                ChargeType::Ac,
+            ),
+            ("2026-09-01T12:15:00Z", EventKind::End, None, ChargeType::Ac),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            ledger
+                .ingest(Event {
+                    vehicle: Some(vehicle.clone()),
+                    connection: ConnectionId::new("connection-a").unwrap(),
+                    position: index as u64,
+                    time: timestamp(time),
+                    kind,
+                    charge_type,
+                    counter: counter.map(CounterReading::parse_kwh),
+                    location: LocationSample::InsideGeofence,
+                })
+                .unwrap();
+        }
+        let pricing = ledger.time_of_use_pricing(&vehicle, &history()).unwrap();
+        let session = &pricing.sessions[0].session;
+        assert!(session.is_eligible());
+        assert_eq!(session.observed_window.as_ref().unwrap().usable_readings, 2);
+        assert_eq!(
+            session.observed_window.as_ref().unwrap().first_time,
+            Some(timestamp("2026-09-01T12:05:00Z"))
+        );
+        let quote = pricing.sessions[0].quote.as_ref().unwrap();
+        assert_eq!(
+            quote.slices[0].start_time,
+            timestamp("2026-09-01T12:05:00Z")
+        );
+        assert_eq!(quote.slices[0].end_time, timestamp("2026-09-01T12:10:00Z"));
+        assert_eq!(quote.exact_cost.to_string(), "0.1127900000000000 USD");
+        assert_eq!(pricing.rounded_subtotal.to_string(), "0.11 USD");
+    }
+
+    #[test]
     fn ev2_a_golden_sessions_sum_exact_costs_and_round_the_scoped_subtotal_once() {
         let (ledger, vehicle) = ledger(&[
             ("2026-09-01T12:00:00Z", "2026-09-01T12:10:00Z", "0.5"),

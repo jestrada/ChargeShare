@@ -8,15 +8,18 @@
   },
   "receiver_build_image": {
     "reference": "docker.io/library/golang:1.27.1-bookworm@sha256:966278043a40889499db9b0cd196fc789c37c385d41bd9a10cb1e7764af60cdc",
+    "arm64_reference": "docker.io/library/golang:1.27.1-bookworm@sha256:27da97ffaed4bbb1263c44a8e423a72a1547830ee14a70fdb0cef3f6268a1b8b",
     "platform": "linux/amd64",
     "go_version": "1.27.1"
   },
   "receiver_runtime_image": {
     "reference": "docker.io/library/golang:1.27.1-bookworm@sha256:966278043a40889499db9b0cd196fc789c37c385d41bd9a10cb1e7764af60cdc",
+    "arm64_reference": "docker.io/library/golang:1.27.1-bookworm@sha256:27da97ffaed4bbb1263c44a8e423a72a1547830ee14a70fdb0cef3f6268a1b8b",
     "platform": "linux/amd64"
   },
   "kafka_image": {
     "reference": "apache/kafka:4.1.2@sha256:d50ab7b5df612b3c303f9d8afe8fee59626a5de798addfd626fe1924e3205965",
+    "arm64_reference": "apache/kafka:4.1.2@sha256:4a07b91bf81b35fcc2aaabf3ab6e72aba68d3bb782bce95baba826270c3648da",
     "platform": "linux/amd64",
     "version": "4.1.2",
     "upstream": "https://hub.docker.com/r/apache/kafka"

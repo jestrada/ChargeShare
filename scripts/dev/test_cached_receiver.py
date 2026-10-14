@@ -1,12 +1,18 @@
 import copy
 import unittest
+from pathlib import Path
+from unittest import mock
 
 import cached_receiver
+import runtime
 from runtime import RuntimeFailure
 
 
 class CachedReceiverTests(unittest.TestCase):
     def setUp(self):
+        machine = mock.patch.object(runtime.platform, "machine", return_value="x86_64")
+        machine.start()
+        self.addCleanup(machine.stop)
         self.identity = {"revision": "a" * 40, "inputs_sha": "b" * 64}
         self.image_id = "sha256:" + "c" * 64
         self.image = {"Id": self.image_id, "Os": "linux", "Architecture": "amd64", "Config": {"Labels": {
@@ -16,6 +22,24 @@ class CachedReceiverTests(unittest.TestCase):
 
     def test_current_job_image_with_exact_inputs_is_accepted(self):
         cached_receiver.validate_loaded_image(self.identity, [self.image], self.image_id)
+
+    def test_arm64_job_accepts_native_image_and_rejects_amd64_image(self):
+        with mock.patch.object(runtime.platform, "machine", return_value="aarch64"):
+            image = copy.deepcopy(self.image)
+            image["Architecture"] = "arm64"
+            cached_receiver.validate_loaded_image(self.identity, [image], self.image_id)
+            with self.assertRaises(RuntimeFailure):
+                cached_receiver.validate_loaded_image(self.identity, [self.image], self.image_id)
+
+    def test_cache_scopes_separate_architectures_without_changing_reviewed_inputs(self):
+        project = runtime.ProjectRuntime.at(Path(__file__).resolve().parents[2])
+        amd64 = cached_receiver.build_identity(project)
+        with mock.patch.object(runtime.platform, "machine", return_value="aarch64"):
+            arm64 = cached_receiver.build_identity(project)
+        self.assertEqual(amd64["cache_scope"], "receiver-v1-linux-amd64-" + amd64["inputs_sha"])
+        self.assertEqual(arm64["cache_scope"], "receiver-v1-linux-arm64-" + arm64["inputs_sha"])
+        for field in ("tag", "revision", "inputs_sha"):
+            self.assertEqual(amd64[field], arm64[field])
 
     def test_mismatched_image_inputs_platform_or_job_identity_are_rejected(self):
         for field, value in (("Os", "darwin"), ("Architecture", "arm64"), ("Id", "sha256:" + "d" * 64)):

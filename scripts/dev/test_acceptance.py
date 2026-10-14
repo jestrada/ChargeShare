@@ -13,6 +13,7 @@ import ingestion_runner
 from runtime import ProjectRuntime, RuntimeFailure, SYNTHETIC_LABEL
 from source_epoch import ensure_source_epoch, verify_source_epoch, write_private_json
 from test_source_epoch import EpochDocker
+from test_runtime import synthetic_pins
 
 
 def complete_status():
@@ -97,12 +98,12 @@ class RunnerOwnershipTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             project = ProjectRuntime.at(temporary)
-            docker = EpochDocker(project)
-            ensure_source_epoch(project, docker)
             dev = project.checkout / "dev"
             dev.mkdir()
-            image = "apache/kafka:synthetic@sha256:" + "a" * 64
-            (dev / "upstream-pins.json").write_text(json.dumps({"kafka_image": {"reference": image}}))
+            pins = synthetic_pins()
+            (dev / "upstream-pins.json").write_text(json.dumps(pins))
+            docker = EpochDocker(project)
+            ensure_source_epoch(project, docker)
             binary = project.checkout / "target/debug/chargeshare-ingestion"
             binary.parent.mkdir(parents=True)
             binary.write_bytes(b"fictional-binary-placeholder")
@@ -115,13 +116,16 @@ class RunnerOwnershipTests(unittest.TestCase):
                     return json.dumps([network])
                 return docker(command, environment)
 
-            command = ingestion_runner.runner_command(project, "synthetic-runner", "synthetic-run", ["consume"], command_runner=command_runner)
+            for machine, expected_platform, field in (("x86_64", "linux/amd64", "reference"), ("aarch64", "linux/arm64", "arm64_reference")):
+                with self.subTest(machine=machine), mock.patch("runtime.platform.machine", return_value=machine):
+                    command = ingestion_runner.runner_command(project, "synthetic-runner", "synthetic-run", ["consume"], command_runner=command_runner)
+                    self.assertEqual(command[command.index("--platform") + 1], expected_platform)
+                    self.assertEqual(command[-2:], [pins["kafka_image"][field], "consume"])
             self.assertIn("--rm", command)
             self.assertIn("--read-only", command)
             self.assertEqual(command[command.index("--network") + 1], network["Name"])
             self.assertEqual(command[command.index("--user") + 1], str(os.getuid()) + ":" + str(os.getgid()))
             self.assertEqual(command[command.index("--entrypoint") + 1], "/run/ingestion")
-            self.assertEqual(command[-2:], [image, "consume"])
             self.assertIn("type=bind,src=" + str(project.directory) + ",dst=/run/.local-runtime", command)
             self.assertIn("type=bind,src=/nix/store,dst=/nix/store,readonly", command)
             self.assertFalse(any(option in command for option in ("--publish", "--publish-all", "-p", "-P", "--privileged")))
@@ -151,6 +155,8 @@ class CommandAndCleanupTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.runtime = ProjectRuntime.at(self.temporary.name)
+        (self.runtime.checkout / "dev").mkdir()
+        (self.runtime.checkout / "dev/upstream-pins.json").write_text(json.dumps(synthetic_pins()))
         self.driver = acceptance.Acceptance(self.runtime)
 
     def tearDown(self):
@@ -197,6 +203,8 @@ class RefusalScenarioTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.runtime = ProjectRuntime.at(temporary.name)
+        (self.runtime.checkout / "dev").mkdir()
+        (self.runtime.checkout / "dev/upstream-pins.json").write_text(json.dumps(synthetic_pins()))
         self.docker = EpochDocker(self.runtime)
         self.source = ensure_source_epoch(self.runtime, self.docker)
         self.marker = self.runtime.directory / "source-epoch.json"

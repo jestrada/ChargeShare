@@ -1,5 +1,5 @@
 use chargeshare_core::{
-    ChargerClassification, Energy, OwnerId, PricingError, PricingHold, Session,
+    ChargerClassification, Energy, OwnerId, PricingError, PricingHold, QualityFlag, Session,
     TOU_CALCULATION_VERSION, TimeOfUseQuote, VehicleId,
 };
 use serde::Serialize;
@@ -32,7 +32,24 @@ pub struct SessionResult {
     pub quality_flags: Vec<String>,
     pub exclusion_reasons: Vec<String>,
     pub pricing: SessionPrice,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<CounterCoverageResult>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CounterCoverageResult {
+    pub connection_start_utc_seconds: Option<String>,
+    pub connection_end_utc_seconds: Option<String>,
+    pub first_counter_utc_seconds: Option<String>,
+    pub last_counter_utc_seconds: Option<String>,
+    pub usable_readings: usize,
+    pub partial_start: bool,
+    pub partial_end: bool,
+    pub quantization: &'static str,
+}
+
+pub const LIVE_QUANTIZATION: &str = "Live counters quantized once to 0.000001 kWh, decimal half-up";
+pub const LIVE_PRICING_BOUNDARY: &str = "Public sample-rate PG&E bundled energy-only estimate; observed-window counter energy allocated by elapsed UTC time; excludes CCA/PCIA, baseline credit, daily Base Services Charge and taxes; not a bill";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ResultProvenance {
@@ -208,7 +225,11 @@ fn results_from_replay(
         } else {
             "held"
         },
-        evidence_boundary: summary.evidence_label,
+        evidence_boundary: if manifest.is_live() {
+            "Vehicle-reported AC input counter energy; physical accuracy unvalidated"
+        } else {
+            summary.evidence_label
+        },
         observed_ac_kwh: kwh(summary.observed_ac),
         eligible_shared_charger_kwh: kwh(summary.eligible_shared_charger),
         pricing: PricingResult {
@@ -236,7 +257,11 @@ fn results_from_replay(
                 })
                 .collect(),
             calculation_version: TOU_CALCULATION_VERSION,
-            estimate_boundary: PRICING_BOUNDARY,
+            estimate_boundary: if manifest.is_live() {
+                LIVE_PRICING_BOUNDARY
+            } else {
+                PRICING_BOUNDARY
+            },
             priced_ac_kwh: kwh(prices.priced_energy),
             exact_subtotal: (quoted_session_count > 0).then(|| prices.exact_subtotal.to_string()),
             display_subtotal: (quoted_session_count > 0)
@@ -247,7 +272,11 @@ fn results_from_replay(
         },
         sessions,
         provenance: ResultProvenance {
-            source: "synthetic-receiver-kafka",
+            source: if manifest.is_live() {
+                "live-receiver-kafka"
+            } else {
+                "synthetic-receiver-kafka"
+            },
             source_epoch: source_epoch.to_owned(),
             input_contract: config.input_contract.clone(),
             mapping_version: config.mapping_version.clone(),
@@ -287,7 +316,29 @@ impl From<Session> for SessionResult {
                 ChargerClassification::OtherCharger => "OtherCharger",
             },
             classification_reason: format!("{:?}", session.classification_reason),
-            evidence_state: if !session.quality_flags.is_empty() {
+            coverage: session
+                .observed_window
+                .as_ref()
+                .map(|window| CounterCoverageResult {
+                    connection_start_utc_seconds: session.start_time.map(|time| time.to_string()),
+                    connection_end_utc_seconds: session.end_time.map(|time| time.to_string()),
+                    first_counter_utc_seconds: window.first_time.map(|time| time.to_string()),
+                    last_counter_utc_seconds: window.last_time.map(|time| time.to_string()),
+                    usable_readings: window.usable_readings,
+                    partial_start: session
+                        .quality_flags
+                        .contains(&QualityFlag::MissingBaseline),
+                    partial_end: session
+                        .quality_flags
+                        .contains(&QualityFlag::MissingTerminalSample),
+                    quantization: LIVE_QUANTIZATION,
+                }),
+            evidence_state: if session.observed_window.is_some()
+                && session.is_eligible()
+                && !session.quality_flags.is_empty()
+            {
+                "partial"
+            } else if !session.quality_flags.is_empty() {
                 "incomplete"
             } else if session.observed_ac == Energy::ZERO {
                 "complete_zero"

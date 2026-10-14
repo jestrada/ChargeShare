@@ -19,6 +19,9 @@ pub const MAX_ANNOTATIONS: usize = 8_192;
 pub enum NormalizedLocation {
     Valid { latitude: String, longitude: String },
     Invalid,
+    InsideGeofence,
+    OutsideGeofence,
+    RedactedGeofence,
 }
 
 impl NormalizedLocation {
@@ -34,6 +37,9 @@ impl NormalizedLocation {
 
     pub fn to_core(&self) -> Result<LocationSample, RejectionReason> {
         match self {
+            Self::InsideGeofence => Ok(LocationSample::InsideGeofence),
+            Self::OutsideGeofence => Ok(LocationSample::OutsideGeofence),
+            Self::RedactedGeofence => Err(RejectionReason::InvalidNormalizedEvent),
             Self::Invalid => Ok(LocationSample::Invalid),
             Self::Valid {
                 latitude,
@@ -64,6 +70,9 @@ impl fmt::Debug for NormalizedLocation {
         formatter.write_str(match self {
             Self::Valid { .. } => "Valid { coordinates: <redacted> }",
             Self::Invalid => "Invalid",
+            Self::InsideGeofence => "InsideGeofence",
+            Self::OutsideGeofence => "OutsideGeofence",
+            Self::RedactedGeofence => "RedactedGeofence",
         })
     }
 }
@@ -138,6 +147,7 @@ impl From<NormalizedEventKind> for EventKind {
 pub enum NormalizedChargeType {
     Ac,
     Dc,
+    Unknown,
     Ambiguous,
 }
 
@@ -146,6 +156,7 @@ impl From<NormalizedChargeType> for ChargeType {
         match charge_type {
             NormalizedChargeType::Ac => Self::Ac,
             NormalizedChargeType::Dc => Self::Dc,
+            NormalizedChargeType::Unknown => Self::Unknown,
             NormalizedChargeType::Ambiguous => Self::Ambiguous,
         }
     }

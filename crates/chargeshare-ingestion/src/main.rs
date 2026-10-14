@@ -32,6 +32,16 @@ fn main() {
 fn run() -> Result<(), IngestionError> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("rebuild-live") if args.len() == 3 => {
+            let original = private_live_config(&args[1])?;
+            let replacement = private_live_config(&args[2])?;
+            chargeshare_ingestion::rebuild_live(&original, &replacement)?;
+            println!("Live rebuild completed in the separate dataset; original preserved.");
+            Ok(())
+        }
+        Some("live") if args.len() == 2 => {
+            chargeshare_ingestion::run_live(&private_live_config(&args[1])?)
+        }
         Some("serve") if args.len() == 4 => {
             let runtime = owned_runtime(&args[1])?;
             let (manifest, source) = runtime_contract(&runtime)?;
@@ -127,6 +137,19 @@ fn run() -> Result<(), IngestionError> {
         }
         _ => Err(IngestionError::InvalidCommand),
     }
+}
+
+fn private_live_config(input: &str) -> Result<Vec<u8>, IngestionError> {
+    let path = Path::new(input);
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .ok_or(IngestionError::InvalidConfiguration)?;
+    if !path.is_absolute() || path.starts_with(checkout) {
+        return Err(IngestionError::InvalidConfiguration);
+    }
+    reject_symlink_ancestors(path)?;
+    read_private_file(path, MAX_MANIFEST_BYTES)
 }
 
 fn reread_runtime(

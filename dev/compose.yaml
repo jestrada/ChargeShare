@@ -1,8 +1,8 @@
 name: ${CHARGESHARE_PROJECT_NAME}
 services:
   kafka:
-    image: apache/kafka:4.1.2@sha256:d50ab7b5df612b3c303f9d8afe8fee59626a5de798addfd626fe1924e3205965
-    platform: linux/amd64
+    image: ${CHARGESHARE_KAFKA_IMAGE}
+    platform: ${CHARGESHARE_PLATFORM}
     labels:
       dev.chargeshare.synthetic-only: 'true'
     environment:
@@ -38,8 +38,11 @@ services:
     build:
       context: .
       dockerfile: receiver.Dockerfile
+      args:
+        RECEIVER_BUILD_IMAGE: ${CHARGESHARE_RECEIVER_BUILD_IMAGE}
+        RECEIVER_RUNTIME_IMAGE: ${CHARGESHARE_RECEIVER_RUNTIME_IMAGE}
     image: ${CHARGESHARE_PROJECT_NAME}-receiver:bd076fe
-    platform: linux/amd64
+    platform: ${CHARGESHARE_PLATFORM}
     user: ${CHARGESHARE_UID}:${CHARGESHARE_GID}
     labels:
       dev.chargeshare.synthetic-only: 'true'
