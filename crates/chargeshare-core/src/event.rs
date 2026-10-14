@@ -6,6 +6,7 @@ use crate::location::LocationSample;
 pub enum ChargeType {
     Ac,
     Dc,
+    Unknown,
     Ambiguous,
 }
 

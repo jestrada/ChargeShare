@@ -61,6 +61,61 @@ pub struct Store {
 }
 
 impl Store {
+    pub(crate) fn preserve_live_source(
+        path: &Path,
+        manifest: &Manifest,
+        source: &SourceBinding,
+    ) -> Result<(impl Drop, Vec<PartitionPosition>), IngestionError> {
+        if !path.is_file() {
+            return Err(IngestionError::StorageUnavailable);
+        }
+        let runtime = RuntimePath::open(path)?;
+        runtime.validate_files()?;
+        let lock =
+            OwningLock::acquire(runtime.open_private_file(&runtime.companion_name(".lock"))?)?;
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .map_err(storage_error)?;
+        connection
+            .busy_timeout(Duration::from_millis(250))
+            .map_err(storage_error)?;
+        let (manifest_json, source_json): (String, String) = connection
+            .query_row(
+                "SELECT manifest_json, source_json FROM runtime_metadata WHERE singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(storage_error)?;
+        let mut retained: crate::ManifestConfig =
+            serde_json::from_str(&manifest_json).map_err(|_| IngestionError::StorageCorrupt)?;
+        if retained.normalizer_version == "chargeshare-live-adapter-v1" {
+            retained.normalizer_version = crate::live::LIVE_NORMALIZER_VERSION.to_owned();
+        }
+        let retained =
+            Manifest::new(retained).map_err(|_| IngestionError::ConfigurationMismatch)?;
+        let retained_source: SourceBinding =
+            serde_json::from_str(&source_json).map_err(|_| IngestionError::StorageCorrupt)?;
+        if retained.config() != manifest.config() || retained_source != *source {
+            return Err(IngestionError::ConfigurationMismatch);
+        }
+        let mut statement = connection
+            .prepare("SELECT partition, next_offset FROM partition_progress ORDER BY partition")
+            .map_err(storage_error)?;
+        let positions = statement
+            .query_map([], |row| {
+                Ok(PartitionPosition {
+                    partition: row.get(0)?,
+                    next_offset: row.get(1)?,
+                })
+            })
+            .map_err(storage_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(storage_error)?;
+        Ok((lock, positions))
+    }
+
     pub fn open(
         path: &Path,
         manifest: &Manifest,

@@ -23,17 +23,25 @@ export type PricingResult = {
   quoted_session_count: number; rate_held_session_count: number; ineligible_session_count: number
 }
 export const pricingBoundary = "Synthetic PG&E bundled energy-only estimate; counter energy allocated by elapsed UTC time; excludes CCA/PCIA, baseline credit, daily Base Services Charge and taxes; not a bill"
+export const livePricingBoundary = "Public sample-rate PG&E bundled energy-only estimate; observed-window counter energy allocated by elapsed UTC time; excludes CCA/PCIA, baseline credit, daily Base Services Charge and taxes; not a bill"
+export const liveQuantization = "Live counters quantized once to 0.000001 kWh, decimal half-up"
+export type CounterCoverage = {
+  connection_start_utc_seconds: string | null; connection_end_utc_seconds: string | null
+  first_counter_utc_seconds: string | null; last_counter_utc_seconds: string | null
+  usable_readings: number; partial_start: boolean; partial_end: boolean; quantization: string
+}
 export type SessionResult = {
   vehicle: string
   connection: string
   classification: "SharedCharger" | "OtherCharger" | "Held"
   classification_reason: "InsideGeofence" | "OutsideGeofence" | "LocationUnavailable" | "LocationAmbiguous"
-  evidence_state: "complete" | "complete_zero" | "incomplete"
+  evidence_state: "complete" | "complete_zero" | "incomplete" | "partial"
   observed_ac_kwh: string
   eligible_shared_charger_kwh: string
   quality_flags: string[]
   exclusion_reasons: string[]
   pricing: SessionPrice
+  coverage?: CounterCoverage
 }
 export type ScopedResults = Scope & {
   state: "empty" | "held" | "eligible"
@@ -58,7 +66,7 @@ export const scopes: Scope[] = [
   { owner: "owner-a", vehicle: "vehicle-a" },
   { owner: "owner-b", vehicle: "vehicle-b" },
 ]
-const qualityReasons = ["MissingConnectionStart", "MissingConnectionEnd", "MissingBaseline", "MissingTerminalSample", "CounterRollback", "ConflictingEvidence", "InvalidBoundaryOrder", "InvalidCounter(Invalid)", "InvalidCounter(Negative)", "InvalidCounter(UnsupportedPrecision)", "InvalidCounter(Overflow)"]
+const qualityReasons = ["InsufficientCounterReadings", "MissingConnectionStart", "MissingConnectionEnd", "MissingBaseline", "MissingTerminalSample", "CounterRollback", "ConflictingEvidence", "InvalidBoundaryOrder", "InvalidCounter(Invalid)", "InvalidCounter(Negative)", "InvalidCounter(UnsupportedPrecision)", "InvalidCounter(Overflow)"]
 const exclusionReasons = ["LocationUnavailable", "LocationAmbiguous", "OtherCharger", "DcEvidence", "AmbiguousChargeType"]
 const classificationReasons = { SharedCharger: ["InsideGeofence"], OtherCharger: ["OutsideGeofence"], Held: ["LocationUnavailable", "LocationAmbiguous"] }
 const resultKeys = ["owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "revision", "provenance", "pricing"]
@@ -68,7 +76,8 @@ function hasExactKeys(value: unknown, keys: string[]) {
   return !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === keys.length && Object.keys(value).every(key => keys.includes(key))
 }
 function isEligible(session: SessionResult) {
-  return session.classification === "SharedCharger" && !session.quality_flags.length && !session.exclusion_reasons.length
+  return session.classification === "SharedCharger" && !session.exclusion_reasons.length &&
+    session.quality_flags.every(flag => !!session.coverage && session.coverage.usable_readings >= 2 && ["MissingBaseline", "MissingTerminalSample"].includes(flag))
 }
 export function resultPath(scope: Scope) {
   return `/api/poc/owners/${encodeURIComponent(scope.owner)}/vehicles/${encodeURIComponent(scope.vehicle)}/results`
@@ -95,11 +104,11 @@ export function parseResults(value: unknown, scope: Scope): ScopedResults {
       !hasExactKeys(object.provenance, provenanceKeys) || !["synthetic-receiver-kafka", "live-receiver-kafka"].includes(object.provenance.source) ||
       object.provenance.calculation_version !== "scoped-core-replay-v2" ||
       !provenanceKeys.every(key => typeof object.provenance[key as keyof ScopedResults["provenance"]] === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(object.provenance[key as keyof ScopedResults["provenance"]])) ||
-      object.sessions.some(session => !hasExactKeys(session, sessionKeys) || session.vehicle !== scope.vehicle ||
+      object.sessions.some(session => !hasExactKeys(session, object.provenance.source === "live-receiver-kafka" ? [...sessionKeys, "coverage"] : sessionKeys) || !validCoverage(session, object.provenance.source === "live-receiver-kafka") || session.vehicle !== scope.vehicle ||
         !/^[A-Za-z0-9_-]{1,64}$/.test(session.connection) ||
         !Object.hasOwn(classificationReasons, session.classification) ||
         !classificationReasons[session.classification].includes(session.classification_reason) ||
-        !["complete", "complete_zero", "incomplete"].includes(session.evidence_state) ||
+        !["complete", "complete_zero", "incomplete", "partial"].includes(session.evidence_state) ||
         !energy(session.observed_ac_kwh) || !energy(session.eligible_shared_charger_kwh) ||
         !reasons(session.quality_flags, qualityReasons) || !reasons(session.exclusion_reasons, exclusionReasons) ||
         session.eligible_shared_charger_kwh !== (isEligible(session) ? session.observed_ac_kwh : "0.000000") ||
@@ -114,7 +123,30 @@ export function parseResults(value: unknown, scope: Scope): ScopedResults {
   validatePricing(object)
   return object
 }
+function validCoverage(session: SessionResult, live: boolean) {
+  if (!live) return !session.coverage && session.evidence_state !== "partial"
+  const coverage = session.coverage
+  if (!coverage || !hasExactKeys(coverage, ["connection_start_utc_seconds", "connection_end_utc_seconds", "first_counter_utc_seconds", "last_counter_utc_seconds", "usable_readings", "partial_start", "partial_end", "quantization"]) ||
+      !Number.isSafeInteger(coverage.usable_readings) || coverage.usable_readings < 0 || coverage.quantization !== liveQuantization ||
+      typeof coverage.partial_start !== "boolean" || typeof coverage.partial_end !== "boolean" || !Array.isArray(session.quality_flags) ||
+      coverage.partial_start !== session.quality_flags.includes("MissingBaseline") || coverage.partial_end !== session.quality_flags.includes("MissingTerminalSample")) return false
+  if ((coverage.usable_readings < 2) !== session.quality_flags.includes("InsufficientCounterReadings") ||
+      (coverage.connection_start_utc_seconds === null) !== session.quality_flags.includes("MissingConnectionStart") ||
+      (coverage.connection_end_utc_seconds === null) !== session.quality_flags.includes("MissingConnectionEnd")) return false
+  const times = [coverage.connection_start_utc_seconds, coverage.connection_end_utc_seconds, coverage.first_counter_utc_seconds, coverage.last_counter_utc_seconds]
+  if (!times.every(time => time === null || (typeof time === "string" && /^-?\d+$/.test(time)))) return false
+  if ((coverage.usable_readings === 0) !== (coverage.first_counter_utc_seconds === null && coverage.last_counter_utc_seconds === null)) return false
+  if (coverage.usable_readings > 0 && (coverage.first_counter_utc_seconds === null || coverage.last_counter_utc_seconds === null || BigInt(coverage.first_counter_utc_seconds) > BigInt(coverage.last_counter_utc_seconds))) return false
+  if ((session.evidence_state === "partial") !== (isEligible(session) && (coverage.partial_start || coverage.partial_end))) return false
+  return true
+}
+export function observationTime(seconds: string | null) {
+  if (seconds === null) return "Unavailable"
+  const time = new Date(Number(seconds) * 1000)
+  return Number.isFinite(time.getTime()) ? time.toISOString().replace("T", " ").replace(".000Z", " UTC") : "Unavailable"
+}
 export function evidenceLabel(session: SessionResult) {
+  if (session.evidence_state === "partial") return "Partial coverage · observed counter window"
   if (session.evidence_state === "incomplete") return "Incomplete evidence"
   if (session.evidence_state === "complete_zero") return "Complete zero-energy evidence"
   return "Complete counter evidence"
@@ -142,7 +174,7 @@ function validatePricing(results: ScopedResults) {
   const refuse = () => { throw new Error("Persisted results unavailable") }
   if (!hasExactKeys(pricing, ["state", "charger_id", "rate_models", "calculation_version", "estimate_boundary", "priced_ac_kwh", "exact_subtotal", "display_subtotal", "quoted_session_count", "rate_held_session_count", "ineligible_session_count"]) ||
       !["empty", "quoted", "held"].includes(pricing.state) || (pricing.charger_id !== null && !alias(pricing.charger_id)) ||
-      pricing.calculation_version !== "tou-linear-micro-kwh-v1" || pricing.estimate_boundary !== pricingBoundary || !energyString(pricing.priced_ac_kwh) ||
+      pricing.calculation_version !== "tou-linear-micro-kwh-v1" || pricing.estimate_boundary !== (results.provenance.source === "live-receiver-kafka" ? livePricingBoundary : pricingBoundary) || !energyString(pricing.priced_ac_kwh) ||
       !Array.isArray(pricing.rate_models) || (pricing.charger_id === null && pricing.rate_models.length)) refuse()
   for (const model of pricing.rate_models) {
     if (!hasExactKeys(model, ["id", "plan", "source_label", "source_url", "effective_from", "effective_until", "timezone", "timezone_rules_version", "season_rules_version", "day_type_rules_version", "holidays", "periods"]) ||

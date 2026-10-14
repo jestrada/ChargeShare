@@ -74,6 +74,7 @@ fn default_geofence_version() -> String {
 pub struct OwnerGeofence {
     pub owner: String,
     pub center: NormalizedLocation,
+    #[serde(default = "crate::rates::default_radius_meters")]
     pub radius_meters: u32,
 }
 

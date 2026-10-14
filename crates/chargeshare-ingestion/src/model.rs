@@ -147,6 +147,7 @@ impl From<NormalizedEventKind> for EventKind {
 pub enum NormalizedChargeType {
     Ac,
     Dc,
+    Unknown,
     Ambiguous,
 }
 
@@ -155,6 +156,7 @@ impl From<NormalizedChargeType> for ChargeType {
         match charge_type {
             NormalizedChargeType::Ac => Self::Ac,
             NormalizedChargeType::Dc => Self::Dc,
+            NormalizedChargeType::Unknown => Self::Unknown,
             NormalizedChargeType::Ambiguous => Self::Ambiguous,
         }
     }

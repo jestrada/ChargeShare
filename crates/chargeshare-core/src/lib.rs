@@ -21,8 +21,8 @@ pub use pricing::{
     CostLine, PricingError, PricingHold, PricingSummary, SessionPricing, SessionQuote,
 };
 pub use session::{
-    ChargerClassification, ClassificationReason, EVIDENCE_LABEL, ExclusionReason, QualityFlag,
-    Session,
+    ChargerClassification, ClassificationReason, EVIDENCE_LABEL, ExclusionReason,
+    ObservedCounterWindow, QualityFlag, Session,
 };
 pub use tariff::{RateSchedule, RateWindow, TariffError};
 pub use time_of_use::{

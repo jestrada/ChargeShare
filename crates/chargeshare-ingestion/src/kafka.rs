@@ -577,6 +577,101 @@ pub(crate) struct LiveIngestion {
 }
 
 impl LiveIngestion {
+    pub(crate) fn rebuild(
+        config: crate::live_config::LiveConfig,
+        original: &SourceBinding,
+        required: &[crate::PartitionPosition],
+    ) -> Result<(), IngestionError> {
+        let kafka = config.kafka_config();
+        let consumer = connect_consumer(&kafka)?;
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let mut source = original.clone();
+        source.epoch = config.source_epoch.clone();
+        let path = &kafka.source_epoch_path;
+        if fs::symlink_metadata(&config.database).is_ok()
+            || fs::symlink_metadata(path).is_ok()
+            || [".lock", "-wal", "-shm"].iter().any(|suffix| {
+                let mut companion = config.database.as_os_str().to_owned();
+                companion.push(suffix);
+                fs::symlink_metadata(companion).is_ok()
+            })
+        {
+            return Err(IngestionError::ConfigurationMismatch);
+        }
+        let original_path = config
+            .database
+            .parent()
+            .ok_or(IngestionError::InvalidConfiguration)?;
+        if fs::canonicalize(original_path).map_err(|_| IngestionError::InvalidConfiguration)?
+            != original_path
+        {
+            return Err(IngestionError::InvalidConfiguration);
+        }
+        validate_private_marker_metadata(
+            &fs::metadata(original_path).map_err(|_| IngestionError::InvalidConfiguration)?,
+            false,
+        )?;
+        let topic_metadata = consumer
+            .fetch_metadata(Some(&source.topic), remaining(deadline)?)
+            .map_err(|_| IngestionError::KafkaUnavailable)?;
+        let topic = topic_metadata
+            .topics()
+            .iter()
+            .find(|topic| topic.name() == source.topic)
+            .ok_or(IngestionError::SourceMismatch)?;
+        if topic.error().is_some()
+            || topic.partitions().len() != source.partitions.len()
+            || consumer.client().fetch_cluster_id(remaining(deadline)?) != source.cluster_id
+        {
+            return Err(IngestionError::SourceMismatch);
+        }
+        let mut bounds = Vec::new();
+        for start in &source.partitions {
+            if start.initial_offset != 0
+                || !topic.partitions().iter().any(|partition| {
+                    partition.id() == start.partition && partition.error().is_none()
+                })
+            {
+                return Err(IngestionError::RecoveryGap);
+            }
+            let (low, high) = consumer
+                .fetch_watermarks(&source.topic, start.partition, remaining(deadline)?)
+                .map_err(|_| IngestionError::KafkaUnavailable)?;
+            bounds.push(PartitionRange {
+                partition: start.partition,
+                low,
+                high,
+            });
+        }
+        validate_rebuild_history(&source, &bounds, required)?;
+        write_live_marker(path, &source)?;
+        let manifest = config.manifest()?;
+        let mut store = Store::open(&config.database, &manifest, &source)?;
+        let mut driver = Self::connect_live(config, source, &store)?;
+        loop {
+            remaining(deadline)?;
+            let positions = store.positions()?;
+            let mut finished = TopicPartitionList::new();
+            for position in &positions {
+                if bounds.iter().any(|bound| {
+                    bound.partition == position.partition && position.next_offset == bound.high
+                }) {
+                    finished.add_partition(&driver.source.topic, position.partition);
+                }
+            }
+            if finished.count() == positions.len() {
+                break;
+            }
+            driver
+                .consumer
+                .pause(&finished)
+                .map_err(|_| IngestionError::KafkaUnavailable)?;
+            driver.poll(&mut store)?;
+        }
+        store.validate_source(&driver.source, &bounds)?;
+        Ok(())
+    }
+
     pub(crate) fn connect(
         config: KafkaConfig,
         source: SourceBinding,
@@ -683,6 +778,9 @@ impl LiveIngestion {
             partition: delivery.partition(),
             offset: delivery.offset(),
         };
+        if self.live_config.is_some() && coordinate.offset != position.next_offset {
+            return Err(IngestionError::RecoveryGap);
+        }
         if let Some(config) = &self.live_config {
             let headers = delivery
                 .headers()
@@ -786,6 +884,12 @@ pub(crate) fn live_source(
         partitions,
     };
     source.validate()?;
+    write_live_marker(path, &source)?;
+    Ok(source)
+}
+
+fn write_live_marker(path: &Path, source: &SourceBinding) -> Result<(), IngestionError> {
+    let parent = path.parent().ok_or(IngestionError::InvalidConfiguration)?;
     let bytes = serde_json::to_vec(&source).map_err(|_| IngestionError::InvalidConfiguration)?;
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -801,5 +905,120 @@ pub(crate) fn live_source(
     fs::File::open(parent)
         .and_then(|directory| directory.sync_all())
         .map_err(|_| IngestionError::StorageUnavailable)?;
-    Ok(source)
+    Ok(())
+}
+
+fn validate_rebuild_history(
+    source: &SourceBinding,
+    bounds: &[PartitionRange],
+    required: &[crate::PartitionPosition],
+) -> Result<(), IngestionError> {
+    source.validate()?;
+    if source.cluster_id.is_none()
+        || source.topic_id.is_some()
+        || required.len() != source.partitions.len()
+    {
+        return Err(IngestionError::SourceMismatch);
+    }
+    for start in &source.partitions {
+        let bound = bounds
+            .iter()
+            .find(|bound| bound.partition == start.partition)
+            .ok_or(IngestionError::RecoveryGap)?;
+        let position = required
+            .iter()
+            .find(|position| position.partition == start.partition)
+            .ok_or(IngestionError::RecoveryGap)?;
+        if start.initial_offset != 0
+            || bound.low != 0
+            || position.next_offset < 0
+            || bound.high < position.next_offset
+        {
+            return Err(IngestionError::RecoveryGap);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod rebuild_tests {
+    use super::*;
+
+    #[test]
+    fn original_history_requires_offset_zero_every_partition_and_all_committed_progress() {
+        let original = SourceBinding {
+            epoch: "live-unit-original".to_owned(),
+            topic: "unit_V".to_owned(),
+            cluster_id: Some("unit-cluster".to_owned()),
+            topic_id: None,
+            partitions: vec![
+                crate::PartitionStart {
+                    partition: 0,
+                    initial_offset: 0,
+                },
+                crate::PartitionStart {
+                    partition: 1,
+                    initial_offset: 0,
+                },
+            ],
+        };
+        let bounds = vec![
+            PartitionRange {
+                partition: 0,
+                low: 0,
+                high: 10,
+            },
+            PartitionRange {
+                partition: 1,
+                low: 0,
+                high: 8,
+            },
+        ];
+        let required = vec![
+            crate::PartitionPosition {
+                partition: 0,
+                next_offset: 10,
+            },
+            crate::PartitionPosition {
+                partition: 1,
+                next_offset: 5,
+            },
+        ];
+        assert_eq!(
+            validate_rebuild_history(&original, &bounds, &required),
+            Ok(())
+        );
+        for variant in [
+            "late_start",
+            "expired_history",
+            "truncated_history",
+            "missing_partition",
+            "missing_identity",
+            "missing_progress",
+        ] {
+            let mut source = original.clone();
+            let mut observed = bounds.clone();
+            let mut progress = required.clone();
+            match variant {
+                "late_start" => source.partitions[0].initial_offset = 1,
+                "expired_history" => observed[1].low = 1,
+                "truncated_history" => observed[0].high = 9,
+                "missing_partition" => {
+                    observed.pop();
+                }
+                "missing_identity" => source.cluster_id = None,
+                "missing_progress" => {
+                    progress.pop();
+                }
+                _ => unreachable!(),
+            }
+            assert!(validate_rebuild_history(&source, &observed, &progress).is_err());
+        }
+        assert!(
+            original
+                .partitions
+                .iter()
+                .all(|start| start.initial_offset == 0)
+        );
+    }
 }

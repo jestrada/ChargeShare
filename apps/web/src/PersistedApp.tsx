@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Button } from "./components/ui/button"
-import { classificationLabel, evidenceLabel, pricingHoldLabel, parseResults, parseScopes, reasonLabel, resultPath, type Scope, type ScopedResults } from "./persisted"
+import { classificationLabel, evidenceLabel, observationTime, pricingHoldLabel, parseResults, parseScopes, reasonLabel, resultPath, type Scope, type ScopedResults } from "./persisted"
 
 type View = { scope: string; state: "loading" | "unavailable" | "refused" } |
   { scope: string; state: "available"; results: ScopedResults }
@@ -114,6 +114,12 @@ function Results({ results }: { results: ScopedResults }) {
       <div className="persisted-detail">
         <p>Session identity: {session.vehicle} / {session.connection}</p>
         <p>{evidenceLabel(session)}</p>
+        {session.coverage && <div className="persisted-coverage">
+          <p>Observed counter window: {observationTime(session.coverage.first_counter_utc_seconds)} → {observationTime(session.coverage.last_counter_utc_seconds)}; {session.coverage.usable_readings} usable readings.</p>
+          <p>Connection: {observationTime(session.coverage.connection_start_utc_seconds)} → {observationTime(session.coverage.connection_end_utc_seconds)}.</p>
+          {(session.coverage.partial_start || session.coverage.partial_end) && <p className="needs-review">Partial coverage: {session.coverage.partial_start ? "energy before the first counter is unknown. " : ""}{session.coverage.partial_end ? "Energy after the last counter is unknown." : ""} No energy is inferred at connection boundaries.</p>}
+          <p className="muted">{session.coverage.quantization}</p>
+        </div>}
         <p>{reasonLabel(session.classification_reason)}</p>
         <p>{session.eligible_shared_charger_kwh} kWh eligible</p>
         {session.exclusion_reasons.map(reason => <p className="needs-review" key={reason}>{reasonLabel(reason)}</p>)}

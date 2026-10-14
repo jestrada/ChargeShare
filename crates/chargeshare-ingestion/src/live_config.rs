@@ -110,7 +110,7 @@ impl LiveConfig {
                     charger_id: self.shared_charger.charger_id.clone(),
                     geofence: ChargerGeofenceConfig {
                         center: NormalizedLocation::RedactedGeofence,
-                        radius_meters: 100,
+                        radius_meters: self.shared_charger.geofence.radius_meters,
                     },
                     rate_model_versions: self.shared_charger.rate_model_versions.clone(),
                 })
@@ -132,13 +132,7 @@ impl LiveConfig {
 
 pub fn run_live(bytes: &[u8]) -> Result<(), IngestionError> {
     let config = LiveConfig::from_json(bytes)?;
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .ok_or(IngestionError::InvalidConfiguration)?;
-    if config.database.starts_with(checkout) {
-        return Err(IngestionError::InvalidConfiguration);
-    }
+    validate_database_location(&config)?;
     let manifest = config.manifest()?;
     let source = crate::kafka::live_source(&config)?;
     let store = Store::open(&config.database, &manifest, &source)?;
@@ -146,4 +140,39 @@ pub fn run_live(bytes: &[u8]) -> Result<(), IngestionError> {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 8788))
         .map_err(|_| IngestionError::StorageUnavailable)?;
     crate::viewing::serve_with_driver(listener, store, driver, &AtomicBool::new(false))
+}
+
+fn validate_database_location(config: &LiveConfig) -> Result<(), IngestionError> {
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .ok_or(IngestionError::InvalidConfiguration)?;
+    if config.database.starts_with(checkout) {
+        return Err(IngestionError::InvalidConfiguration);
+    }
+    Ok(())
+}
+
+pub fn rebuild_live(original_bytes: &[u8], replacement_bytes: &[u8]) -> Result<(), IngestionError> {
+    let original = LiveConfig::from_json(original_bytes)?;
+    let replacement = LiveConfig::from_json(replacement_bytes)?;
+    validate_database_location(&original)?;
+    validate_database_location(&replacement)?;
+    if original.database.parent() == replacement.database.parent()
+        || original.source_epoch == replacement.source_epoch
+        || original.topic_namespace != replacement.topic_namespace
+        || original.mappings != replacement.mappings
+    {
+        return Err(IngestionError::ConfigurationMismatch);
+    }
+    let source = crate::read_source_marker(&original.kafka_config().source_epoch_path)?;
+    if source.epoch != original.source_epoch
+        || source.topic != format!("{}_V", original.topic_namespace)
+    {
+        return Err(IngestionError::SourceMismatch);
+    }
+    let manifest = original.manifest()?;
+    let (_preserved, required) =
+        Store::preserve_live_source(&original.database, &manifest, &source)?;
+    crate::kafka::LiveIngestion::rebuild(replacement, &source, &required)
 }

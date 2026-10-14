@@ -16,6 +16,11 @@ impl Store {
         ledger
             .register(vehicle.clone(), owner.clone())
             .map_err(|_| IngestionError::DomainReplay)?;
+        if self.manifest.is_live() {
+            ledger
+                .use_observed_counter_window(vehicle)
+                .map_err(|_| IngestionError::DomainReplay)?;
+        }
         if let Some(geofence) = self
             .manifest
             .config()

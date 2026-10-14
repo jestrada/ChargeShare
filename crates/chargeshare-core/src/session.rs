@@ -19,6 +19,7 @@ pub enum QualityFlag {
     CounterRollback,
     ConflictingEvidence,
     InvalidBoundaryOrder,
+    InsufficientCounterReadings,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -58,10 +59,26 @@ pub struct Session {
     pub exclusion_reasons: BTreeSet<ExclusionReason>,
     pub classification: ChargerClassification,
     pub classification_reason: ClassificationReason,
+    pub observed_window: Option<ObservedCounterWindow>,
 }
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ObservedCounterWindow {
+    pub first_time: Option<i64>,
+    pub last_time: Option<i64>,
+    pub usable_readings: usize,
+}
+
 impl Session {
     pub fn is_eligible(&self) -> bool {
-        self.quality_flags.is_empty() && self.exclusion_reasons.is_empty()
+        self.exclusion_reasons.is_empty()
+            && self.quality_flags.iter().all(|flag| {
+                self.observed_window.is_some()
+                    && matches!(
+                        flag,
+                        QualityFlag::MissingBaseline | QualityFlag::MissingTerminalSample
+                    )
+            })
     }
 }
 
@@ -145,6 +162,7 @@ pub(crate) fn reconstruct_session(
     evidence: &[ConnectionEvidence<'_>],
     classification: ChargerClassification,
     classification_reason: ClassificationReason,
+    observed_window: bool,
 ) -> Result<ReconstructedSession, LedgerError> {
     let mut session = Session {
         evidence_label: EVIDENCE_LABEL,
@@ -157,6 +175,7 @@ pub(crate) fn reconstruct_session(
         exclusion_reasons: BTreeSet::new(),
         classification,
         classification_reason,
+        observed_window: observed_window.then(ObservedCounterWindow::default),
     };
     match classification {
         ChargerClassification::Held => {
@@ -178,15 +197,24 @@ pub(crate) fn reconstruct_session(
     let mut has_terminal_sample = false;
     let mut previous_counter: Option<(Energy, i64)> = None;
     let mut segments = Vec::new();
+    let resolved_ac = observed_window
+        && evidence
+            .iter()
+            .any(|entry| !entry.is_conflicting && entry.event.charge_type == ChargeType::Ac);
     for (index, entry) in evidence.iter().enumerate() {
         let event = entry.event;
-        match event.charge_type {
+        let charge_type = if resolved_ac && event.charge_type == ChargeType::Unknown {
+            ChargeType::Ac
+        } else {
+            event.charge_type
+        };
+        match charge_type {
             ChargeType::Dc => {
                 session
                     .exclusion_reasons
                     .insert(ExclusionReason::DcEvidence);
             }
-            ChargeType::Ambiguous => {
+            ChargeType::Ambiguous | ChargeType::Unknown => {
                 session
                     .exclusion_reasons
                     .insert(ExclusionReason::AmbiguousChargeType);
@@ -231,7 +259,12 @@ pub(crate) fn reconstruct_session(
                 previous_counter = None;
             }
             Some(CounterReading::Valid(current)) => {
-                if event.charge_type == ChargeType::Ac {
+                if charge_type == ChargeType::Ac {
+                    if let Some(window) = &mut session.observed_window {
+                        window.first_time.get_or_insert(event.time);
+                        window.last_time = Some(event.time);
+                        window.usable_readings += 1;
+                    }
                     if let Some((prior, start_time)) = previous_counter {
                         match current.checked_delta_from(prior) {
                             Some(delta) => {
@@ -256,7 +289,7 @@ pub(crate) fn reconstruct_session(
                 }
             }
             None => {
-                if event.charge_type != ChargeType::Ac {
+                if charge_type != ChargeType::Ac {
                     previous_counter = None;
                 }
             }
@@ -279,6 +312,15 @@ pub(crate) fn reconstruct_session(
         session
             .quality_flags
             .insert(QualityFlag::MissingTerminalSample);
+    }
+    if session
+        .observed_window
+        .as_ref()
+        .is_some_and(|window| window.usable_readings < 2)
+    {
+        session
+            .quality_flags
+            .insert(QualityFlag::InsufficientCounterReadings);
     }
     Ok(ReconstructedSession { session, segments })
 }

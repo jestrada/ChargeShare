@@ -11,8 +11,11 @@ use crate::{
     NormalizedEventKind, NormalizedLocation, RecordDisposition, RejectionReason, Store,
 };
 
+mod decimal;
+use decimal::{DecimalValue, normalize_counter};
+
 pub(crate) const LIVE_INPUT_CONTRACT: &str = "tesla-decoded-live-v1";
-pub(crate) const LIVE_NORMALIZER_VERSION: &str = "chargeshare-live-adapter-v1";
+pub(crate) const LIVE_NORMALIZER_VERSION: &str = "chargeshare-live-adapter-v2";
 
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
 enum ChargeState {
@@ -72,6 +75,22 @@ struct Signal {
     counter: Option<NormalizedCounter>,
     ac_power: Option<bool>,
     location: Option<NormalizedLocation>,
+    odometer: Option<OdometerReading>,
+    fast_charger: Option<bool>,
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+enum OdometerReading {
+    Valid(DecimalValue),
+    Invalid,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct QualifiedLocation {
+    classification: NormalizedLocation,
+    time: i64,
+    nanoseconds: u32,
+    odometer: DecimalValue,
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -83,6 +102,16 @@ struct AdapterState {
     #[serde(default)]
     last_nanoseconds: u32,
     ac_evidence: bool,
+    #[serde(default)]
+    previous_counter: Option<NormalizedCounter>,
+    #[serde(default)]
+    dc_evidence: bool,
+    #[serde(default)]
+    odometer: Option<DecimalValue>,
+    #[serde(default)]
+    location: Option<QualifiedLocation>,
+    #[serde(default)]
+    location_conflict_time: Option<(i64, u32)>,
 }
 
 pub(crate) struct LiveCheckpoint {
@@ -281,19 +310,32 @@ fn adapt(
     if starts {
         state.connection = Some(format!("live-{}", state.next_position));
         state.ac_evidence = false;
+        state.dc_evidence = false;
+        state.previous_counter = None;
     }
     if !late {
+        state.observe_location(signal, timestamp.1);
         state.previous = current;
         state.last_time = Some(signal.time);
         state.last_nanoseconds = timestamp.1;
+    } else if signal.location.is_some() || signal.odometer.is_some() {
+        state.location = None;
+        if signal.odometer.is_some() {
+            state.odometer = None;
+        }
     }
     let Some(connection) = state.connection.clone() else {
         return Ok(RecordDisposition::Rejected(
             RejectionReason::MissingAssociation,
         ));
     };
-    state.ac_evidence |= signal.ac_power == Some(true)
-        || matches!(signal.counter, Some(NormalizedCounter::Valid { .. }));
+    state.ac_evidence |= !late
+        && (signal.ac_power == Some(true)
+            || counter_increased(&state.previous_counter, &signal.counter));
+    if !late && signal.counter.is_some() {
+        state.previous_counter = signal.counter.clone();
+    }
+    state.dc_evidence |= signal.fast_charger == Some(true);
     let ambiguous = late || current == Some(ChargeState::Unknown);
     let position = state.next_position.to_string();
     state.next_position = state
@@ -314,13 +356,24 @@ fn adapt(
             position,
             time: signal.time,
             kind,
-            charge_type: if state.ac_evidence && !ambiguous {
+            charge_type: if state.dc_evidence {
+                NormalizedChargeType::Dc
+            } else if ambiguous {
+                NormalizedChargeType::Ambiguous
+            } else if state.ac_evidence {
                 NormalizedChargeType::Ac
             } else {
-                NormalizedChargeType::Ambiguous
+                NormalizedChargeType::Unknown
             },
             counter: signal.counter.clone(),
-            location: signal.location.clone(),
+            location: if late {
+                Some(NormalizedLocation::Invalid)
+            } else {
+                state
+                    .location
+                    .as_ref()
+                    .map(|location| location.classification.clone())
+            },
         },
         provenance: EvidenceProvenance {
             device: signal.vehicle.clone(),
@@ -334,6 +387,83 @@ fn adapt(
             is_resend,
         },
     })))
+}
+
+impl AdapterState {
+    fn observe_location(&mut self, signal: &Signal, nanoseconds: u32) {
+        let timestamp = (signal.time, nanoseconds);
+        if let (Some(location), Some(classification)) = (&self.location, &signal.location)
+            && timestamp == (location.time, location.nanoseconds)
+            && classification != &location.classification
+        {
+            self.location_conflict_time = Some(timestamp);
+        }
+        match &signal.odometer {
+            Some(OdometerReading::Valid(current)) => {
+                if self
+                    .odometer
+                    .as_ref()
+                    .is_some_and(|prior| current.compare(prior).is_lt())
+                {
+                    self.odometer = None;
+                    self.location = None;
+                    return;
+                }
+                self.odometer = Some(current.clone());
+                if self
+                    .location
+                    .as_ref()
+                    .is_some_and(|location| current != &location.odometer)
+                {
+                    self.location = None;
+                }
+            }
+            Some(OdometerReading::Invalid) => {
+                self.odometer = None;
+                self.location = None;
+                return;
+            }
+            None => {}
+        }
+        match &signal.location {
+            Some(
+                classification @ (NormalizedLocation::InsideGeofence
+                | NormalizedLocation::OutsideGeofence),
+            ) => {
+                if self
+                    .location_conflict_time
+                    .is_some_and(|conflict| timestamp <= conflict)
+                {
+                    self.location = None;
+                    return;
+                }
+                self.location = self.odometer.clone().map(|odometer| QualifiedLocation {
+                    classification: classification.clone(),
+                    time: signal.time,
+                    nanoseconds,
+                    odometer,
+                });
+            }
+            Some(_) => self.location = None,
+            None => {}
+        }
+    }
+}
+
+fn counter_increased(
+    prior: &Option<NormalizedCounter>,
+    current: &Option<NormalizedCounter>,
+) -> bool {
+    match (prior, current) {
+        (
+            Some(NormalizedCounter::Valid { kwh: prior }),
+            Some(NormalizedCounter::Valid { kwh: current }),
+        ) => {
+            matches!((chargeshare_core::Energy::parse_kwh(prior), chargeshare_core::Energy::parse_kwh(current)),
+                (Ok(prior), Ok(current)) if current > prior)
+        }
+        _ => false,
+    }
 }
 
 fn decode(
@@ -385,43 +515,47 @@ fn decode(
         counter: None,
         ac_power: None,
         location: None,
+        odometer: None,
+        fast_charger: None,
     };
     let geofence = config
         .geofence()
         .map_err(|_| RejectionReason::InvalidManifest)?;
     let mut keys = BTreeSet::new();
+    let mut invalid_evidence = false;
     for field in payload.data {
         if !matches!(
             field.key.as_str(),
-            "DetailedChargeState" | "ACChargingEnergyIn" | "ACChargingPower" | "Location"
+            "DetailedChargeState"
+                | "ACChargingEnergyIn"
+                | "ACChargingPower"
+                | "Location"
+                | "Odometer"
+                | "FastChargerPresent"
         ) {
             continue;
         }
         if !keys.insert(field.key.clone()) {
-            return Err(RejectionReason::DuplicateSourceField);
+            invalid_evidence = true;
+            continue;
         }
         match field.key.as_str() {
             "DetailedChargeState" => {
-                let value: serde_json::Value = serde_json::from_str(field.value.get())
-                    .map_err(|_| RejectionReason::UnsupportedPayload)?;
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct StateValue {
+                    detailed_charge_state_value: ChargeState,
+                }
                 signal.state = Some(
-                    if value.get("invalid") == Some(&serde_json::Value::Bool(true)) {
-                        ChargeState::Unknown
-                    } else {
-                        serde_json::from_value(
-                            value
-                                .get("detailedChargeStateValue")
-                                .cloned()
-                                .ok_or(RejectionReason::UnsupportedPayload)?,
-                        )
-                        .map_err(|_| RejectionReason::UnsupportedPayload)?
-                    },
+                    serde_json::from_str::<StateValue>(field.value.get())
+                        .map(|value| value.detailed_charge_state_value)
+                        .unwrap_or(ChargeState::Unknown),
                 );
             }
             "ACChargingEnergyIn" => {
                 signal.counter = Some(
                     numeric_text(&field.value)
-                        .map(|value| NormalizedCounter::parse_kwh(&value))
+                        .map(|value| normalize_counter(&value))
                         .unwrap_or(NormalizedCounter::Rejected {
                             reason: crate::SafeCounterProblem::Invalid,
                         }),
@@ -430,18 +564,33 @@ fn decode(
             "ACChargingPower" => {
                 signal.ac_power = Some(
                     numeric_text(&field.value)
-                        .and_then(|value| value.parse::<f64>().ok())
-                        .is_some_and(|power| power.is_finite() && power > 0.0),
+                        .and_then(|value| DecimalValue::parse(&value).ok())
+                        .is_some_and(|power| power.is_positive()),
                 );
-                if numeric_text(&field.value).and_then(|value| value.parse::<f64>().ok())
-                    == Some(0.0)
-                {
-                    signal.ac_power = None;
-                }
             }
             "Location" => signal.location = Some(classify(&field.value, geofence)),
+            "Odometer" => {
+                signal.odometer = Some(
+                    numeric_text(&field.value)
+                        .and_then(|value| DecimalValue::parse(&value).ok())
+                        .map(OdometerReading::Valid)
+                        .unwrap_or(OdometerReading::Invalid),
+                );
+            }
+            "FastChargerPresent" => {
+                signal.fast_charger = boolean_value(&field.value);
+                invalid_evidence |= signal.fast_charger.is_none();
+            }
             _ => unreachable!(),
         }
+    }
+    if invalid_evidence {
+        signal.state = Some(ChargeState::Unknown);
+        signal.counter = Some(NormalizedCounter::Rejected {
+            reason: crate::SafeCounterProblem::Invalid,
+        });
+        signal.location = Some(NormalizedLocation::Invalid);
+        signal.odometer = Some(OdometerReading::Invalid);
     }
     Ok((
         signal,
@@ -451,16 +600,43 @@ fn decode(
 }
 
 fn numeric_text(value: &serde_json::value::RawValue) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(value.get()).ok()?;
-    let fields = value.as_object()?;
-    if fields.len() != 1 {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct NumericValue {
+        string_value: Option<String>,
+        long_value: Option<String>,
+        double_value: Option<Box<serde_json::value::RawValue>>,
+        float_value: Option<Box<serde_json::value::RawValue>>,
+        int_value: Option<Box<serde_json::value::RawValue>>,
+    }
+    let value: NumericValue = serde_json::from_str(value.get()).ok()?;
+    let values = [
+        value.string_value,
+        value.long_value,
+        value.double_value.map(|value| value.get().to_owned()),
+        value.float_value.map(|value| value.get().to_owned()),
+        value.int_value.map(|value| value.get().to_owned()),
+    ];
+    let mut values = values.into_iter().flatten();
+    let first = values.next()?;
+    if values.next().is_some() {
         return None;
     }
-    let (key, value) = fields.iter().next()?;
-    match key.as_str() {
-        "stringValue" => value.as_str().map(str::to_owned),
-        "doubleValue" | "floatValue" | "intValue" => value.as_number().map(ToString::to_string),
-        "longValue" => value.as_str().map(str::to_owned),
+    Some(first)
+}
+
+fn boolean_value(value: &serde_json::value::RawValue) -> Option<bool> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct BooleanValue {
+        boolean_value: Option<bool>,
+        string_value: Option<String>,
+    }
+    let value: BooleanValue = serde_json::from_str(value.get()).ok()?;
+    match (value.boolean_value, value.string_value.as_deref()) {
+        (Some(value), None) => Some(value),
+        (None, Some("true")) => Some(true),
+        (None, Some("false")) => Some(false),
         _ => None,
     }
 }
@@ -520,3 +696,6 @@ fn encode(value: &impl Serialize) -> Result<String, IngestionError> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rules;

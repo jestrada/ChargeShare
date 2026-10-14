@@ -1308,13 +1308,16 @@ fn location_normalization_preserves_only_valid_canonical_points_or_safe_invalid_
 #[test]
 fn geofence_configuration_requires_unique_registered_owners_valid_centers_and_approved_radius() {
     let config = manifest_config();
-    for radius in [0, 99, 101] {
+    let mut changed = config.clone();
+    changed.geofences[0].radius_meters = 0;
+    assert_eq!(
+        Manifest::new(changed).unwrap_err(),
+        RejectionReason::InvalidManifest
+    );
+    for radius in [1, 99, 101, 250] {
         let mut changed = config.clone();
         changed.geofences[0].radius_meters = radius;
-        assert_eq!(
-            Manifest::new(changed).unwrap_err(),
-            RejectionReason::InvalidManifest
-        );
+        assert!(Manifest::new(changed).is_ok());
     }
     let mut duplicate = config.clone();
     duplicate.geofences.push(duplicate.geofences[0].clone());

@@ -32,3 +32,7 @@
 .persisted-quote, .persisted-rates { display: grid; gap: 12px; }
 .persisted-rates summary { cursor: pointer; min-height: 44px; padding: 12px 0; }
 .persisted-rates summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
+
+.persisted-panel, .persisted-energy dd, .persisted-scopes .control { overflow-wrap: anywhere; min-width: 0; }
+.persisted-scopes .control { white-space: normal; height: auto; }
+.persisted-coverage { display: grid; gap: 8px; min-width: 0; }

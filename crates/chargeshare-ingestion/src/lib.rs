@@ -16,7 +16,7 @@ mod manifest;
 mod model;
 mod normalize;
 
-pub use live_config::run_live;
+pub use live_config::{rebuild_live, run_live};
 
 pub use manifest::{Annotation, DeviceMapping, Manifest, ManifestConfig, OwnerGeofence};
 pub use model::{
@@ -44,7 +44,8 @@ mod results;
 mod viewing;
 
 pub use results::{
-    PRICING_BOUNDARY, PricingResult, QuoteResult, ResultProvenance, ScopedResults, SessionPrice,
-    SessionResult, SliceResult,
+    CounterCoverageResult, LIVE_PRICING_BOUNDARY, LIVE_QUANTIZATION, PRICING_BOUNDARY,
+    PricingResult, QuoteResult, ResultProvenance, ScopedResults, SessionPrice, SessionResult,
+    SliceResult,
 };
 pub use viewing::serve_results;

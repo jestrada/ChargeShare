@@ -379,6 +379,7 @@ fn live_state_transitions_replay_exact_counter_energy_and_conservative_boundary_
         ledger
             .register(vehicle.clone(), OwnerId::new("owner-a").unwrap())
             .unwrap();
+        ledger.use_observed_counter_window(&vehicle).unwrap();
         let mut state = super::AdapterState::default();
         for record in runtime
             .records
@@ -411,7 +412,10 @@ fn live_state_transitions_replay_exact_counter_energy_and_conservative_boundary_
         );
         assert_eq!(
             sessions[0].is_eligible(),
-            matches!(variant, "complete" | "invalid_power" | "missing_power")
+            matches!(
+                variant,
+                "complete" | "invalid_power" | "missing_power" | "missing_final"
+            )
         );
         if variant == "missing_end" {
             assert!(
@@ -461,7 +465,7 @@ fn valid_counter_or_positive_ac_power_establishes_ac_evidence() {
 }
 
 #[test]
-fn missing_end_and_missing_terminal_counter_remain_held_without_silence_inference() {
+fn missing_end_holds_and_missing_terminal_counter_prices_only_the_observed_window() {
     for omit_end in [true, false] {
         let mut runtime = Runtime::new();
         if !omit_end {
@@ -477,9 +481,18 @@ fn missing_end_and_missing_terminal_counter_remain_held_without_silence_inferenc
             runtime.ingest(&mut store, offset as i64, record).unwrap();
         }
         let result = runtime.results(&store);
-        assert_eq!(result.state, "held");
+        assert_eq!(result.state, if omit_end { "held" } else { "eligible" });
         assert_eq!(result.observed_ac_kwh, "0.250000");
-        assert_eq!(result.eligible_shared_charger_kwh, "0.000000");
+        assert_eq!(
+            result.eligible_shared_charger_kwh,
+            if omit_end { "0.000000" } else { "0.250000" }
+        );
+        if !omit_end {
+            assert_eq!(result.sessions[0].evidence_state, "partial");
+            let quote = result.sessions[0].pricing.quote.as_ref().unwrap();
+            assert_eq!(quote.display_cost, "$0.06");
+            assert_eq!(quote.slices.last().unwrap().end_utc_seconds, "1788264300");
+        }
         assert!(
             result.sessions[0].quality_flags.contains(
                 &if omit_end {
@@ -672,11 +685,20 @@ fn missing_invalid_partial_and_mixed_location_keep_existing_classification_holds
         }
         let result = runtime.results(&store);
         assert_eq!(result.observed_ac_kwh, "0.500000");
-        assert_eq!(result.eligible_shared_charger_kwh, "0.000000");
+        assert_eq!(
+            result.eligible_shared_charger_kwh,
+            if variant == "partial" {
+                "0.500000"
+            } else {
+                "0.000000"
+            }
+        );
         assert_eq!(
             result.sessions[0].classification,
             if variant == "outside" {
                 "OtherCharger"
+            } else if variant == "partial" {
+                "SharedCharger"
             } else {
                 "Held"
             }

@@ -38,13 +38,16 @@ flowchart LR
     private_config["Private live config: mappings + geofence + rates"] --> live
     subgraph owner["Single Rust owner: serve or live"]
         normalize["Frozen mapping + normalized location/counters"] --> sqlite[("SQLite: evidence + config versions + progress")]
-        live["Live adapter: state transitions + classify and drop coordinates"] --> sqlite
+        live["Live v2: state + classified location/time + odometer; drop coordinates"] --> sqlite
+        preserved["Preserved dataset + original source marker"] --> rebuild["Stopped-owner rebuild: validate retained original offsets"]
+        kafka --> rebuild
+        rebuild --> live
         private_config --> sanitized_config["Aliases + redacted geofence version + rates"] --> sqlite
         config["Owner charger config + immutable rate histories"] --> sqlite
         sqlite --> replay["Scoped core replay"]
         replay --> classification["Core: automatic session location classification"]
         classification --> results["Committed energy + eligibility + quotes + provenance"]
-        classification --> pricing["Core: local-time splits + exact quotes + whole-session holds"]
+        classification --> pricing["Core: observed-window coverage + local-time splits + exact quotes + holds"]
         sqlite --> pricing
         pricing --> results
         results --> api["Scoped HTTP: host loopback 8788"]
@@ -242,33 +245,86 @@ Silence, zero power and sparse counters create no End. `createdAt` supplies
 integral UTC event time; arrival time and the zero timestamp header do not.
 Late or unknown-state records remain conservative ambiguous evidence.
 
-Energy uses only observed `ACChargingEnergyIn` counter deltas. Positive
-`ACChargingPower` or a valid AC counter establishes AC evidence; power and elapsed
-time never supply energy. A missing final counter leaves the session held with
-`MissingTerminalSample`, preserving earlier observed deltas. Live results label
-this boundary as vehicle-reported AC input counter energy with unvalidated
-physical accuracy, and retain the existing pricing estimate boundary.
+Energy uses only observed `ACChargingEnergyIn` counter deltas. Live normalization
+v2 parses decimal digits and exponents directly, with checked base-10 arithmetic,
+and quantizes once to six decimal kWh places, half-up. It rejects malformed,
+nonfinite, negative and overflowing counters without retaining rejected text.
+JSON numeric tokens never pass through binary floating point for counters or
+odometers. Core energy and money arithmetic remain exact after normalization;
+responses disclose counter quantization and unvalidated physical accuracy.
 
-Only `DetailedChargeState`, `ACChargingEnergyIn`, `ACChargingPower` and `Location`
-affect adaptation. Unknown telemetry fields, including ChargeState, Odometer and
-Soc, are ignored and discarded while the record is processed. Duplicate consumed
-fields and malformed envelopes reject with fixed reasons. Coordinates are
-validated and classified against the private geofence, then dropped before any
-SQLite write, logging or API response. Storage retains only inside/outside,
-invalid or absent location evidence and aliases; device identity, raw transaction
-IDs and the geofence center never persist. Mapping/geofence fingerprints freeze
-the live configuration because dropped coordinates cannot be reclassified under
-a changed geofence; configuration changes refuse reuse of that dataset.
+Positive `ACChargingPower` or a rising pair of valid AC counters establishes AC
+evidence within a connection; one counter alone proves nothing. Replay resolves
+initially unknown type using that connection's later AC evidence, including a
+state-only Start. Explicit unknown-state, late, invalid and conflicting evidence
+remain barriers. Optional `FastChargerPresent` accepts the receiver's boolean or
+boolean-string value: true vetoes AC pricing, false alone establishes no AC
+evidence. Power and elapsed time never supply kWh. No subscription change is
+required.
+
+Live reconstruction keeps explicit Start/End but prices only supported deltas
+between the first and last usable in-session counters at their observed UTC
+seconds. Missing edge counters remain visible `MissingBaseline` and
+`MissingTerminalSample` caveats and produce partial coverage rather than an
+eligibility hold. Missing Start/End, fewer than two usable readings, resets,
+invalid counters, conflicts, ambiguous type or DC still hold. No energy is
+inferred at state boundaries and no counter chain bridges an invalid/reset or
+conflict barrier. Offline full-session eligibility is unchanged. The scoped API
+returns connection bounds, first/last counter times, usable-reading count, edge
+coverage and quantization alongside existing exact quotes and once-rounded
+subtotals. The dashboard displays partial coverage, absent quotes, holds,
+vehicle-reported AC input, physical uncertainty and the public sample-rate
+energy-only estimate using Rust-supplied energy and money strings.
+
+`DetailedChargeState`, `ACChargingEnergyIn`, `ACChargingPower`, `Location`,
+`Odometer` and optional `FastChargerPresent` affect adaptation. Other telemetry
+fields are ignored and discarded. Duplicate consumed fields become conservative
+invalid/unknown evidence; malformed envelopes reject with fixed reasons.
+Coordinates are classified against the private geofence and dropped before any
+SQLite write, logging or API response. The positive integer geofence radius
+defaults to 100 m; its boundary is inclusive, and validation, redaction and frozen
+fingerprints retain the configured radius.
+
+Per vehicle, the adapter retains the last qualified location classification and
+its observation time, including observations before a connection, with the exact
+odometer evidence needed to qualify it. There is no age limit. Absent fields
+retain qualified evidence; missing required odometer/location, invalid evidence
+or an odometer increase without a newer valid location leave location held. An
+odometer decrease is conflicting evidence. Late observations cannot qualify location or borrow a future point; late
+location/odometer evidence invalidates carried qualification until fresh valid
+evidence is available. Each event receives only its then-qualified
+classification. Missing or mixed classifications across a session still hold.
+Location persistence is limited to classification/time and odometer evidence.
+Device identity, raw transaction IDs, points and the geofence center never persist. Mapping and
+geofence fingerprints freeze the live configuration because dropped coordinates
+cannot be reclassified. Changed configuration or normalization refuses dataset
+reuse.
 
 Per-vehicle transaction fingerprints deduplicate receiver redelivery and resends.
-Identical normalized signals also reuse the original disposition and position.
-Changed signals under a reused transaction identity refuse ingestion. Adapter
-state, curated evidence, deduplication checkpoints and the next partition offset
-commit together in one SQLite transaction. Restart resumes the same session and
-positions. A private source marker binds the live dataset to its epoch, topic,
-cluster and initial partition offsets; expired history or changed source identity
-refuses recovery. Live mode reuses the single SQLite owner, committed snapshot
-API and existing browser pricing contract.
+Identical normalized signals reuse the original disposition and position. Changed
+signals under a reused transaction identity refuse ingestion. Adapter state,
+curated evidence, deduplication checkpoints and next partition offsets commit in
+one SQLite transaction. Restart resumes the same session, carried location and
+odometer evidence. A private source marker binds the dataset to its epoch, topic,
+cluster and original partition offsets; expired history or changed source
+identity refuses recovery.
+
+While the owner is stopped, `chargeshare-ingestion rebuild-live
+<original-private-config> <replacement-private-config>` rebuilds from original
+Kafka records, rather than already-normalized SQLite evidence. Both private
+config files and databases stay outside the checkout. The replacement must use
+a separate private directory/database and a new source epoch, preserving the
+source topic and device mappings; it may correct the geofence/radius and select
+rates. The original dataset is locked and preserved. Broker identity, partition
+membership and retained history from original offset zero through a captured
+high-water mark are validated. Missing initial location/odometer source history,
+retention gaps, offset gaps, truncated progress, active ownership or an existing
+target database/marker refuse recovery. The replacement marker binds the new
+epoch to those original offsets and its manifest freezes normalization v2.
+A failed rebuild leaves the original intact and any partial target separate;
+there is no silent reset, dataset switch or broker-retention change. Live mode
+reuses the single SQLite owner and committed scoped results API; no session or
+cost tables or additional service are introduced.
 
 ## Implemented offline ledger
 
@@ -302,7 +358,7 @@ conflicts; no candidate is selected as a measurement or boundary. Conflict,
 invalid-counter and non-AC barriers break the counter chain. Deltas never cross
 connections; rollback adds no negative energy and holds the session.
 
-Start/End require explicit evidence and baseline/terminal samples. Pause/resume
+Offline Start/End require explicit evidence and baseline/terminal samples. Pause/resume
 stay in the same connection. Missing boundaries/readings, malformed ordering,
 rollback and conflicting evidence retain visible quality flags. Silence means
 neither zero consumption nor a session end. Only complete, uncontested AC sessions
@@ -380,7 +436,7 @@ credit, daily Base Services Charge and taxes and is not a bill.
 
 ## Measurement boundary
 
-Every total identifies synthetic evidence and its AC counter boundary and quality.
+Every total identifies its evidence source, AC counter boundary and quality.
 AC-input energy and battery-added energy have different measurement boundaries.
 Neither synthetic transport nor exact arithmetic proves utility-meter accuracy.
 Before any separately approved real trial, validate firmware/signals, counter
