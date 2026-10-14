@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish = false
+default-run = "chargeshare-ingestion"
+
+[[bin]]
+name = "chargie"
+path = "src/chargie.rs"
 
 [[example]]
 name = "dashboard-fixture"

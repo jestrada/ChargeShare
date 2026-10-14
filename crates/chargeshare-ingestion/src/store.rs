@@ -50,10 +50,11 @@ pub enum CommitBoundary {
 }
 
 pub struct Store {
+    pub(crate) registry: Option<crate::registry::RegistrySnapshot>,
     pub(crate) connection: Connection,
     pub(crate) manifest: Manifest,
     source: SourceBinding,
-    manifest_json: String,
+    pub(crate) manifest_json: String,
     _owning_lock: OwningLock,
     _runtime_directory: File,
     _database_guard: File,
@@ -61,6 +62,100 @@ pub struct Store {
 }
 
 impl Store {
+    pub(crate) fn open_registry_database(path: &Path) -> Result<Self, IngestionError> {
+        if !path.is_file() {
+            return Err(IngestionError::StorageUnavailable);
+        }
+        let runtime = RuntimePath::open(path)?;
+        runtime.validate_files()?;
+        let owning_lock =
+            OwningLock::acquire(runtime.open_private_file(&runtime.companion_name(".lock"))?)?;
+        let database_guard = runtime.open_private_file(&runtime.database_name)?;
+        let connection = Connection::open_with_flags(
+            &runtime.absolute_path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .map_err(storage_error)?;
+        connection
+            .busy_timeout(Duration::from_millis(250))
+            .map_err(storage_error)?;
+        runtime.verify_file_binding(&runtime.database_name, &database_guard)?;
+        runtime.verify_file_binding(&runtime.companion_name(".lock"), &owning_lock.file)?;
+        if inspect_version(&connection)? {
+            return Err(IngestionError::SchemaMismatch);
+        }
+        let (manifest_json, source_json): (String, String) = connection
+            .query_row(
+                "SELECT manifest_json,source_json FROM runtime_metadata",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(storage_error)?;
+        let fixed = Manifest::from_json(manifest_json.as_bytes())
+            .map_err(|_| IngestionError::StorageCorrupt)?;
+        let source: SourceBinding =
+            serde_json::from_str(&source_json).map_err(|_| IngestionError::StorageCorrupt)?;
+        source.validate()?;
+        let (registry, manifest) = if crate::registry::is_registry(&connection)? {
+            let (registry, manifest) = crate::registry::load(&connection, &fixed)?;
+            (Some(registry), manifest)
+        } else {
+            verify_configuration(&connection, &fixed, &manifest_json, &source, &source_json)?;
+            (None, fixed)
+        };
+        verify_retained_evidence(&connection, &manifest)?;
+        configure_durability(&connection)?;
+        let store = Self {
+            connection,
+            manifest,
+            registry,
+            source,
+            manifest_json,
+            _owning_lock: owning_lock,
+            _runtime_directory: runtime.directory,
+            _database_guard: database_guard,
+            database_path: runtime.absolute_path,
+        };
+        if store.registry.is_some() {
+            store.verify_live_registry_state()?;
+            store.verify_recovery_state()?;
+        }
+        store.validate_live_storage()?;
+        Ok(store)
+    }
+
+    pub fn open_runtime(
+        settings: &crate::RuntimeSettings,
+        source: &SourceBinding,
+    ) -> Result<Self, IngestionError> {
+        let store = Self::open_registry_database(&settings.database)?;
+        if store.registry.is_none() {
+            return Err(IngestionError::MigrationInputRequired);
+        }
+        store.source.verify_identity(source)?;
+        if store.source != *source {
+            return Err(IngestionError::SourceMismatch);
+        }
+        let stored: String = store
+            .connection
+            .query_row(
+                "SELECT settings_json FROM registry_runtime_settings",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)?;
+        let retained: crate::RuntimeSettings =
+            serde_json::from_str(&stored).map_err(|_| IngestionError::StorageCorrupt)?;
+        if retained != *settings
+            || store.manifest_json != crate::registry::json(settings.manifest()?.config())?
+        {
+            return Err(IngestionError::ConfigurationMismatch);
+        }
+        Ok(store)
+    }
+
     pub(crate) fn preserve_live_source(
         path: &Path,
         manifest: &Manifest,
@@ -177,6 +272,7 @@ impl Store {
         }
         runtime.validate_files()?;
         let store = Self {
+            registry: None,
             connection,
             manifest: manifest.clone(),
             source,
@@ -191,6 +287,14 @@ impl Store {
             crate::live::initialize(&store.connection)?;
         }
         Ok(store)
+    }
+
+    pub(crate) fn fixed_manifest_json(&self) -> &str {
+        &self.manifest_json
+    }
+
+    pub(crate) fn source_topic(&self) -> &str {
+        &self.source.topic
     }
 
     pub(crate) fn source_epoch(&self) -> &str {
@@ -372,6 +476,23 @@ impl Store {
         if changed != 1 {
             return Err(IngestionError::ProgressConflict);
         }
+        if let Some(registry) = &self.registry {
+            let admitted: Vec<_> = registry
+                .cars
+                .iter()
+                .map(|car| &car.registration.vehicle)
+                .collect();
+            transaction
+                .execute(
+                    "INSERT INTO live_delivery_admissions VALUES (?1,?2,?3)",
+                    params![
+                        coordinate.partition,
+                        coordinate.offset,
+                        crate::registry::json(&admitted)?
+                    ],
+                )
+                .map_err(storage_error)?;
+        }
         if let Some(checkpoint) = checkpoint {
             checkpoint.save(&transaction)?;
         }
@@ -493,17 +614,18 @@ impl Store {
     }
 }
 
-fn verify_retained_evidence(
+pub(crate) fn verify_retained_evidence(
     connection: &Connection,
     manifest: &Manifest,
 ) -> Result<(), IngestionError> {
+    let registry = crate::registry::is_registry(connection)?;
+    let orphan_query = if registry {
+        "SELECT EXISTS(SELECT 1 FROM event_variants v WHERE NOT EXISTS(SELECT 1 FROM deliveries d WHERE d.variant_id = v.id) AND NOT EXISTS(SELECT 1 FROM recovery_evidence r WHERE r.variant_id = v.id))"
+    } else {
+        "SELECT EXISTS(SELECT 1 FROM event_variants v WHERE NOT EXISTS(SELECT 1 FROM deliveries d WHERE d.variant_id = v.id))"
+    };
     let orphaned = connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM event_variants v WHERE NOT EXISTS(
-                    SELECT 1 FROM deliveries d WHERE d.variant_id = v.id))",
-            [],
-            |row| row.get::<_, bool>(0),
-        )
+        .query_row(orphan_query, [], |row| row.get::<_, bool>(0))
         .map_err(storage_error)?;
     if orphaned {
         return Err(IngestionError::StorageCorrupt);

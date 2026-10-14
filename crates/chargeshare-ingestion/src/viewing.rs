@@ -124,20 +124,59 @@ fn route(request: &str, store: &Store, failure: Option<IngestionError>) -> (u16,
         if failure.is_some() {
             return safe_error(503, "results_unavailable");
         }
-        let scopes: Vec<_> = store
-            .manifest
-            .config()
-            .mappings
-            .iter()
-            .map(|mapping| serde_json::json!({"owner": mapping.owner, "vehicle": mapping.vehicle}))
-            .collect();
+        let Ok(scopes) = store.active_scopes() else {
+            return safe_error(503, "results_unavailable");
+        };
         return (
             200,
             serde_json::json!({"synthetic_only": !store.manifest.is_live(), "scopes": scopes})
                 .to_string(),
         );
     }
-    let path: Vec<_> = parts[1].split('/').collect();
+    let (target, query) = parts[1].split_once('?').unwrap_or((parts[1], ""));
+    let charger = if query.is_empty() {
+        None
+    } else {
+        let Some(id) = query
+            .strip_prefix("charger=")
+            .filter(|id| VehicleId::new(id).is_ok())
+        else {
+            return safe_error(400, "charger_refused");
+        };
+        let requested_vehicle = target.split('/').nth(6).unwrap_or_default();
+        let linked = if let Some(registry) = &store.registry {
+            registry.cars.iter().any(|car| {
+                car.registration.vehicle == requested_vehicle
+                    && car
+                        .registration
+                        .chargers
+                        .iter()
+                        .any(|charger| charger == id)
+            })
+        } else {
+            store
+                .manifest
+                .config()
+                .mappings
+                .iter()
+                .find(|mapping| mapping.vehicle == requested_vehicle)
+                .is_some_and(|mapping| {
+                    store
+                        .manifest
+                        .config()
+                        .owner_chargers
+                        .iter()
+                        .any(|charger| {
+                            charger.owner_id == mapping.owner && charger.charger_id == id
+                        })
+                })
+        };
+        if !linked {
+            return safe_error(404, "charger_refused");
+        }
+        Some(id)
+    };
+    let path: Vec<_> = target.split('/').collect();
     if path.len() != 8
         || path[..4] != ["", "api", "poc", "owners"]
         || path[5] != "vehicles"
@@ -160,8 +199,12 @@ fn route(request: &str, store: &Store, failure: Option<IngestionError>) -> (u16,
     if failure.is_some() {
         return safe_error(503, "results_unavailable");
     }
-    match store
-        .results(&owner, &vehicle)
+    let result = if let Some(charger) = charger {
+        store.results_for_charger(&owner, &vehicle, charger)
+    } else {
+        store.results(&owner, &vehicle)
+    };
+    match result
         .and_then(|result| serde_json::to_string(&result).map_err(|_| IngestionError::DomainReplay))
     {
         Ok(body) => (200, body),
@@ -171,4 +214,53 @@ fn route(request: &str, store: &Store, failure: Option<IngestionError>) -> (u16,
 
 fn safe_error(status: u16, reason: &str) -> (u16, String) {
     (status, format!("{{\"error\":\"{reason}\"}}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synthetic_dashboard_charger_choice_preserves_the_existing_result_contract() {
+        let directory =
+            std::env::temp_dir().join(format!("chargeshare-view-charger-{}", std::process::id()));
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        let manifest =
+            crate::Manifest::from_json(include_bytes!("../../../dev/ingestion-manifest.json"))
+                .unwrap();
+        let source = crate::SourceBinding {
+            epoch: "synthetic-view-charger-v1".to_owned(),
+            topic: crate::SYNTHETIC_TOPIC.to_owned(),
+            cluster_id: None,
+            topic_id: None,
+            partitions: vec![crate::PartitionStart {
+                partition: 0,
+                initial_offset: 0,
+            }],
+        };
+        let store = Store::open(&directory.join("ingestion.sqlite3"), &manifest, &source).unwrap();
+        let path = "/api/poc/owners/owner-a/vehicles/vehicle-a/results";
+        let all = route(&format!("GET {path} HTTP/1.1\r\n\r\n"), &store, None);
+        let selected = route(
+            &format!("GET {path}?charger=fictional-shared-charger HTTP/1.1\r\n\r\n"),
+            &store,
+            None,
+        );
+        assert_eq!(all.0, 200);
+        assert_eq!(all, selected);
+        assert_eq!(
+            route(
+                &format!("GET {path}?charger=unknown HTTP/1.1\r\n\r\n"),
+                &store,
+                None
+            ),
+            safe_error(404, "charger_refused")
+        );
+        drop(store);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

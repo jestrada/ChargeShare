@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
 
-from dashboard import FIXTURES, LOCAL_TIMEZONE, SYNTHETIC_NOTICE, generate_dashboard_fixture
+from dev.fixtures.dashboard import FIXTURES, LOCAL_TIMEZONE, SYNTHETIC_NOTICE, generate_dashboard_fixture
 
 
 class DashboardFixtureTests(unittest.TestCase):
@@ -68,6 +68,15 @@ class DashboardFixtureTests(unittest.TestCase):
             prior_end, prior_counter = times[-1], counters[-1]
         self.assertGreater(len(energies), 30)
         self.assertEqual([int(annotation["position"]) for annotation in self.fixture["manifest"]["annotations"]], list(range(1, len(self.fixture["records"]) + 1)))
+
+    def test_named_multiple_car_and_charger_fixture_preserves_isolated_scopes(self):
+        fixture = generate_dashboard_fixture(multiple=True)
+        self.assertEqual([scope["name"] for scope in fixture["display_registry"]], ["Model 3 sample", "Model Y sample"])
+        self.assertEqual([scope["chargers"][0]["name"] for scope in fixture["display_registry"]], ["Driveway charger", "Garage charger"])
+        self.assertEqual({record["key"] for record in fixture["records"]}, {"vehicle-a", "vehicle-b"})
+        self.assertEqual(len(fixture["records"]), 2 * len(self.fixture["records"]))
+        for mapping in fixture["manifest"]["mappings"]:
+            self.assertTrue(all(record["payload"]["vin"] == mapping["vehicle"] for record in fixture["records"] if record["key"] == mapping["vehicle"]))
 
 
 if __name__ == "__main__":

@@ -134,7 +134,9 @@ jobs:
           nix develop --no-update-lock-file -c bash scripts/testing/ingestion-suite.sh
           nix develop --no-update-lock-file -c python3 scripts/testing/test_ingestion_guard.py
           nix develop --no-update-lock-file -c python3 -m unittest discover -s scripts/dev -p 'test_*.py'
+          nix develop --no-update-lock-file -c python3 -m unittest dev/fixtures/test_dashboard.py
           nix develop --no-update-lock-file -c npm --cache .cache/npm --prefix apps/web ci
+          nix develop --no-update-lock-file -c npm --prefix apps/web run lint
           nix develop --no-update-lock-file -c npm --prefix apps/web test
           nix develop --no-update-lock-file -c npm run preview:build
           nix develop --no-update-lock-file -c npm --prefix apps/web run build:persisted

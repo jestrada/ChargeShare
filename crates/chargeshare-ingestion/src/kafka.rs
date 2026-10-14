@@ -573,12 +573,13 @@ pub(crate) struct LiveIngestion {
     config: KafkaConfig,
     source: SourceBinding,
     verified_at: Instant,
-    live_config: Option<crate::live_config::LiveConfig>,
+    runtime_settings: Option<crate::RuntimeSettings>,
+    legacy_bootstrap: Option<crate::RegistryBootstrap>,
 }
 
 impl LiveIngestion {
     pub(crate) fn rebuild(
-        config: crate::live_config::LiveConfig,
+        config: crate::RegistryBootstrap,
         original: &SourceBinding,
         required: &[crate::PartitionPosition],
     ) -> Result<(), IngestionError> {
@@ -645,9 +646,10 @@ impl LiveIngestion {
         }
         validate_rebuild_history(&source, &bounds, required)?;
         write_live_marker(path, &source)?;
-        let manifest = config.manifest()?;
+        let manifest = config.legacy_manifest()?;
         let mut store = Store::open(&config.database, &manifest, &source)?;
-        let mut driver = Self::connect_live(config, source, &store)?;
+        let mut driver = Self::connect(config.settings.kafka_config(), source, &store)?;
+        driver.legacy_bootstrap = Some(config);
         loop {
             remaining(deadline)?;
             let positions = store.positions()?;
@@ -708,16 +710,17 @@ impl LiveIngestion {
             config,
             source,
             verified_at: Instant::now(),
-            live_config: None,
+            runtime_settings: None,
+            legacy_bootstrap: None,
         })
     }
 
     pub(crate) fn connect_live(
-        live_config: crate::live_config::LiveConfig,
+        runtime_settings: crate::RuntimeSettings,
         source: SourceBinding,
-        store: &Store,
+        store: &mut Store,
     ) -> Result<Self, IngestionError> {
-        let config = live_config.kafka_config();
+        let config = runtime_settings.kafka_config();
         verify_source_marker(&config.source_epoch_path, &source)?;
         let consumer = connect_consumer(&config)?;
         verify_broker_source(
@@ -727,6 +730,7 @@ impl LiveIngestion {
             store,
             Instant::now() + config.deadline,
         )?;
+        recover_registry(&consumer, &config, &source, store)?;
         let mut assignment = TopicPartitionList::new();
         for position in store.positions()? {
             assignment
@@ -745,7 +749,8 @@ impl LiveIngestion {
             config,
             source,
             verified_at: Instant::now(),
-            live_config: Some(live_config),
+            runtime_settings: Some(runtime_settings),
+            legacy_bootstrap: None,
         })
     }
 
@@ -778,10 +783,12 @@ impl LiveIngestion {
             partition: delivery.partition(),
             offset: delivery.offset(),
         };
-        if self.live_config.is_some() && coordinate.offset != position.next_offset {
+        if (self.runtime_settings.is_some() || self.legacy_bootstrap.is_some())
+            && coordinate.offset != position.next_offset
+        {
             return Err(IngestionError::RecoveryGap);
         }
-        if let Some(config) = &self.live_config {
+        if self.runtime_settings.is_some() || self.legacy_bootstrap.is_some() {
             let headers = delivery
                 .headers()
                 .map(|headers| {
@@ -796,13 +803,29 @@ impl LiveIngestion {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            store.ingest_live(
-                config,
-                coordinate,
-                position.next_offset,
-                &headers,
-                delivery.payload().unwrap_or_default(),
-            )?;
+            if let Some(settings) = &self.runtime_settings {
+                store.ingest_live(
+                    settings,
+                    coordinate,
+                    position.next_offset,
+                    &headers,
+                    delivery.payload().unwrap_or_default(),
+                )?;
+            } else if let Some(bootstrap) = &self.legacy_bootstrap {
+                let registry = bootstrap.decoder_registry()?;
+                let (disposition, checkpoint) = store.prepare_live(
+                    &registry,
+                    &headers,
+                    delivery.payload().unwrap_or_default(),
+                )?;
+                store.commit_with_checkpoint(
+                    coordinate,
+                    position.next_offset,
+                    disposition,
+                    checkpoint.as_ref(),
+                    &mut |_| Ok(()),
+                )?;
+            }
         } else {
             let manifest = store.manifest.clone();
             store.ingest(
@@ -821,7 +844,7 @@ impl LiveIngestion {
 }
 
 pub(crate) fn live_source(
-    config: &crate::live_config::LiveConfig,
+    config: &crate::RuntimeSettings,
 ) -> Result<SourceBinding, IngestionError> {
     let kafka = config.kafka_config();
     let path = &kafka.source_epoch_path;
@@ -938,6 +961,95 @@ fn validate_rebuild_history(
         }
     }
     Ok(())
+}
+
+fn recover_registry(
+    consumer: &BaseConsumer<SilentSyntheticContext>,
+    config: &KafkaConfig,
+    source: &SourceBinding,
+    store: &mut Store,
+) -> Result<(), IngestionError> {
+    for vehicle in store.pending_recoveries()? {
+        let bounds = verify_broker_source(
+            consumer,
+            config,
+            source,
+            store,
+            Instant::now() + config.deadline,
+        )?;
+        let positions = store.capture_recovery(&vehicle, source, &bounds)?;
+        for position in positions {
+            if position.next_offset == position.high {
+                continue;
+            }
+            let mut assignment = TopicPartitionList::new();
+            assignment
+                .add_partition_offset(
+                    &source.topic,
+                    position.partition,
+                    Offset::Offset(position.next_offset),
+                )
+                .map_err(|_| IngestionError::KafkaUnavailable)?;
+            consumer
+                .assign(&assignment)
+                .map_err(|_| IngestionError::KafkaUnavailable)?;
+            let mut next = position.next_offset;
+            let mut deadline = Instant::now() + config.deadline;
+            while next < position.high {
+                store.validate_live_storage()?;
+                verify_source_marker(&config.source_epoch_path, source)?;
+                let Some(delivery) =
+                    consumer.poll(remaining(deadline)?.min(Duration::from_millis(100)))
+                else {
+                    continue;
+                };
+                let delivery = delivery.map_err(consumer_error)?;
+                if delivery.topic() != source.topic
+                    || delivery.partition() != position.partition
+                    || delivery.offset() != next
+                {
+                    return Err(IngestionError::RecoveryGap);
+                }
+                let headers: Vec<_> = delivery
+                    .headers()
+                    .map(|headers| {
+                        headers
+                            .iter()
+                            .map(|header| {
+                                (
+                                    header.key.to_owned(),
+                                    header.value.unwrap_or_default().to_vec(),
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                store.recover_live_observed(
+                    &vehicle,
+                    DeliveryCoordinate {
+                        partition: position.partition,
+                        offset: next,
+                    },
+                    &headers,
+                    delivery.payload().unwrap_or_default(),
+                    &mut |_| Ok(()),
+                )?;
+                next += 1;
+                deadline = Instant::now() + config.deadline;
+            }
+        }
+        verify_broker_source(
+            consumer,
+            config,
+            source,
+            store,
+            Instant::now() + config.deadline,
+        )?;
+        store.complete_recovery(&vehicle, &mut |_| Ok(()))?;
+    }
+    consumer
+        .unassign()
+        .map_err(|_| IngestionError::KafkaUnavailable)
 }
 
 #[cfg(test)]

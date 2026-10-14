@@ -17,10 +17,26 @@ pub const MAX_ANNOTATIONS: usize = 8_192;
 #[derive(Clone, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NormalizedLocation {
-    Valid { latitude: String, longitude: String },
+    Valid {
+        latitude: String,
+        longitude: String,
+    },
     Invalid,
     InsideGeofence,
+    MatchedCharger {
+        charger_id: String,
+        assignment_version: String,
+        geofence_version: String,
+    },
     OutsideGeofence,
+    OutsideChargers {
+        assignment_version: String,
+        geofence_versions: Vec<String>,
+    },
+    AmbiguousChargers {
+        assignment_version: String,
+        geofence_versions: Vec<String>,
+    },
     RedactedGeofence,
 }
 
@@ -38,7 +54,40 @@ impl NormalizedLocation {
     pub fn to_core(&self) -> Result<LocationSample, RejectionReason> {
         match self {
             Self::InsideGeofence => Ok(LocationSample::InsideGeofence),
+            Self::MatchedCharger {
+                charger_id,
+                assignment_version,
+                geofence_version,
+            } => {
+                for alias in [charger_id, assignment_version, geofence_version] {
+                    VehicleId::new(alias).map_err(|_| RejectionReason::InvalidNormalizedEvent)?;
+                }
+                Ok(LocationSample::InsideGeofence)
+            }
             Self::OutsideGeofence => Ok(LocationSample::OutsideGeofence),
+            Self::OutsideChargers {
+                assignment_version,
+                geofence_versions,
+            }
+            | Self::AmbiguousChargers {
+                assignment_version,
+                geofence_versions,
+            } => {
+                VehicleId::new(assignment_version)
+                    .map_err(|_| RejectionReason::InvalidNormalizedEvent)?;
+                if geofence_versions.is_empty()
+                    || geofence_versions
+                        .iter()
+                        .any(|version| VehicleId::new(version).is_err())
+                {
+                    return Err(RejectionReason::InvalidNormalizedEvent);
+                }
+                Ok(if matches!(self, Self::OutsideChargers { .. }) {
+                    LocationSample::OutsideGeofence
+                } else {
+                    LocationSample::Invalid
+                })
+            }
             Self::RedactedGeofence => Err(RejectionReason::InvalidNormalizedEvent),
             Self::Invalid => Ok(LocationSample::Invalid),
             Self::Valid {
@@ -71,7 +120,10 @@ impl fmt::Debug for NormalizedLocation {
             Self::Valid { .. } => "Valid { coordinates: <redacted> }",
             Self::Invalid => "Invalid",
             Self::InsideGeofence => "InsideGeofence",
+            Self::MatchedCharger { .. } => "MatchedCharger",
             Self::OutsideGeofence => "OutsideGeofence",
+            Self::OutsideChargers { .. } => "OutsideChargers",
+            Self::AmbiguousChargers { .. } => "AmbiguousChargers",
             Self::RedactedGeofence => "RedactedGeofence",
         })
     }

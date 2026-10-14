@@ -51,6 +51,7 @@ impl Store {
                     .map_err(|_| IngestionError::StorageCorrupt)?,
             );
         }
+        let matches = self.connection_chargers(vehicle.as_str())?;
         let mut statement = self
             .connection
             .prepare("SELECT event_json FROM event_variants WHERE vehicle = ?1 ORDER BY event_json")
@@ -58,10 +59,23 @@ impl Store {
         let mut rows = statement.query([&mapping.vehicle]).map_err(storage_error)?;
         while let Some(row) = rows.next().map_err(storage_error)? {
             let event_json: String = row.get(0).map_err(storage_error)?;
-            let event: NormalizedEvent =
+            let mut event: NormalizedEvent =
                 serde_json::from_str(&event_json).map_err(|_| IngestionError::StorageCorrupt)?;
             if event.vehicle != mapping.vehicle {
                 return Err(IngestionError::StorageCorrupt);
+            }
+            if matches
+                .get(&event.connection)
+                .is_some_and(|ids| ids.len() > 1)
+                && matches!(
+                    event.location,
+                    Some(
+                        crate::NormalizedLocation::InsideGeofence
+                            | crate::NormalizedLocation::MatchedCharger { .. }
+                    )
+                )
+            {
+                event.location = Some(crate::NormalizedLocation::Invalid);
             }
             ledger
                 .ingest(

@@ -35,7 +35,7 @@ def session_schedule(day: int, random_source: random.Random) -> tuple[int, int]:
     return random_source.choice((0, 10, 20, 30, 45, 60)), random_source.randrange(135, 301, 15)
 
 
-def generate_dashboard_fixture() -> dict:
+def generate_dashboard_fixture(multiple: bool = False) -> dict:
     random_source = random.Random(70)
     manifest = json.loads((FIXTURES.parent / "ingestion-manifest.json").read_text())
     manifest["manifest_version"] = "fictional-dashboard-v1"
@@ -82,13 +82,59 @@ def generate_dashboard_fixture() -> dict:
                     },
                 })
             counter_micro_kwh += energy_micro_kwh
+    display_registry = [{"owner": OWNER, "vehicle": VEHICLE, "name": "Model 3 sample", "chargers": [{"id": manifest["owner_chargers"][0]["charger_id"], "name": "Driveway charger"}]}]
+    if multiple:
+        mapping = {"device": "vehicle-b", "vehicle": "vehicle-b", "owner": "owner-b"}
+        manifest["mappings"].append(mapping)
+        charger = json.loads(json.dumps(manifest["owner_chargers"][0]))
+        charger["owner_id"] = "owner-b"
+        charger["charger_id"] = "fictional-garage-charger"
+        manifest["owner_chargers"].append(charger)
+        original_records = list(records)
+        original_annotations = list(manifest["annotations"])
+        for annotation, record in zip(original_annotations, original_records, strict=True):
+            annotation = dict(annotation, device="vehicle-b", connection=annotation["connection"].replace("demo-", "neighbor-"), position=str(len(records) + 1))
+            record = json.loads(json.dumps(record))
+            record["key"] = "vehicle-b"
+            record["payload"]["vin"] = "vehicle-b"
+            manifest["annotations"].append(annotation)
+            records.append(record)
+        display_registry.append({"owner": "owner-b", "vehicle": "vehicle-b", "name": "Model Y sample", "chargers": [{"id": charger["charger_id"], "name": "Garage charger"}]})
     return {
         "notice": SYNTHETIC_NOTICE,
         "as_of_utc_seconds": int(datetime(2026, 9, 30, 23, 59, 59, tzinfo=LOCAL_TIMEZONE).timestamp()),
         "manifest": manifest,
+        "display_registry": display_registry,
         "records": records,
     }
 
 
+def serve_dashboard(directory):
+    from functools import partial
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlsplit
+
+    class DashboardHandler(SimpleHTTPRequestHandler):
+        def do_GET(self):
+            target = urlsplit(self.path)
+            selected = parse_qs(target.query).get("charger", [])
+            if selected and target.path.endswith("/results"):
+                import re
+                if len(selected) != 1 or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", selected[0]):
+                    self.send_error(400)
+                    return
+                self.path = target.path.removesuffix("/results") + "/chargers/" + selected[0] + "/results"
+            super().do_GET()
+
+    ThreadingHTTPServer(("127.0.0.1", 8788), partial(DashboardHandler, directory=str(directory))).serve_forever()
+
+
 if __name__ == "__main__":
-    print(json.dumps(generate_dashboard_fixture(), indent=2))
+    import argparse
+    parser = argparse.ArgumentParser(description=SYNTHETIC_NOTICE)
+    parser.add_argument("--serve", type=Path)
+    options = parser.parse_args()
+    if options.serve:
+        serve_dashboard(options.serve)
+    else:
+        print(json.dumps(generate_dashboard_fixture(multiple=True), indent=2))

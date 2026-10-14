@@ -1,4 +1,5 @@
-export type Scope = { owner: string; vehicle: string }
+export type ChargerOption = { id: string; name: string }
+export type Scope = { owner: string; vehicle: string; name?: string; chargers?: ChargerOption[] }
 export type RateModel = {
   id: string; plan: string; source_label: string; source_url: string
   effective_from: string; effective_until: string | null
@@ -43,6 +44,8 @@ export type SessionResult = {
   quality_flags: string[]
   exclusion_reasons: string[]
   pricing: SessionPrice
+  charger?: ChargerOption & { assignment_versions: string[]; geofence_versions: string[] }
+  location_versions?: { charger_id: string; assignment_version: string; geofence_version: string }[]
   coverage?: CounterCoverage
 }
 export type ScopedResults = Scope & {
@@ -53,6 +56,7 @@ export type ScopedResults = Scope & {
   sessions: SessionResult[]
   pricing: PricingResult
   monthly: MonthlyHistory
+  registry?: { car_name: string; chargers: ChargerOption[]; selected_charger: string | null }
   revision: string
   provenance: {
     source: string
@@ -102,14 +106,14 @@ function isEligible(session: SessionResult) {
   return session.classification === "SharedCharger" && !session.exclusion_reasons.length &&
     session.quality_flags.every(flag => !!session.coverage && session.coverage.usable_readings >= 2 && ["MissingBaseline", "MissingTerminalSample"].includes(flag))
 }
-export function resultPath(scope: Scope) {
-  return `/api/poc/owners/${encodeURIComponent(scope.owner)}/vehicles/${encodeURIComponent(scope.vehicle)}/results`
+export function resultPath(scope: Scope, charger?: string) {
+  return `/api/poc/owners/${encodeURIComponent(scope.owner)}/vehicles/${encodeURIComponent(scope.vehicle)}/results${charger ? `?charger=${encodeURIComponent(charger)}` : ""}`
 }
 export function parseScopes(value: unknown): { synthetic_only: boolean; scopes: Scope[] } {
   const object = value as { synthetic_only: boolean; scopes: Scope[] }
   if (!hasExactKeys(object, ["synthetic_only", "scopes"]) || typeof object.synthetic_only !== "boolean" ||
-      !Array.isArray(object.scopes) || !object.scopes.length || object.scopes.length > 256 ||
-      object.scopes.some(scope => !hasExactKeys(scope, ["owner", "vehicle"]) || !alias(scope.owner) || !alias(scope.vehicle)) ||
+      !Array.isArray(object.scopes) || object.scopes.length > 256 ||
+      object.scopes.some(scope => !hasExactKeys(scope, scope.name === undefined ? ["owner", "vehicle"] : ["owner", "vehicle", "name", "chargers"]) || !alias(scope.owner) || !alias(scope.vehicle) || (scope.name !== undefined && (!displayName(scope.name) || !chargerOptions(scope.chargers)))) ||
       new Set(object.scopes.map(scope => scope.vehicle)).size !== object.scopes.length) {
     throw new Error("Persisted scopes unavailable")
   }
@@ -119,7 +123,7 @@ export function parseResults(value: unknown, scope: Scope): ScopedResults {
   const object = value as ScopedResults
   const energy = (value: unknown) => typeof value === "string" && /^\d+\.\d{6}$/.test(value)
   const reasons = (value: unknown, allowed: string[]) => Array.isArray(value) && value.every(reason => allowed.includes(reason))
-  if (!hasExactKeys(object, resultKeys) || object.owner !== scope.owner || object.vehicle !== scope.vehicle ||
+  if (!hasExactKeys(object, object.registry ? [...resultKeys, "registry"] : resultKeys) || object.owner !== scope.owner || object.vehicle !== scope.vehicle ||
       !["empty", "held", "eligible"].includes(object.state) || !energy(object.observed_ac_kwh) || !energy(object.eligible_shared_charger_kwh) ||
       !["Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated", "Vehicle-reported AC input counter energy; physical accuracy unvalidated"].includes(object.evidence_boundary) ||
       typeof object.revision !== "string" || !/^results-v2-[a-f0-9]{16}$/.test(object.revision) ||
@@ -127,7 +131,7 @@ export function parseResults(value: unknown, scope: Scope): ScopedResults {
       !hasExactKeys(object.provenance, provenanceKeys) || !["synthetic-receiver-kafka", "live-receiver-kafka"].includes(object.provenance.source) ||
       object.provenance.calculation_version !== "scoped-core-replay-v3" ||
       !provenanceKeys.every(key => typeof object.provenance[key as keyof ScopedResults["provenance"]] === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(object.provenance[key as keyof ScopedResults["provenance"]])) ||
-      object.sessions.some(session => !hasExactKeys(session, object.provenance.source === "live-receiver-kafka" ? [...sessionKeys, "coverage"] : sessionKeys) || !validCoverage(session, object.provenance.source === "live-receiver-kafka") || session.vehicle !== scope.vehicle ||
+      object.sessions.some(session => !hasExactKeys(session, [...sessionKeys, ...(object.provenance.source === "live-receiver-kafka" ? ["coverage"] : []), ...(session.charger ? ["charger"] : []), ...(session.location_versions ? ["location_versions"] : [])]) || !validCoverage(session, object.provenance.source === "live-receiver-kafka") || session.vehicle !== scope.vehicle ||
         ![session.start_utc_seconds, session.end_utc_seconds].every(epochSeconds) ||
         !/^[A-Za-z0-9_-]{1,64}$/.test(session.connection) ||
         !Object.hasOwn(classificationReasons, session.classification) ||
@@ -144,6 +148,18 @@ export function parseResults(value: unknown, scope: Scope): ScopedResults {
   if (!object.sessions.some(isEligible) && object.eligible_shared_charger_kwh !== "0.000000") throw new Error("Persisted results unavailable")
   if ((object.provenance.source === "live-receiver-kafka") !==
       (object.evidence_boundary === "Vehicle-reported AC input counter energy; physical accuracy unvalidated")) throw new Error("Persisted results unavailable")
+  if (object.registry && (!hasExactKeys(object.registry, ["car_name", "chargers", "selected_charger"]) ||
+      !displayName(object.registry.car_name) || !chargerOptions(object.registry.chargers) ||
+      object.registry.selected_charger !== null && !object.registry.chargers.some(charger => charger.id === object.registry!.selected_charger) ||
+      object.sessions.some(session => session.charger && (!hasExactKeys(session.charger, ["id", "name", "assignment_versions", "geofence_versions"]) ||
+        !alias(session.charger.id) || !displayName(session.charger.name) || !object.registry!.chargers.some(charger => charger.id === session.charger!.id && charger.name === session.charger!.name) ||
+        ![session.charger.assignment_versions,session.charger.geofence_versions].every(versions => Array.isArray(versions) && versions.length > 0 && versions.every(alias)))))) {
+    throw new Error("Persisted results unavailable")
+  }
+  if (object.sessions.some(session => session.location_versions && (!Array.isArray(session.location_versions) || session.location_versions.some(version =>
+    !hasExactKeys(version,["charger_id","assignment_version","geofence_version"]) || !alias(version.charger_id) || !alias(version.assignment_version) || !alias(version.geofence_version))))) {
+    throw new Error("Persisted results unavailable")
+  }
   validatePricing(object)
   validateMonthly(object)
   return object
@@ -187,6 +203,9 @@ export function reasonLabel(reason: string) {
   return reason.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[()]/g, " ").trim()
 }
 
+const displayName = (value: unknown) => typeof value === "string" && value.trim().length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value)
+const chargerOptions = (value: unknown): value is ChargerOption[] => Array.isArray(value) && value.length <= 256 &&
+  value.every(charger => hasExactKeys(charger,["id","name"]) && alias(charger.id) && displayName(charger.name)) && new Set(value.map(charger => charger.id)).size === value.length
 const alias = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value)
 const date = (value: unknown) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
   Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
@@ -202,7 +221,7 @@ function validatePricing(results: ScopedResults) {
   if (!hasExactKeys(pricing, ["state", "charger_id", "rate_models", "calculation_version", "estimate_boundary", "priced_ac_kwh", "exact_subtotal", "display_subtotal", "quoted_session_count", "rate_held_session_count", "ineligible_session_count"]) ||
       !["empty", "quoted", "held"].includes(pricing.state) || (pricing.charger_id !== null && !alias(pricing.charger_id)) ||
       pricing.calculation_version !== "tou-linear-micro-kwh-v1" || pricing.estimate_boundary !== (results.provenance.source === "live-receiver-kafka" ? livePricingBoundary : pricingBoundary) || !energyString(pricing.priced_ac_kwh) ||
-      !Array.isArray(pricing.rate_models) || (pricing.charger_id === null && pricing.rate_models.length)) refuse()
+      !Array.isArray(pricing.rate_models) || (pricing.charger_id === null && pricing.rate_models.length && !results.registry)) refuse()
   for (const model of pricing.rate_models) {
     if (!hasExactKeys(model, ["id", "plan", "source_label", "source_url", "effective_from", "effective_until", "timezone", "timezone_rules_version", "season_rules_version", "day_type_rules_version", "holidays", "periods"]) ||
         !alias(model.id) || !alias(model.plan) || typeof model.source_label !== "string" || !/^[A-Za-z0-9 &_()./-]{1,160}$/.test(model.source_label) ||

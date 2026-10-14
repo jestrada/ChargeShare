@@ -36,7 +36,7 @@ pub(crate) fn inspect_version(connection: &Connection) -> Result<bool, Ingestion
     if version == 0 && application == 0 && objects == 0 {
         return Ok(true);
     }
-    if ![1, 2, SCHEMA_VERSION].contains(&version) || application != APPLICATION_ID {
+    if ![1, 2, SCHEMA_VERSION, 4].contains(&version) || application != APPLICATION_ID {
         return Err(IngestionError::SchemaMismatch);
     }
     Ok(false)
@@ -419,7 +419,7 @@ pub(crate) fn load_configuration(
     transaction.commit().map_err(storage_error)
 }
 
-fn verify_rate_versions(
+pub(crate) fn verify_rate_versions(
     connection: &Connection,
     manifest: &Manifest,
     required: bool,

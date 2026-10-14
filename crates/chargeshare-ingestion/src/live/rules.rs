@@ -13,8 +13,11 @@ fn config_json() -> serde_json::Value {
     })
 }
 
-fn config() -> crate::live_config::LiveConfig {
-    crate::live_config::LiveConfig::from_json(&serde_json::to_vec(&config_json()).unwrap()).unwrap()
+fn config() -> crate::registry_bootstrap::RegistryBootstrap {
+    crate::registry_bootstrap::RegistryBootstrap::from_json(
+        &serde_json::to_vec(&config_json()).unwrap(),
+    )
+    .unwrap()
 }
 
 fn signal(time: &str) -> Signal {
@@ -53,7 +56,7 @@ fn event(
 
 #[test]
 fn parked_location_survives_unlimited_time_and_checkpoint_without_coordinates() {
-    let manifest = config().manifest().unwrap();
+    let manifest = config().legacy_manifest().unwrap();
     let mut state = AdapterState::default();
     adapt(&manifest, &mut state, &parked(), false).unwrap();
     let retained = encode(&state).unwrap();
@@ -86,7 +89,7 @@ fn parked_location_survives_unlimited_time_and_checkpoint_without_coordinates() 
 
 #[test]
 fn conflicting_location_classifications_at_one_instant_remain_held_after_restart() {
-    let manifest = config().manifest().unwrap();
+    let manifest = config().legacy_manifest().unwrap();
     let mut state = AdapterState::default();
     let mut point = parked();
     adapt(&manifest, &mut state, &point, false).unwrap();
@@ -100,7 +103,7 @@ fn conflicting_location_classifications_at_one_instant_remain_held_after_restart
 
 #[test]
 fn late_preconnection_odometer_evidence_cannot_leave_a_stale_parked_point_qualified() {
-    let manifest = config().manifest().unwrap();
+    let manifest = config().legacy_manifest().unwrap();
     let mut state = AdapterState::default();
     adapt(&manifest, &mut state, &parked(), false).unwrap();
     adapt(
@@ -132,9 +135,11 @@ fn preconnection_location_and_odometer_commit_and_recover_together_without_input
         .unwrap();
     let mut json = config_json();
     json["database"] = json!(directory.join("ingestion.sqlite3"));
-    let config =
-        crate::live_config::LiveConfig::from_json(&serde_json::to_vec(&json).unwrap()).unwrap();
-    let manifest = config.manifest().unwrap();
+    let config = crate::registry_bootstrap::RegistryBootstrap::from_json(
+        &serde_json::to_vec(&json).unwrap(),
+    )
+    .unwrap();
+    let manifest = config.legacy_manifest().unwrap();
     let source = crate::SourceBinding {
         epoch: config.source_epoch.clone(),
         topic: "unit_V".to_owned(),
@@ -157,7 +162,7 @@ fn preconnection_location_and_odometer_commit_and_recover_together_without_input
         {"key": "Odometer", "value": {"stringValue": "100"}}
     ]})).unwrap();
     store
-        .ingest_live(
+        .ingest_bootstrap(
             &config,
             DeliveryCoordinate {
                 partition: 0,
@@ -184,7 +189,7 @@ fn preconnection_location_and_odometer_commit_and_recover_together_without_input
         {"key": "DetailedChargeState", "value": {"detailedChargeStateValue": "DetailedChargeStateCharging"}}
     ]})).unwrap();
     store
-        .ingest_live(
+        .ingest_bootstrap(
             &config,
             DeliveryCoordinate {
                 partition: 0,
@@ -235,7 +240,7 @@ fn preconnection_location_and_odometer_commit_and_recover_together_without_input
 
 #[test]
 fn future_invalid_and_missing_odometer_evidence_never_qualifies_an_earlier_point() {
-    let manifest = config().manifest().unwrap();
+    let manifest = config().legacy_manifest().unwrap();
     for variant in [
         "missing_odometer",
         "invalid_location",
@@ -273,7 +278,7 @@ fn future_invalid_and_missing_odometer_evidence_never_qualifies_an_earlier_point
 
 #[test]
 fn same_connection_ac_resolution_requires_power_or_a_rise_and_dc_always_vetoes() {
-    let manifest = config().manifest().unwrap();
+    let manifest = config().legacy_manifest().unwrap();
     for proof in [
         "counter_rise",
         "power",
@@ -393,7 +398,7 @@ fn numeric_fields_preserve_json_decimal_text_and_optional_fast_charger_is_strict
         json!({"invalid": true}),
     ] {
         let payload = serde_json::to_vec(&json!({"createdAt": "2026-10-13T00:00:00Z", "data": [{"key": "FastChargerPresent", "value": value}]})).unwrap();
-        let (signal, _, _) = decode(&config, &headers, &payload).unwrap();
+        let (signal, _, _) = decode_bootstrap(&config, &headers, &payload).unwrap();
         if value.get("invalid").is_some() {
             assert!(signal.state == Some(ChargeState::Unknown));
         } else {
@@ -413,18 +418,19 @@ fn numeric_fields_preserve_json_decimal_text_and_optional_fast_charger_is_strict
 #[test]
 fn radius_defaults_validates_redacts_and_changes_the_frozen_fingerprint() {
     let config = config();
-    let original = config.manifest().unwrap();
+    let original = config.legacy_manifest().unwrap();
     assert_eq!(
         original.config().owner_chargers[0].geofence.radius_meters,
         100
     );
     let mut changed = config_json();
     changed["shared_charger"]["geofence"]["radius_meters"] = json!(250);
-    let changed_manifest =
-        crate::live_config::LiveConfig::from_json(&serde_json::to_vec(&changed).unwrap())
-            .unwrap()
-            .manifest()
-            .unwrap();
+    let changed_manifest = crate::registry_bootstrap::RegistryBootstrap::from_json(
+        &serde_json::to_vec(&changed).unwrap(),
+    )
+    .unwrap()
+    .legacy_manifest()
+    .unwrap();
     assert_eq!(
         changed_manifest.config().owner_chargers[0]
             .geofence
@@ -442,7 +448,10 @@ fn radius_defaults_validates_redacts_and_changes_the_frozen_fingerprint() {
     );
     changed["shared_charger"]["geofence"]["radius_meters"] = json!(0);
     assert!(
-        crate::live_config::LiveConfig::from_json(&serde_json::to_vec(&changed).unwrap()).is_err()
+        crate::registry_bootstrap::RegistryBootstrap::from_json(
+            &serde_json::to_vec(&changed).unwrap()
+        )
+        .is_err()
     );
     for radius in ["-1", "0", "1.5", "4294967296", "\"100\""] {
         let json = format!(
@@ -501,17 +510,19 @@ fn rebuild_replays_original_offsets_into_a_separate_versioned_dataset() {
     original["database"] = json!(directory.join("original/ingestion.sqlite3"));
     original["kafka_bootstrap"] = json!(cluster.bootstrap_servers());
     let original_bytes = serde_json::to_vec(&original).unwrap();
-    let original_config = crate::live_config::LiveConfig::from_json(&original_bytes).unwrap();
+    let original_config =
+        crate::registry_bootstrap::RegistryBootstrap::from_json(&original_bytes).unwrap();
     let original_source = crate::kafka::live_source(&original_config).unwrap();
     drop(
         Store::open(
             &original_config.database,
-            &original_config.manifest().unwrap(),
+            &original_config.legacy_manifest().unwrap(),
             &original_source,
         )
         .unwrap(),
     );
-    let mut legacy = serde_json::to_value(original_config.manifest().unwrap().config()).unwrap();
+    let mut legacy =
+        serde_json::to_value(original_config.legacy_manifest().unwrap().config()).unwrap();
     legacy["normalizer_version"] = json!("chargeshare-live-adapter-v1");
     let connection = rusqlite::Connection::open(&original_config.database).unwrap();
     connection
@@ -529,14 +540,15 @@ fn rebuild_replays_original_offsets_into_a_separate_versioned_dataset() {
     let replacement_bytes = serde_json::to_vec(&replacement).unwrap();
     crate::rebuild_live(&original_bytes, &replacement_bytes).unwrap();
     assert_eq!(std::fs::read(&original_config.database).unwrap(), preserved);
-    let config = crate::live_config::LiveConfig::from_json(&replacement_bytes).unwrap();
+    let config =
+        crate::registry_bootstrap::RegistryBootstrap::from_json(&replacement_bytes).unwrap();
     let rebuilt_source =
         crate::read_source_marker(&config.kafka_config().source_epoch_path).unwrap();
     assert_ne!(rebuilt_source.epoch, original_source.epoch);
     assert_eq!(rebuilt_source.partitions, original_source.partitions);
     let store = Store::open(
         &config.database,
-        &config.manifest().unwrap(),
+        &config.legacy_manifest().unwrap(),
         &rebuilt_source,
     )
     .unwrap();

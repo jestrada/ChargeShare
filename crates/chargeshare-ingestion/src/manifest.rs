@@ -102,6 +102,7 @@ pub struct Manifest {
     config: ManifestConfig,
     mapping_indices: BTreeMap<String, usize>,
     annotation_indices: BTreeMap<(String, i64), usize>,
+    pub(crate) live_identity_versions: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl Manifest {
@@ -114,7 +115,7 @@ impl Manifest {
     }
 
     pub fn new(mut config: ManifestConfig) -> Result<Self, RejectionReason> {
-        if config.mappings.is_empty()
+        if (config.mappings.is_empty() && config.input_contract != crate::live::LIVE_INPUT_CONTRACT)
             || config.mappings.len() > MAX_MAPPINGS
             || config.annotations.len() > MAX_ANNOTATIONS
         {
@@ -201,6 +202,7 @@ impl Manifest {
             config,
             mapping_indices,
             annotation_indices,
+            live_identity_versions: BTreeMap::new(),
         })
     }
 
@@ -248,7 +250,13 @@ impl Manifest {
         let config = &self.config;
         if provenance.owner != mapping.owner
             || provenance.input_contract != config.input_contract
-            || provenance.mapping_version != config.mapping_version
+            || !(if self.live_identity_versions.is_empty() {
+                provenance.mapping_version == config.mapping_version
+            } else {
+                self.live_identity_versions
+                    .get(&mapping.vehicle)
+                    .is_some_and(|versions| versions.contains(&provenance.mapping_version))
+            })
             || provenance.manifest_version != config.manifest_version
             || provenance.normalizer_version != config.normalizer_version
             || provenance.timestamp_version != config.timestamp_version
