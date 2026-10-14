@@ -14,7 +14,7 @@ struct Runtime {
 
 impl Runtime {
     fn new() -> Self {
-        let directory = std::env::temp_dir().join(format!(
+        let directory = std::path::Path::new("/tmp").join(format!(
             "chargeshare-registry-test-{}-{}",
             std::process::id(),
             NEXT_RUNTIME.fetch_add(1, Ordering::Relaxed)

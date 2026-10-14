@@ -426,7 +426,7 @@ fn acceptance_status_and_crash_probe_refuse_missing_database_and_unknown_boundar
 #[test]
 fn chargie_registry_and_car_commands_use_explicit_private_database_and_safe_output() {
     let directory =
-        std::env::temp_dir().join(format!("chargeshare-registry-cli-{}", std::process::id()));
+        Path::new("/tmp").join(format!("chargeshare-registry-cli-{}", std::process::id()));
     fs::DirBuilder::new()
         .mode(0o700)
         .create(&directory)
