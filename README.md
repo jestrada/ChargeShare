@@ -84,6 +84,29 @@ nix develop --no-update-lock-file -c bash scripts/dev/poc.sh reset --confirm-syn
 Without the confirmation flag, `reset` lists its scope and refuses deletion.
 The independent fixture preview uses local port **5173** while the stack runs.
 
+### Screenshot dataset without Docker
+
+[The deterministic generator](dev/fixtures/dashboard.py) creates June–September
+2026 charging history for fictional `owner-a` / `vehicle-a`, using the existing
+fictional shared-charger coordinates and labeled public sample rates.
+**Synthetic data for demos and screenshots only; not real.**
+
+With the Rust/Node tools and web dependencies installed, run from the repository
+root. Use a fresh output directory for each export:
+
+```sh
+mkdir -p .cache
+python3 dev/fixtures/dashboard.py > .cache/dashboard-input.json
+cargo run --locked -p chargeshare-ingestion --example dashboard-fixture -- .cache/dashboard-input.json .cache/dashboard-demo
+python3 -m http.server 8788 --bind 127.0.0.1 --directory .cache/dashboard-demo/http
+```
+
+In a second terminal, run `npm --prefix apps/web run dev:persisted` and open local
+port **5174**. The Rust example ingests decoded fictional records into SQLite and
+exports the persisted dashboard's usual JSON, with monthly history calculated as
+of September 30, 2026. The HTTP server serves only that snapshot; receiver/Kafka
+transport is not exercised. Generated data and SQLite stay in ignored `.cache/`.
+
 ## Tests
 
 Enter the pinned shell, then run the applicable checks:
@@ -96,6 +119,7 @@ bash scripts/testing/offline-suite.sh
 bash scripts/testing/ingestion-suite.sh
 python3 scripts/testing/test_ingestion_guard.py
 python3 -m unittest discover -s scripts/dev -p 'test_*.py'
+python3 -m unittest discover -s dev/fixtures -p 'test_*.py'
 npm --prefix apps/web ci
 npm --prefix apps/web test
 npm run preview:build
