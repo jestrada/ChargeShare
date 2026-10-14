@@ -20,6 +20,8 @@ pub(crate) struct LiveConfig {
     pub(crate) topic_namespace: String,
     pub(crate) source_epoch: String,
     pub(crate) database: PathBuf,
+    #[serde(default = "default_api_port")]
+    pub(crate) api_port: u16,
     pub(crate) mappings: Vec<DeviceMapping>,
     shared_charger: SharedCharger,
     rate_models: Vec<RateModelConfig>,
@@ -33,6 +35,10 @@ struct SharedCharger {
     rate_model_versions: Vec<String>,
 }
 
+fn default_api_port() -> u16 {
+    8788
+}
+
 impl LiveConfig {
     pub(crate) fn from_json(bytes: &[u8]) -> Result<Self, IngestionError> {
         if bytes.len() > crate::MAX_MANIFEST_BYTES {
@@ -40,7 +46,8 @@ impl LiveConfig {
         }
         let config: Self =
             serde_json::from_slice(bytes).map_err(|_| IngestionError::InvalidConfiguration)?;
-        if config.kafka_bootstrap.is_empty()
+        if config.api_port == 0
+            || config.kafka_bootstrap.is_empty()
             || config.kafka_bootstrap.len() > 2048
             || config
                 .kafka_bootstrap
@@ -136,8 +143,9 @@ pub fn run_live(bytes: &[u8]) -> Result<(), IngestionError> {
     let manifest = config.manifest()?;
     let source = crate::kafka::live_source(&config)?;
     let store = Store::open(&config.database, &manifest, &source)?;
+    let api_port = config.api_port;
     let driver = crate::kafka::LiveIngestion::connect_live(config, source, &store)?;
-    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 8788))
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, api_port))
         .map_err(|_| IngestionError::StorageUnavailable)?;
     crate::viewing::serve_with_driver(listener, store, driver, &AtomicBool::new(false))
 }
@@ -175,4 +183,63 @@ pub fn rebuild_live(original_bytes: &[u8], replacement_bytes: &[u8]) -> Result<(
     let (_preserved, required) =
         Store::preserve_live_source(&original.database, &manifest, &source)?;
     crate::kafka::LiveIngestion::rebuild(replacement, &source, &required)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn config_json() -> serde_json::Value {
+        json!({
+            "kafka_bootstrap": "kafka:9092",
+            "topic_namespace": "unit",
+            "source_epoch": "live-unit-v2",
+            "database": "/private/unit/ingestion.sqlite3",
+            "mappings": [{"device": "device-a", "vehicle": "vehicle-a", "owner": "owner-a"}],
+            "shared_charger": {
+                "charger_id": "charger-a",
+                "geofence": {"center": {"status": "valid", "latitude": "0", "longitude": "0"}},
+                "rate_model_versions": []
+            },
+            "rate_models": []
+        })
+    }
+
+    #[test]
+    fn api_port_defaults_and_overrides_preserve_the_evidence_manifest() {
+        let mut json = config_json();
+        let original = LiveConfig::from_json(&serde_json::to_vec(&json).unwrap()).unwrap();
+        assert_eq!(original.api_port, 8788);
+        let original_manifest = original.manifest().unwrap();
+        for port in [1, 8789, u16::MAX] {
+            json["api_port"] = json!(port);
+            let config = LiveConfig::from_json(&serde_json::to_vec(&json).unwrap()).unwrap();
+            assert_eq!(config.api_port, port);
+            assert_eq!(
+                config.manifest().unwrap().config(),
+                original_manifest.config()
+            );
+        }
+    }
+
+    #[test]
+    fn api_port_rejects_zero_out_of_range_and_noninteger_values() {
+        for port in [
+            json!(0),
+            json!(-1),
+            json!(65536),
+            json!(8788.5),
+            json!("8788"),
+            json!(true),
+            json!(null),
+        ] {
+            let mut json = config_json();
+            json["api_port"] = port;
+            assert!(matches!(
+                LiveConfig::from_json(&serde_json::to_vec(&json).unwrap()),
+                Err(IngestionError::InvalidConfiguration)
+            ));
+        }
+    }
 }

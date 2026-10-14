@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 from pathlib import Path
 import signal
@@ -6,18 +7,32 @@ import subprocess
 import sys
 
 
-def live_commands(checkout, config):
+def live_commands(checkout, config, web_port=5174):
     config = Path(config)
     if not config.is_absolute() or config.resolve() != config or config.is_relative_to(checkout):
         raise ValueError("Live config must be a private absolute path outside the checkout.")
+    if type(web_port) is not int or not 1 <= web_port <= 65535:
+        raise ValueError("Web port must be an integer from 1 to 65535.")
     return [
         ["cargo", "run", "--locked", "--package", "chargeshare-ingestion", "--", "live", str(config)],
-        ["npm", "--prefix", "apps/web", "run", "dev:persisted", "--", "--host", "127.0.0.1"],
+        ["npm", "--prefix", "apps/web", "run", "dev:persisted", "--", "--host", "127.0.0.1", "--port", str(web_port)],
     ]
 
 
-def run(checkout, config):
-    commands = live_commands(checkout, config)
+def live_api_port(config):
+    configuration = json.loads(Path(config).read_text())
+    if not isinstance(configuration, dict):
+        raise ValueError("Live config must be a JSON object.")
+    port = configuration.get("api_port", 8788)
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError("API port must be an integer from 1 to 65535.")
+    return port
+
+
+def run(checkout, config, web_port=5174):
+    commands = live_commands(checkout, config, web_port)
+    web_environment = os.environ.copy()
+    web_environment["CHARGESHARE_API_PORT"] = str(live_api_port(config))
     children = []
     previous = {}
 
@@ -28,7 +43,8 @@ def run(checkout, config):
         for signum in (signal.SIGTERM, signal.SIGINT):
             previous[signum] = signal.signal(signum, shutdown)
         for command in commands:
-            children.append(subprocess.Popen(command, cwd=checkout, start_new_session=True))
+            children.append(subprocess.Popen(command, cwd=checkout, start_new_session=True,
+                                             env=web_environment if command[0] == "npm" else None))
         while True:
             for child in children:
                 try:
@@ -52,9 +68,10 @@ def run(checkout, config):
 def main():
     parser = argparse.ArgumentParser(description="Run live ingestion and the persisted dashboard on localhost.")
     parser.add_argument("--config", required=True)
+    parser.add_argument("--web-port", type=int, default=5174)
     options = parser.parse_args()
     try:
-        return run(Path(__file__).resolve().parents[2], options.config)
+        return run(Path(__file__).resolve().parents[2], options.config, options.web_port)
     except KeyboardInterrupt:
         return 130
     except (OSError, ValueError):

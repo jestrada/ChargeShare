@@ -232,6 +232,7 @@ the file and `0700` for its parent and database directory; the absolute
 SQLite path also stays outside the checkout. The configuration selects Kafka
 bootstrap servers, topic namespace, a stable `live-` source epoch, device-to-alias
 mappings, one shared charger geofence and the existing explicit rate models.
+Optional `api_port` (nonzero u16, default 8788) feeds the loopback API/proxy; `--web-port` defaults to 5174.
 [`dev/live-config.example.json`](../dev/live-config.example.json) contains only
 fictional identifiers, coordinates, paths and labeled public sample rates.
 No private configuration is copied into this repository.
