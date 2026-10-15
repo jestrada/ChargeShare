@@ -1,74 +1,52 @@
 use std::collections::BTreeSet;
-use std::net::TcpListener;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
-use std::time::Duration;
 
-use chargeshare_core::{ChargerGeofence, VehicleId};
+use chargeshare_core::ChargerGeofence;
 use serde::{Deserialize, Serialize};
 
 use crate::live::{LIVE_INPUT_CONTRACT, LIVE_NORMALIZER_VERSION, fingerprint};
 use crate::{
-    ChargerGeofenceConfig, DeviceMapping, IngestionError, KafkaConfig, Manifest, ManifestConfig,
-    NormalizedLocation, OwnerChargerConfig, RateModelConfig, Store, TIMESTAMP_VERSION,
+    ChargerGeofenceConfig, DeviceMapping, IngestionError, Manifest, ManifestConfig,
+    NormalizedLocation, OwnerChargerConfig, Store, TIMESTAMP_VERSION,
 };
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct LiveConfig {
-    pub(crate) kafka_bootstrap: String,
-    pub(crate) topic_namespace: String,
-    pub(crate) source_epoch: String,
-    pub(crate) database: PathBuf,
-    #[serde(default = "default_api_port")]
-    pub(crate) api_port: u16,
+pub struct RegistryBootstrap {
+    #[serde(flatten)]
+    pub(crate) settings: crate::runtime_settings::RuntimeSettings,
     pub(crate) mappings: Vec<DeviceMapping>,
-    shared_charger: SharedCharger,
-    rate_models: Vec<RateModelConfig>,
+    pub(crate) shared_charger: SharedCharger,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct SharedCharger {
-    charger_id: String,
-    geofence: ChargerGeofenceConfig,
-    rate_model_versions: Vec<String>,
+pub(crate) struct SharedCharger {
+    pub(crate) charger_id: String,
+    pub(crate) geofence: ChargerGeofenceConfig,
+    pub(crate) rate_model_versions: Vec<String>,
 }
 
-fn default_api_port() -> u16 {
-    8788
+impl std::ops::Deref for RegistryBootstrap {
+    type Target = crate::runtime_settings::RuntimeSettings;
+
+    fn deref(&self) -> &Self::Target {
+        &self.settings
+    }
 }
 
-impl LiveConfig {
-    pub(crate) fn from_json(bytes: &[u8]) -> Result<Self, IngestionError> {
+impl RegistryBootstrap {
+    pub fn from_json(bytes: &[u8]) -> Result<Self, IngestionError> {
         if bytes.len() > crate::MAX_MANIFEST_BYTES {
             return Err(IngestionError::InvalidConfiguration);
         }
-        let config: Self =
+        let mut config: Self =
             serde_json::from_slice(bytes).map_err(|_| IngestionError::InvalidConfiguration)?;
-        if config.api_port == 0
-            || config.kafka_bootstrap.is_empty()
-            || config.kafka_bootstrap.len() > 2048
-            || config
-                .kafka_bootstrap
-                .bytes()
-                .any(|byte| byte.is_ascii_control())
-            || !config.source_epoch.starts_with("live-")
-            || config.topic_namespace.len() > 60
-            || VehicleId::new(&config.topic_namespace).is_err()
-            || VehicleId::new(&config.source_epoch).is_err()
-            || !config.database.is_absolute()
-            || config.database.file_name().is_none()
-            || config
-                .database
-                .components()
-                .any(|component| matches!(component, std::path::Component::ParentDir))
-        {
-            return Err(IngestionError::InvalidConfiguration);
-        }
+        config.settings.normalize_rates()?;
+        config.settings.validate()?;
         let mut devices = BTreeSet::new();
         for mapping in &config.mappings {
-            if mapping.device.is_empty()
+            if mapping.device.trim().is_empty()
+                || mapping.device.chars().any(char::is_control)
                 || mapping.device.len() > 64
                 || !devices.insert(&mapping.device)
             {
@@ -76,8 +54,52 @@ impl LiveConfig {
             }
         }
         config.geofence()?;
-        config.manifest()?;
+        config.legacy_manifest()?;
         Ok(config)
+    }
+
+    pub(crate) fn decoder_registry(
+        &self,
+    ) -> Result<crate::registry::RegistrySnapshot, IngestionError> {
+        let charger = crate::registry::Charger {
+            id: self.shared_charger.charger_id.clone(),
+            name: "Legacy charger".to_owned(),
+            owner: "legacy-owner".to_owned(),
+            geofence: self.shared_charger.geofence.clone(),
+            geofence_version: self.legacy_manifest()?.config().geofence_version.clone(),
+            rate_plan: self.shared_charger.rate_model_versions.clone(),
+        };
+        let cars = self
+            .mappings
+            .iter()
+            .map(|mapping| crate::registry::Car {
+                registration: crate::registry::CarRegistration {
+                    device: mapping.device.clone(),
+                    vehicle: mapping.vehicle.clone(),
+                    owner: mapping.owner.clone(),
+                    name: "Legacy car".to_owned(),
+                    make: None,
+                    model: None,
+                    year: None,
+                    chargers: vec![charger.id.clone()],
+                },
+                active: true,
+                identity_version: self
+                    .legacy_manifest()
+                    .unwrap()
+                    .config()
+                    .mapping_version
+                    .clone(),
+                assignment_version: "legacy-assignment-v1".to_owned(),
+            })
+            .collect();
+        Ok(crate::registry::RegistrySnapshot {
+            cars,
+            chargers: [(charger.id.clone(), charger)].into(),
+            legacy_charger: Some(self.shared_charger.charger_id.clone()),
+            assignments: std::collections::BTreeMap::new(),
+            geofence_versions: std::collections::BTreeMap::new(),
+        })
     }
 
     pub(crate) fn geofence(&self) -> Result<ChargerGeofence, IngestionError> {
@@ -87,7 +109,7 @@ impl LiveConfig {
             .map_err(|_| IngestionError::InvalidConfiguration)
     }
 
-    pub(crate) fn manifest(&self) -> Result<Manifest, IngestionError> {
+    pub(crate) fn legacy_manifest(&self) -> Result<Manifest, IngestionError> {
         let mut mappings = self.mappings.clone();
         mappings.sort_by(|left, right| left.device.cmp(&right.device));
         let contract = serde_json::to_vec(&(&mappings, &self.shared_charger.geofence))
@@ -126,46 +148,13 @@ impl LiveConfig {
         })
         .map_err(|_| IngestionError::InvalidConfiguration)
     }
-
-    pub(crate) fn kafka_config(&self) -> KafkaConfig {
-        KafkaConfig {
-            bootstrap_servers: self.kafka_bootstrap.clone(),
-            source_epoch_path: self.database.parent().unwrap().join("source-epoch.json"),
-            max_records: 1,
-            deadline: Duration::from_secs(5),
-        }
-    }
-}
-
-pub fn run_live(bytes: &[u8]) -> Result<(), IngestionError> {
-    let config = LiveConfig::from_json(bytes)?;
-    validate_database_location(&config)?;
-    let manifest = config.manifest()?;
-    let source = crate::kafka::live_source(&config)?;
-    let store = Store::open(&config.database, &manifest, &source)?;
-    let api_port = config.api_port;
-    let driver = crate::kafka::LiveIngestion::connect_live(config, source, &store)?;
-    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, api_port))
-        .map_err(|_| IngestionError::StorageUnavailable)?;
-    crate::viewing::serve_with_driver(listener, store, driver, &AtomicBool::new(false))
-}
-
-fn validate_database_location(config: &LiveConfig) -> Result<(), IngestionError> {
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .ok_or(IngestionError::InvalidConfiguration)?;
-    if config.database.starts_with(checkout) {
-        return Err(IngestionError::InvalidConfiguration);
-    }
-    Ok(())
 }
 
 pub fn rebuild_live(original_bytes: &[u8], replacement_bytes: &[u8]) -> Result<(), IngestionError> {
-    let original = LiveConfig::from_json(original_bytes)?;
-    let replacement = LiveConfig::from_json(replacement_bytes)?;
-    validate_database_location(&original)?;
-    validate_database_location(&replacement)?;
+    let original = RegistryBootstrap::from_json(original_bytes)?;
+    let replacement = RegistryBootstrap::from_json(replacement_bytes)?;
+    original.settings.validate_database_location()?;
+    replacement.settings.validate_database_location()?;
     if original.database.parent() == replacement.database.parent()
         || original.source_epoch == replacement.source_epoch
         || original.topic_namespace != replacement.topic_namespace
@@ -179,7 +168,7 @@ pub fn rebuild_live(original_bytes: &[u8], replacement_bytes: &[u8]) -> Result<(
     {
         return Err(IngestionError::SourceMismatch);
     }
-    let manifest = original.manifest()?;
+    let manifest = original.legacy_manifest()?;
     let (_preserved, required) =
         Store::preserve_live_source(&original.database, &manifest, &source)?;
     crate::kafka::LiveIngestion::rebuild(replacement, &source, &required)
@@ -209,15 +198,15 @@ mod tests {
     #[test]
     fn api_port_defaults_and_overrides_preserve_the_evidence_manifest() {
         let mut json = config_json();
-        let original = LiveConfig::from_json(&serde_json::to_vec(&json).unwrap()).unwrap();
+        let original = RegistryBootstrap::from_json(&serde_json::to_vec(&json).unwrap()).unwrap();
         assert_eq!(original.api_port, 8788);
-        let original_manifest = original.manifest().unwrap();
+        let original_manifest = original.legacy_manifest().unwrap();
         for port in [1, 8789, u16::MAX] {
             json["api_port"] = json!(port);
-            let config = LiveConfig::from_json(&serde_json::to_vec(&json).unwrap()).unwrap();
+            let config = RegistryBootstrap::from_json(&serde_json::to_vec(&json).unwrap()).unwrap();
             assert_eq!(config.api_port, port);
             assert_eq!(
-                config.manifest().unwrap().config(),
+                config.legacy_manifest().unwrap().config(),
                 original_manifest.config()
             );
         }
@@ -237,7 +226,7 @@ mod tests {
             let mut json = config_json();
             json["api_port"] = port;
             assert!(matches!(
-                LiveConfig::from_json(&serde_json::to_vec(&json).unwrap()),
+                RegistryBootstrap::from_json(&serde_json::to_vec(&json).unwrap()),
                 Err(IngestionError::InvalidConfiguration)
             ));
         }

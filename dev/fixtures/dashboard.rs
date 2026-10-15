@@ -17,6 +17,23 @@ struct DashboardFixture {
     as_of_utc_seconds: i64,
     manifest: ManifestConfig,
     records: Vec<FixtureRecord>,
+    display_registry: Vec<DisplayScope>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DisplayScope {
+    owner: String,
+    vehicle: String,
+    name: String,
+    chargers: Vec<DisplayCharger>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DisplayCharger {
+    id: String,
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -73,12 +90,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let api = output.join("http/api/poc");
     fs::create_dir_all(&api)?;
-    let scopes: Vec<_> = manifest
-        .config()
-        .mappings
-        .iter()
-        .map(|mapping| json!({"owner": mapping.owner, "vehicle": mapping.vehicle}))
-        .collect();
+    let scopes: Vec<_> = fixture.display_registry.iter().map(|scope| json!({"owner":scope.owner,"vehicle":scope.vehicle,"name":scope.name,"chargers":scope.chargers.iter().map(|charger| json!({"id":charger.id,"name":charger.name})).collect::<Vec<_>>()})).collect();
     fs::write(
         api.join("scopes"),
         serde_json::to_vec(&json!({"synthetic_only": true, "scopes": scopes}))?,
@@ -95,6 +107,37 @@ fn main() -> Result<(), Box<dyn Error>> {
             .monthly_history(fixture.as_of_utc_seconds)
             .map_err(|_| "synthetic fixture monthly history failed")?
             .into();
+        let display = fixture
+            .display_registry
+            .iter()
+            .find(|scope| scope.owner == mapping.owner && scope.vehicle == mapping.vehicle)
+            .ok_or("missing synthetic display name")?;
+        result.registry = Some(chargeshare_ingestion::ResultRegistry {
+            car_name: display.name.clone(),
+            chargers: display
+                .chargers
+                .iter()
+                .map(|charger| chargeshare_ingestion::ChargerSummary {
+                    id: charger.id.clone(),
+                    name: charger.name.clone(),
+                })
+                .collect(),
+            selected_charger: None,
+        });
+        for session in &mut result.sessions {
+            if session.classification == "SharedCharger" {
+                let charger = display
+                    .chargers
+                    .first()
+                    .ok_or("missing synthetic charger")?;
+                session.charger = Some(chargeshare_ingestion::SessionChargerResult {
+                    id: charger.id.clone(),
+                    name: charger.name.clone(),
+                    assignment_versions: vec![manifest.config().mapping_version.clone()],
+                    geofence_versions: vec![manifest.config().geofence_version.clone()],
+                });
+            }
+        }
         result.revision.clear();
         let hash = serde_json::to_vec(&result)?
             .iter()
@@ -109,6 +152,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             .join(vehicle.as_str());
         fs::create_dir_all(&scoped_path)?;
         fs::write(scoped_path.join("results"), serde_json::to_vec(&result)?)?;
+        for charger in &display.chargers {
+            result.registry.as_mut().unwrap().selected_charger = Some(charger.id.clone());
+            let path = scoped_path.join("chargers").join(&charger.id);
+            fs::create_dir_all(&path)?;
+            fs::write(path.join("results"), serde_json::to_vec(&result)?)?;
+        }
     }
     println!(
         "Synthetic demo: {} records ingested into SQLite; Rust-priced dashboard snapshot exported. Receiver/Kafka transport not exercised.",

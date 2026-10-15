@@ -17,6 +17,10 @@ pub enum IngestionError {
     Timeout,
     KafkaUnavailable,
     InvalidCommand,
+    RegistryIntegrity,
+    RegistryConflict,
+    MigrationInputRequired,
+    RecoveryPending,
 }
 
 impl fmt::Display for IngestionError {
@@ -37,6 +41,12 @@ impl fmt::Display for IngestionError {
             Self::Timeout => "ingestion: bounded deadline exceeded",
             Self::KafkaUnavailable => "source: broker operation failed",
             Self::InvalidCommand => "command: invalid bounded synthetic invocation",
+            Self::RegistryIntegrity => "registry: invalid identity, assignment or provenance",
+            Self::RegistryConflict => "registry: conflicting identity or invalid metadata",
+            Self::MigrationInputRequired => {
+                "registry: explicit private bootstrap and setup required"
+            }
+            Self::RecoveryPending => "registry: retained recovery pending",
         })
     }
 }

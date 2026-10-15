@@ -35,14 +35,20 @@ flowchart LR
     kafka --> normalize
     kafka --> capture["Harness: curated acceptance evidence"]
     kafka --> live
-    private_config["Private live config: mappings + geofence + rates"] --> live
+    runtime_settings["Private RuntimeSettings: Kafka/source + path/port + immutable rates"] --> live
+    bootstrap["Legacy RegistryBootstrap + explicit names/charger owner"] --> migration["Stopped-owner transactional migration"] --> registry[("SQLite: cars + chargers + car_chargers + immutable identity/assignment/geofence versions")]
+    commands["chargie car add / rename / remove"] --> registry
+    registry --> live
+    registry --> recovery["New-car retained recovery: separate cursors/evidence + durable handoff"]
+    kafka --> recovery
+    recovery --> sqlite
     subgraph owner["Single Rust owner: serve or live"]
         normalize["Frozen mapping + normalized location/counters"] --> sqlite[("SQLite: evidence + config versions + progress")]
         live["Live v2: state + classified location/time + odometer; drop coordinates"] --> sqlite
         preserved["Preserved dataset + original source marker"] --> rebuild["Stopped-owner rebuild: validate retained original offsets"]
         kafka --> rebuild
         rebuild --> live
-        private_config --> sanitized_config["Aliases + redacted geofence version + rates"] --> sqlite
+        runtime_settings --> fixed_contract["Fixed live manifest + runtime settings"] --> sqlite
         config["Owner charger config + immutable rate histories"] --> sqlite
         sqlite --> replay["Scoped core replay"]
         replay --> classification["Core: automatic session location classification"]
@@ -54,7 +60,7 @@ flowchart LR
         pricing --> results
         results --> api["Scoped HTTP: host loopback 8788"]
     end
-    api --> persisted["Persisted browser: 5174, D3 monthly bars + compact vehicle selector"]
+    api --> persisted["Persisted browser: 5174, D3 monthly bars + named car/charger selectors + no-active-car state"]
     subgraph fixture["Independent fixture preview"]
         demo["Fictional events + sample rates"] --> offline["Core exact offline pricing"]
         offline --> fixture_api["Fixture API: loopback 8787"]
@@ -93,8 +99,9 @@ not production authentication or permission for cross-owner sharing.
 pair of validated aliases. Malformed scopes return 400, unknown/mismatched scopes
 404, unsupported methods 405, and unavailable results 503. Errors never echo
 rejected values. `/api/poc/ready` reports readiness separately from acceptance.
-`GET /api/poc/scopes` returns only configured owner/vehicle aliases and a
-`synthetic_only` flag. The browser discovers these aliases before requesting
+`GET /api/poc/scopes` returns active, recovered car aliases, display names and
+linked charger IDs/names with a `synthetic_only` flag. Historical scoped reads
+remain available for inactive cars. The browser discovers these choices before requesting
 results; failed discovery clears the available view and retries on refresh.
 There are no aggregate, mutation or pricing endpoints in this API.
 
@@ -107,8 +114,8 @@ No coordinates, raw payload, device identity, credentials, paths, offsets or log
 are served. Session results include `SharedCharger`, `OtherCharger` or `Held` and
 `InsideGeofence`, `OutsideGeofence`, `LocationUnavailable` or `LocationAmbiguous`.
 The overall state is empty, eligible when every session is eligible, or held when
-any session remains held or excluded. Results provenance identifies the loaded
-geofence version; classification reasons are separate from evidence quality.
+any session remains held or excluded. Synthetic result provenance identifies the loaded geofence version; live
+sessions identify the applicable immutable charger/assignment/geofence versions; classification reasons are separate from evidence quality.
 
 The existing results response includes `monthly` history derived in the core
 from the same scoped committed quotes, without new persistence, repricing or
@@ -187,7 +194,7 @@ Other receiver fields remain strictly allowlisted. Raw location payloads and
 rejected coordinate text are discarded. Diagnostics redact points, and coordinates
 never enter API responses, browser bundles, application logs or acceptance output.
 
-The manifest configures an owner charger with a stable charger ID, synthetic
+The synthetic manifest configures an owner charger with a stable charger ID, synthetic
 geofence and selected rate-version IDs. Vehicle registration selects its owner
 and that owner's charger; shared physical charger IDs and rate histories do not
 merge owner ledgers. Geofences remain owner-scoped under a separate geofence
@@ -265,8 +272,9 @@ Configuration must be an absolute, nonsymlinked private file outside the checkou
 owned by the current user with a private parent directory. Use mode `0600` for
 the file and `0700` for its parent and database directory; the absolute
 SQLite path also stays outside the checkout. The configuration selects Kafka
-bootstrap servers, topic namespace, a stable `live-` source epoch, device-to-alias
-mappings, one shared charger geofence and the existing explicit rate models.
+bootstrap servers, topic namespace, a stable `live-` source epoch and explicit
+immutable rate-model definitions. Cars, chargers and assignments come from the
+SQLite registry after the one-time legacy bootstrap migration.
 Optional `api_port` (nonzero u16, default 8788) feeds the loopback API/proxy; `--web-port` defaults to 5174.
 [`dev/live-config.example.json`](../dev/live-config.example.json) contains only
 fictional identifiers, coordinates, paths and labeled public sample rates.
@@ -316,10 +324,11 @@ energy-only estimate using Rust-supplied energy and money strings.
 `Odometer` and optional `FastChargerPresent` affect adaptation. Other telemetry
 fields are ignored and discarded. Duplicate consumed fields become conservative
 invalid/unknown evidence; malformed envelopes reject with fixed reasons.
-Coordinates are classified against the private geofence and dropped before any
-SQLite write, logging or API response. The positive integer geofence radius
-defaults to 100 m; its boundary is inclusive, and validation, redaction and frozen
-fingerprints retain the configured radius.
+Telemetry coordinates are classified against only the car’s linked charger
+geofences and dropped before evidence storage, logging or API responses. The
+private registry retains charger centers separately from telemetry evidence. The positive integer geofence radius
+defaults to 100 m; its boundary is inclusive and immutable charger geofence
+versions retain the configured radius.
 
 Per vehicle, the adapter retains the last qualified location classification and
 its observation time, including observations before a connection, with the exact
@@ -330,11 +339,11 @@ odometer decrease is conflicting evidence. Late observations cannot qualify loca
 location/odometer evidence invalidates carried qualification until fresh valid
 evidence is available. Each event receives only its then-qualified
 classification. Missing or mixed classifications across a session still hold.
-Location persistence is limited to classification/time and odometer evidence.
-Device identity, raw transaction IDs, points and the geofence center never persist. Mapping and
-geofence fingerprints freeze the live configuration because dropped coordinates
-cannot be reclassified. Changed configuration or normalization refuses dataset
-reuse.
+Telemetry location persistence contains classification, charger/assignment/geofence
+versions, time and odometer evidence. Raw transaction IDs, payloads and telemetry
+coordinates do not persist. The private registry stores device identity and charger
+centers; HTTP results expose only aliases, display names and curated provenance.
+Fixed source/ingestion contracts remain validated independently of membership.
 
 Per-vehicle transaction fingerprints deduplicate receiver redelivery and resends.
 Identical normalized signals reuse the original disposition and position. Changed
@@ -357,10 +366,84 @@ high-water mark are validated. Missing initial location/odometer source history,
 retention gaps, offset gaps, truncated progress, active ownership or an existing
 target database/marker refuse recovery. The replacement marker binds the new
 epoch to those original offsets and its manifest freezes normalization v2.
+This legacy rebuild path still requires explicit registry setup before `live`
+startup; registry migration and car addition do not require a rebuild.
 A failed rebuild leaves the original intact and any partial target separate;
 there is no silent reset, dataset switch or broker-retention change. Live mode
 reuses the single SQLite owner and committed scoped results API; no session or
 cost tables or additional service are introduced.
+
+### Live registry and retained recovery
+
+Issue #65 separates `RuntimeSettings` from migration-only `RegistryBootstrap`.
+The SQLite registry is the live identity and assignment authority. In-memory
+alias mappings used by replay are database projections; the fixed live manifest
+contains no fleet membership or fleet-wide mapping/geofence fingerprint. Registry
+integrity errors are distinct from fixed-settings mismatch errors. Synthetic
+manifest validation and the existing core energy/money contracts are unchanged.
+
+The migration to live schema four is one transaction in the existing database;
+synthetic ingestion retains its schema-three contract. It renames
+`registrations` to `cars`, retargeting retained foreign keys, recovers private
+device identities from the original validated bootstrap, sets explicit car names
+and records migration time as UTC creation time. Optional metadata starts null.
+The setup script explicitly names the current charger and declares its owner;
+ownership is never inferred from car ownership. The current physical charger is
+seeded once, preserving every selected immutable rate version and pricing holds
+when no rates were selected. Original evidence, deliveries, source identity,
+partition progress, adapter state, deduplication and historical versions remain.
+A failed or interrupted transaction leaves the original schema intact; a committed
+migration can be repeated safely. Missing or conflicting inputs refuse. Ongoing
+startup ignores legacy registry sections and never restores membership from JSON.
+
+`cars.device` is the unique private primary key; `vehicle` is a stable unique
+alias and `owner` scopes the ledger. Names are required nonblank display values,
+independent of identity and arithmetic. `car_chargers(car_id, charger_id)` links
+private car identity to charger IDs with unique pairs and foreign keys. There is
+no charger column on cars and no cascade or physical-delete command. Cars with
+different ledger owners can share a charger whose owner is explicit. The registry
+retains immutable car identities, assignment snapshots and per-charger geofence
+versions so earlier evidence remains interpretable when membership changes.
+Existing single-geofence evidence stays associated with its migrated charger.
+Only linked chargers participate in matching. Missing, overlapping or conflicting
+matches hold; consistently outside all links remains other-charger evidence.
+Qualified sessions use the matched charger's selected effective-dated rate history.
+Rust merges exact per-charger quotes and rounds the scoped subtotal once.
+
+The stopped-owner `chargie car add` command validates identity, metadata and every
+charger link, then commits the car, links and source-bound recovery request together.
+Identical retries preserve completed recovery; conflicting retries cannot rename,
+reassign or reactivate. `rename` updates only the name. `remove` updates only
+`active`; inactive cars remain admitted to ingestion and historical scoped reads
+but disappear from active scope discovery. Every registry command uses the existing
+private ownership lock and refuses a running owner. There are no management UI,
+charger editing, reassignment or reactivation commands in this scope.
+
+Recovery captures each partition's earliest retained offset and exclusive high
+water mark. Separate job cursors scan those captured ranges for the new car,
+including pre-session state/location/odometer and records previously rejected as
+unknown identity. Original deliveries and ordinary progress are untouched.
+Recovery evidence, source coordinates, adapter/deduplication state and each cursor
+commit atomically. Each partition preserves source order; traversal between
+partitions establishes no global event order, and existing late/conflict holds
+remain. Recovery and ordinary ingestion reuse the same car-scoped record identity
+and original disposition, so overlap does not adapt a car twice or rewind state.
+Original ordinary deliveries retain their admitted-vehicle contract for later
+verification. The durable completion transaction precedes normal ingestion and
+scope availability. Restart resumes committed cursors and handoff; source changes,
+offset gaps, truncated ranges or expiry within the captured range refuse. Earlier
+expired history stays unavailable; no boundaries or completeness are invented.
+Seven-day retention describes availability, not guaranteed complete coverage.
+
+The API provides display names and linked charger choices alongside alias scope
+keys, filters results by an optional charger ID, and retains per-session charger
+and immutable version provenance, including held/ambiguous matches and outside
+classification versions. The dashboard displays names in selectors,
+headings and session/configuration details, supports one or all chargers, and
+shows an empty state with no active cars. Names and selection do not move owner
+ledgers or change the measurement/estimate boundary. Registry values and private
+migration inputs stay outside the checkout; public fixtures and screenshots use
+explicitly synthetic identities, coordinates and public sample tariffs.
 
 ## Implemented offline ledger
 

@@ -37,7 +37,7 @@
 .persisted-scopes .control { white-space: normal; height: auto; }
 .persisted-coverage { display: grid; gap: 8px; min-width: 0; }
 
-.persisted-controls { display: flex; align-items: end; gap: 8px; min-width: 0; }
+.persisted-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; min-width: 0; }
 .persisted-selector, .charging-day-selector { display: grid; gap: 4px; min-width: 0; font-size: 14px; }
 .persisted-selector select, .charging-day-selector select { min-height: 44px; max-width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--background); color: var(--foreground); font: inherit; }
 .persisted-selector select { width: 210px; }
@@ -74,7 +74,7 @@
 @media (max-width: 700px) {
   .persisted-heading h1 { font-size: 28px; }
   .persisted-controls { width: 100%; }
-  .persisted-selector { flex: 1; }
+  .persisted-selector { flex: 1 1 130px; }
   .persisted-selector select { width: 100%; }
   .persisted-panel { padding: 16px; }
   .charging-month-row { grid-template-columns: minmax(0, 1fr); gap: 16px; }

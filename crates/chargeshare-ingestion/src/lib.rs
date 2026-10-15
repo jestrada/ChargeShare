@@ -11,12 +11,17 @@ mod rates;
 pub use rates::{ChargerGeofenceConfig, OwnerChargerConfig, RateModelConfig, RatePeriodConfig};
 
 mod live;
-mod live_config;
 mod manifest;
 mod model;
 mod normalize;
+mod registry;
+mod registry_bootstrap;
+mod registry_recovery;
+mod runtime_settings;
 
-pub use live_config::{rebuild_live, run_live};
+pub use registry::{CarRegistration, RegistrySetup, RegistryWrite, migrate_registry};
+pub use registry_bootstrap::{RegistryBootstrap, rebuild_live};
+pub use runtime_settings::{RuntimeSettings, run_live};
 
 pub use manifest::{Annotation, DeviceMapping, Manifest, ManifestConfig, OwnerGeofence};
 pub use model::{
@@ -44,8 +49,8 @@ mod results;
 mod viewing;
 
 pub use results::{
-    CounterCoverageResult, LIVE_PRICING_BOUNDARY, LIVE_QUANTIZATION, PRICING_BOUNDARY,
-    PricingResult, QuoteResult, ResultProvenance, ScopedResults, SessionPrice, SessionResult,
-    SliceResult,
+    ChargerSummary, CounterCoverageResult, LIVE_PRICING_BOUNDARY, LIVE_QUANTIZATION,
+    PRICING_BOUNDARY, PricingResult, QuoteResult, ResultProvenance, ResultRegistry, ScopedResults,
+    SessionChargerResult, SessionLocationVersion, SessionPrice, SessionResult, SliceResult,
 };
 pub use viewing::serve_results;

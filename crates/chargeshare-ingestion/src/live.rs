@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use chargeshare_core::{ChargerGeofence, LocationPoint};
+use chargeshare_core::LocationPoint;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
@@ -166,14 +166,14 @@ pub(crate) fn initialize(connection: &Connection) -> Result<(), IngestionError> 
 impl Store {
     pub(crate) fn ingest_live(
         &mut self,
-        config: &crate::live_config::LiveConfig,
+        settings: &crate::RuntimeSettings,
         coordinate: DeliveryCoordinate,
         expected_position: i64,
         headers: &[(String, Vec<u8>)],
         payload: &[u8],
     ) -> Result<CommitOutcome, IngestionError> {
         self.ingest_live_observed(
-            config,
+            settings,
             coordinate,
             expected_position,
             headers,
@@ -184,29 +184,81 @@ impl Store {
 
     pub(crate) fn ingest_live_observed(
         &mut self,
-        config: &crate::live_config::LiveConfig,
+        settings: &crate::RuntimeSettings,
         coordinate: DeliveryCoordinate,
         expected_position: i64,
         headers: &[(String, Vec<u8>)],
         payload: &[u8],
         observer: &mut dyn FnMut(crate::CommitBoundary) -> Result<(), IngestionError>,
     ) -> Result<CommitOutcome, IngestionError> {
-        if !self.manifest.is_live() || config.manifest()?.config() != self.manifest.config() {
+        if !self.manifest.is_live()
+            || crate::registry::json(settings.manifest()?.config())? != self.fixed_manifest_json()
+        {
             return Err(IngestionError::ConfigurationMismatch);
         }
-        let (signal, record_id, is_resend) = match decode(config, headers, payload) {
+        if self
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM deliveries WHERE partition = ?1 AND offset = ?2)",
+                params![coordinate.partition, coordinate.offset],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(storage_error)?
+        {
+            self.verify_live_reread(coordinate, headers, payload)?;
+            let next_offset = self
+                .positions()?
+                .into_iter()
+                .find(|position| position.partition == coordinate.partition)
+                .ok_or(IngestionError::SourceMismatch)?
+                .next_offset;
+            return Ok(CommitOutcome {
+                duplicate_delivery: true,
+                inserted_variant: false,
+                next_offset,
+            });
+        }
+        let registry = self
+            .registry
+            .as_ref()
+            .ok_or(IngestionError::RegistryIntegrity)?
+            .clone();
+        let (disposition, checkpoint) = self.prepare_live(&registry, headers, payload)?;
+        self.commit_with_checkpoint(
+            coordinate,
+            expected_position,
+            disposition,
+            checkpoint.as_ref(),
+            observer,
+        )
+    }
+
+    pub(crate) fn prepare_live(
+        &self,
+        registry: &crate::registry::RegistrySnapshot,
+        headers: &[(String, Vec<u8>)],
+        payload: &[u8],
+    ) -> Result<(RecordDisposition, Option<LiveCheckpoint>), IngestionError> {
+        let (signal, record_id, is_resend) = match decode(registry, headers, payload) {
             Ok(decoded) => decoded,
             Err(reason) => {
-                return self.commit_with_checkpoint(
-                    coordinate,
-                    expected_position,
-                    RecordDisposition::Rejected(reason),
-                    None,
-                    observer,
-                );
+                return Ok((RecordDisposition::Rejected(reason), None));
             }
         };
         let signal_json = encode(&signal)?;
+        let mut legacy_signal = signal.clone();
+        legacy_signal.location = match &signal.location {
+            Some(NormalizedLocation::MatchedCharger { charger_id, .. })
+                if registry.legacy_charger.as_ref() == Some(charger_id) =>
+            {
+                Some(NormalizedLocation::InsideGeofence)
+            }
+            Some(NormalizedLocation::OutsideChargers { .. }) => {
+                Some(NormalizedLocation::OutsideGeofence)
+            }
+            _ => signal.location.clone(),
+        };
+        let legacy_signal_json = encode(&legacy_signal)?;
         let retained: Option<(String, String)> = self
             .connection
             .query_row(
@@ -218,20 +270,17 @@ impl Store {
             .optional()
             .map_err(storage_error)?;
         if let Some((original, disposition)) = retained {
-            if original != signal_json {
+            if original != signal_json && original != legacy_signal_json {
                 return Err(IngestionError::DeliveryConflict);
             }
-            return self.commit_with_checkpoint(
-                coordinate,
-                expected_position,
+            return Ok((
                 serde_json::from_str(&disposition).map_err(|_| IngestionError::StorageCorrupt)?,
                 None,
-                observer,
-            );
+            ));
         }
         let repeated: Option<String> = self.connection.query_row(
-            "SELECT disposition_json FROM live_records WHERE vehicle = ?1 AND signal_json = ?2 LIMIT 1",
-            params![signal.vehicle, signal_json], |row| row.get(0),
+            "SELECT disposition_json FROM live_records WHERE vehicle = ?1 AND (signal_json = ?2 OR signal_json = ?3) LIMIT 1",
+            params![signal.vehicle, signal_json, legacy_signal_json], |row| row.get(0),
         ).optional().map_err(storage_error)?;
         let state_json: Option<String> = self
             .connection
@@ -258,13 +307,7 @@ impl Store {
             disposition_json: encode(&disposition)?,
             state_json: encode(&state)?,
         };
-        self.commit_with_checkpoint(
-            coordinate,
-            expected_position,
-            disposition,
-            Some(&checkpoint),
-            observer,
-        )
+        Ok((disposition, Some(checkpoint)))
     }
 }
 
@@ -369,10 +412,17 @@ fn adapt(
             location: if late {
                 Some(NormalizedLocation::Invalid)
             } else {
-                state
-                    .location
-                    .as_ref()
-                    .map(|location| location.classification.clone())
+                if matches!(
+                    signal.location,
+                    Some(NormalizedLocation::AmbiguousChargers { .. })
+                ) {
+                    signal.location.clone()
+                } else {
+                    state
+                        .location
+                        .as_ref()
+                        .map(|location| location.classification.clone())
+                }
             },
         },
         provenance: EvidenceProvenance {
@@ -380,7 +430,12 @@ fn adapt(
             owner: mapping.owner.clone(),
             created_at: signal.created_at.clone(),
             input_contract: config.input_contract.clone(),
-            mapping_version: config.mapping_version.clone(),
+            mapping_version: manifest
+                .live_identity_versions
+                .get(&signal.vehicle)
+                .and_then(|versions| versions.iter().find(|version| version.starts_with("car-")))
+                .cloned()
+                .unwrap_or_else(|| config.mapping_version.clone()),
             manifest_version: config.manifest_version.clone(),
             normalizer_version: config.normalizer_version.clone(),
             timestamp_version: config.timestamp_version.clone(),
@@ -428,7 +483,9 @@ impl AdapterState {
         match &signal.location {
             Some(
                 classification @ (NormalizedLocation::InsideGeofence
-                | NormalizedLocation::OutsideGeofence),
+                | NormalizedLocation::OutsideGeofence
+                | NormalizedLocation::OutsideChargers { .. }
+                | NormalizedLocation::MatchedCharger { .. }),
             ) => {
                 if self
                     .location_conflict_time
@@ -467,7 +524,7 @@ fn counter_increased(
 }
 
 fn decode(
-    config: &crate::live_config::LiveConfig,
+    registry: &crate::registry::RegistrySnapshot,
     headers: &[(String, Vec<u8>)],
     payload: &[u8],
 ) -> Result<(Signal, String, bool), RejectionReason> {
@@ -492,10 +549,10 @@ fn decode(
     if vin.is_empty() || txid.is_empty() || header("txtype")? != "V" {
         return Err(RejectionReason::UnsupportedPayload);
     }
-    let mapping = config
-        .mappings
+    let car = registry
+        .cars
         .iter()
-        .find(|mapping| mapping.device == vin)
+        .find(|car| car.registration.device == vin)
         .ok_or(RejectionReason::UnknownIdentity)?;
     let payload: Payload =
         serde_json::from_slice(payload).map_err(|_| RejectionReason::UnsupportedPayload)?;
@@ -508,7 +565,7 @@ fn decode(
     }
     let (time, _) = parse_utc_timestamp(&payload.created_at)?;
     let mut signal = Signal {
-        vehicle: mapping.vehicle.clone(),
+        vehicle: car.registration.vehicle.clone(),
         created_at: payload.created_at,
         time,
         state: None,
@@ -518,9 +575,6 @@ fn decode(
         odometer: None,
         fast_charger: None,
     };
-    let geofence = config
-        .geofence()
-        .map_err(|_| RejectionReason::InvalidManifest)?;
     let mut keys = BTreeSet::new();
     let mut invalid_evidence = false;
     for field in payload.data {
@@ -568,7 +622,7 @@ fn decode(
                         .is_some_and(|power| power.is_positive()),
                 );
             }
-            "Location" => signal.location = Some(classify(&field.value, geofence)),
+            "Location" => signal.location = Some(classify(&field.value, car, registry)),
             "Odometer" => {
                 signal.odometer = Some(
                     numeric_text(&field.value)
@@ -668,7 +722,11 @@ pub(crate) fn parse_utc_timestamp(input: &str) -> Result<(i64, u32), RejectionRe
     ))
 }
 
-fn classify(value: &serde_json::value::RawValue, geofence: ChargerGeofence) -> NormalizedLocation {
+fn classify(
+    value: &serde_json::value::RawValue,
+    car: &crate::registry::Car,
+    registry: &crate::registry::RegistrySnapshot,
+) -> NormalizedLocation {
     let point = serde_json::from_str::<LocationValue>(value.get())
         .ok()
         .and_then(|value| {
@@ -677,10 +735,54 @@ fn classify(value: &serde_json::value::RawValue, geofence: ChargerGeofence) -> N
                 value.location_value.longitude,
             )
         });
-    match point {
-        Some(point) if geofence.contains(point) => NormalizedLocation::InsideGeofence,
-        Some(_) => NormalizedLocation::OutsideGeofence,
-        None => NormalizedLocation::Invalid,
+    let Some(point) = point else {
+        return NormalizedLocation::Invalid;
+    };
+    let matches: Vec<_> = car
+        .registration
+        .chargers
+        .iter()
+        .filter_map(|id| registry.chargers.get(id))
+        .filter(|charger| {
+            charger
+                .geofence
+                .to_core()
+                .is_ok_and(|geofence| geofence.contains(point))
+        })
+        .collect();
+    match matches.as_slice() {
+        [] if car.identity_version.starts_with("live-config-") => {
+            NormalizedLocation::OutsideGeofence
+        }
+        [] => NormalizedLocation::OutsideChargers {
+            assignment_version: car.assignment_version.clone(),
+            geofence_versions: car
+                .registration
+                .chargers
+                .iter()
+                .filter_map(|id| registry.chargers.get(id))
+                .map(|charger| charger.geofence_version.clone())
+                .collect(),
+        },
+        [_charger]
+            if registry.legacy_charger.is_some()
+                && car.identity_version.starts_with("live-config-") =>
+        {
+            NormalizedLocation::InsideGeofence
+        }
+        [charger] => NormalizedLocation::MatchedCharger {
+            charger_id: charger.id.clone(),
+            assignment_version: car.assignment_version.clone(),
+            geofence_version: charger.geofence_version.clone(),
+        },
+        _ if car.identity_version.starts_with("live-config-") => NormalizedLocation::Invalid,
+        _ => NormalizedLocation::AmbiguousChargers {
+            assignment_version: car.assignment_version.clone(),
+            geofence_versions: matches
+                .iter()
+                .map(|charger| charger.geofence_version.clone())
+                .collect(),
+        },
     }
 }
 
@@ -699,3 +801,160 @@ mod tests;
 
 #[cfg(test)]
 mod rules;
+
+#[cfg(test)]
+fn decode_bootstrap(
+    bootstrap: &crate::RegistryBootstrap,
+    headers: &[(String, Vec<u8>)],
+    payload: &[u8],
+) -> Result<(Signal, String, bool), RejectionReason> {
+    decode(
+        &bootstrap
+            .decoder_registry()
+            .map_err(|_| RejectionReason::InvalidManifest)?,
+        headers,
+        payload,
+    )
+}
+
+#[cfg(test)]
+impl Store {
+    fn ingest_bootstrap(
+        &mut self,
+        bootstrap: &crate::RegistryBootstrap,
+        coordinate: DeliveryCoordinate,
+        expected_position: i64,
+        headers: &[(String, Vec<u8>)],
+        payload: &[u8],
+    ) -> Result<CommitOutcome, IngestionError> {
+        let (disposition, checkpoint) =
+            self.prepare_live(&bootstrap.decoder_registry()?, headers, payload)?;
+        self.commit_with_checkpoint(
+            coordinate,
+            expected_position,
+            disposition,
+            checkpoint.as_ref(),
+            &mut |_| Ok(()),
+        )
+    }
+}
+
+impl Store {
+    pub(crate) fn verify_live_reread(
+        &self,
+        coordinate: DeliveryCoordinate,
+        headers: &[(String, Vec<u8>)],
+        payload: &[u8],
+    ) -> Result<(), IngestionError> {
+        let admissions: String = self.connection.query_row("SELECT admitted_vehicles_json FROM live_delivery_admissions WHERE partition = ?1 AND offset = ?2",params![coordinate.partition,coordinate.offset],|row| row.get(0)).map_err(storage_error)?;
+        let admitted: Vec<String> =
+            serde_json::from_str(&admissions).map_err(|_| IngestionError::RegistryIntegrity)?;
+        let mut registry = self
+            .registry
+            .as_ref()
+            .ok_or(IngestionError::RegistryIntegrity)?
+            .clone();
+        registry
+            .cars
+            .retain(|car| admitted.contains(&car.registration.vehicle));
+        let (disposition, _) = self.prepare_live(&registry, headers, payload)?;
+        let stored: (Option<String>,Option<String>,Option<String>) = self.connection.query_row("SELECT v.event_json,d.provenance_json,d.rejection_reason FROM deliveries d LEFT JOIN event_variants v ON v.id = d.variant_id WHERE d.partition = ?1 AND d.offset = ?2",params![coordinate.partition,coordinate.offset],|row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).map_err(storage_error)?;
+        let actual = match disposition {
+            RecordDisposition::Accepted(evidence) => (
+                Some(encode(&evidence.event)?),
+                Some(encode(&evidence.provenance)?),
+                None,
+            ),
+            RecordDisposition::Rejected(reason) => (None, None, Some(encode(&reason)?)),
+        };
+        if stored != actual {
+            return Err(IngestionError::DeliveryConflict);
+        }
+        Ok(())
+    }
+}
+
+impl Store {
+    pub(crate) fn verify_live_registry_state(&self) -> Result<(), IngestionError> {
+        let registry = self
+            .registry
+            .as_ref()
+            .ok_or(IngestionError::RegistryIntegrity)?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT vehicle,signal_json,disposition_json FROM live_records")
+            .map_err(storage_error)?;
+        let records = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(storage_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(storage_error)?;
+        for (vehicle, signal_json, disposition_json) in records {
+            let signal: Signal = serde_json::from_str(&signal_json)
+                .map_err(|_| IngestionError::RegistryIntegrity)?;
+            let disposition: RecordDisposition = serde_json::from_str(&disposition_json)
+                .map_err(|_| IngestionError::RegistryIntegrity)?;
+            if signal.vehicle != vehicle
+                || parse_utc_timestamp(&signal.created_at).map(|time| time.0) != Ok(signal.time)
+            {
+                return Err(IngestionError::RegistryIntegrity);
+            }
+            if let Some(location) = &signal.location {
+                if matches!(
+                    location,
+                    NormalizedLocation::Valid { .. } | NormalizedLocation::RedactedGeofence
+                ) {
+                    return Err(IngestionError::RegistryIntegrity);
+                }
+                registry.validate_location(&vehicle, location)?;
+            }
+            if let RecordDisposition::Accepted(evidence) = &disposition {
+                self.manifest
+                    .validate_evidence(evidence)
+                    .map_err(|_| IngestionError::RegistryIntegrity)?;
+                if evidence.event.vehicle != vehicle {
+                    return Err(IngestionError::RegistryIntegrity);
+                }
+                if let Some(location) = &evidence.event.location {
+                    registry.validate_location(&vehicle, location)?;
+                }
+            }
+        }
+        let mut statement = self
+            .connection
+            .prepare("SELECT vehicle,state_json FROM live_adapter_state")
+            .map_err(storage_error)?;
+        let records = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(storage_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(storage_error)?;
+        for (vehicle, state_json) in records {
+            let state: AdapterState =
+                serde_json::from_str(&state_json).map_err(|_| IngestionError::RegistryIntegrity)?;
+            if state.last_nanoseconds >= 1_000_000_000 {
+                return Err(IngestionError::RegistryIntegrity);
+            }
+            if let Some(location) = &state.location {
+                if location.nanoseconds >= 1_000_000_000
+                    || matches!(
+                        location.classification,
+                        NormalizedLocation::Valid { .. } | NormalizedLocation::RedactedGeofence
+                    )
+                {
+                    return Err(IngestionError::RegistryIntegrity);
+                }
+                registry.validate_location(&vehicle, &location.classification)?;
+            }
+        }
+        Ok(())
+    }
+}

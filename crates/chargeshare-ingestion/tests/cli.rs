@@ -422,3 +422,124 @@ fn acceptance_status_and_crash_probe_refuse_missing_database_and_unknown_boundar
     );
     assert!(!fixture.runtime.join("ingestion.sqlite3").exists());
 }
+
+#[test]
+fn chargie_registry_and_car_commands_use_explicit_private_database_and_safe_output() {
+    let directory =
+        Path::new("/tmp").join(format!("chargeshare-registry-cli-{}", std::process::id()));
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .unwrap();
+    let database = directory.join("ingestion.sqlite3");
+    let bootstrap = directory.join("bootstrap.json");
+    let mut configuration: serde_json::Value =
+        serde_json::from_slice(include_bytes!("../../../dev/live-config.example.json")).unwrap();
+    configuration["database"] = serde_json::json!(database);
+    private_file(&bootstrap, &serde_json::to_vec(&configuration).unwrap());
+    let source = SourceBinding {
+        epoch: configuration["source_epoch"].as_str().unwrap().to_owned(),
+        topic: format!("{}_V", configuration["topic_namespace"].as_str().unwrap()),
+        cluster_id: None,
+        topic_id: None,
+        partitions: vec![PartitionStart {
+            partition: 0,
+            initial_offset: 0,
+        }],
+    };
+    private_file(
+        &directory.join("source-epoch.json"),
+        &serde_json::to_vec(&source).unwrap(),
+    );
+    let invoke = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_chargie"))
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let migration = invoke(&[
+        "registry",
+        "migrate",
+        "--database",
+        database.to_str().unwrap(),
+        "--bootstrap",
+        bootstrap.to_str().unwrap(),
+        "--car-name",
+        "vehicle-a=Car A",
+        "--charger-name",
+        "Driveway charger",
+        "--charger-owner",
+        "charger-owner",
+    ]);
+    assert!(
+        migration.status.success(),
+        "{}",
+        String::from_utf8_lossy(&migration.stderr)
+    );
+    let add = [
+        "car",
+        "add",
+        "--database",
+        database.to_str().unwrap(),
+        "--vin",
+        "FICTIONAL-VIN-B",
+        "--vehicle",
+        "vehicle-b",
+        "--owner",
+        "owner-b",
+        "--name",
+        "Model Y sample",
+        "--make",
+        "Fictional",
+        "--model",
+        "Model Y",
+        "--year",
+        "2026",
+        "--charger",
+        "fictional-shared-charger",
+        "--charger",
+        "fictional-shared-charger",
+    ];
+    for _ in 0..2 {
+        let output = invoke(&add);
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "Car stored; retained recovery pending."
+        );
+    }
+    let mut invalid = add;
+    invalid[5] = "PRIVATE-INPUT-SHOULD-NOT-ECHO";
+    let failure = invoke(&invalid);
+    assert_safe_failure(
+        &failure,
+        "registry: conflicting identity or invalid metadata",
+    );
+    let rename = invoke(&[
+        "car",
+        "rename",
+        "--database",
+        database.to_str().unwrap(),
+        "--vehicle",
+        "vehicle-b",
+        "--name",
+        "Neighbor sample",
+    ]);
+    assert!(rename.status.success());
+    for _ in 0..2 {
+        let remove = invoke(&[
+            "car",
+            "remove",
+            "--database",
+            database.to_str().unwrap(),
+            "--vehicle",
+            "vehicle-b",
+        ]);
+        assert!(remove.status.success());
+    }
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let retained:(String,bool,i64)=connection.query_row("SELECT name,active,(SELECT count(*) FROM car_chargers WHERE car_id=cars.device) FROM cars WHERE vehicle='vehicle-b'",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    assert_eq!(retained, ("Neighbor sample".to_owned(), false, 1));
+    drop(connection);
+    fs::remove_dir_all(directory).unwrap();
+}

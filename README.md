@@ -63,7 +63,7 @@ and check the receiver → Kafka → SQLite → HTTP path:
 nix develop --no-update-lock-file -c bash scripts/dev/poc.sh check
 ```
 
-Choose a fictional owner/vehicle pair in the dashboard selector. Bars default to
+Choose a named fictional car, then one charger or all chargers. Bars default to
 estimated cost; switch to kWh and hover, tap or select a day for its breakdown.
 Configuration, sample-rate provenance and session quality details are below the chart.
 
@@ -87,8 +87,9 @@ The independent fixture preview uses local port **5173** while the stack runs.
 ### Screenshot dataset without Docker
 
 [The deterministic generator](dev/fixtures/dashboard.py) creates June–September
-2026 charging history for fictional `owner-a` / `vehicle-a`, using the existing
-fictional shared-charger coordinates and labeled public sample rates.
+2026 charging history for named fictional Model 3 and Model Y cars and named
+driveway and garage chargers, using existing fictional coordinates and labeled
+public sample rates.
 **Synthetic data for demos and screenshots only; not real.**
 
 With the Rust/Node tools and web dependencies installed, run from the repository
@@ -98,7 +99,7 @@ root. Use a fresh output directory for each export:
 mkdir -p .cache
 python3 dev/fixtures/dashboard.py > .cache/dashboard-input.json
 cargo run --locked -p chargeshare-ingestion --example dashboard-fixture -- .cache/dashboard-input.json .cache/dashboard-demo
-python3 -m http.server 8788 --bind 127.0.0.1 --directory .cache/dashboard-demo/http
+python3 dev/fixtures/dashboard.py --serve .cache/dashboard-demo/http
 ```
 
 In a second terminal, run `npm --prefix apps/web run dev:persisted` and open local
@@ -106,6 +107,40 @@ port **5174**. The Rust example ingests decoded fictional records into SQLite an
 exports the persisted dashboard's usual JSON, with monthly history calculated as
 of September 30, 2026. The HTTP server serves only that snapshot; receiver/Kafka
 transport is not exercised. Generated data and SQLite stay in ignored `.cache/`.
+
+### Live registry migration and car commands
+
+Fixed runtime settings select Kafka/source, database, API port and immutable rate
+model definitions. Live cars, display names, charger geofences, charger ownership,
+rate selections and assignments belong to the SQLite registry. The legacy
+`mappings` and `shared_charger` sections are bootstrap input only.
+
+While the ingestion owner is stopped, preserve a private database/source-marker
+backup and run the explicit setup script against the existing private database:
+
+```sh
+python3 scripts/dev/registry_setup.py --database "<private-database>" \
+  --bootstrap "<private-legacy-input>" --car-name "vehicle-a=Car A" \
+  --charger-name "Charger A" --charger-owner owner-a
+cargo build --locked -p chargeshare-ingestion --bin chargie
+chargie car add --database "<private-database>" \
+  --vin "<vin>" --vehicle vehicle-b --owner owner-b \
+  --name "Model Y" --make Tesla --model "Model Y" --charger "<existing-charger-id>"
+chargie car rename --database "<private-database>" --vehicle vehicle-b --name "Neighbor's Model Y"
+chargie car remove --database "<private-database>" --vehicle vehicle-b
+```
+
+Use the built `target/debug/chargie` executable, or its installed path. Declare the
+charger's actual owner explicitly; it does not determine a car's ledger owner.
+Repeat `--charger` for multiple assignments. Adding a car stores a durable recovery
+request; restart with the fixed settings to scan the captured retained Kafka
+range for that car. Ordinary progress and previous cars are preserved. Seven-day
+retention does not guarantee seven complete days. The new car becomes selectable
+after recovery and handoff complete. Rename updates only the display name; remove
+hides a car while preserving its history and continuing telemetry ingestion.
+With no active cars the dashboard shows an empty state. No Pi or live database
+access is required for repository tests; private migration is a separate operator
+action. See the [registry contract](docs/architecture.md#live-registry-and-retained-recovery).
 
 ## Tests
 
@@ -121,6 +156,7 @@ python3 scripts/testing/test_ingestion_guard.py
 python3 -m unittest discover -s scripts/dev -p 'test_*.py'
 python3 -m unittest discover -s dev/fixtures -p 'test_*.py'
 npm --prefix apps/web ci
+npm --prefix apps/web run lint
 npm --prefix apps/web test
 npm run preview:build
 npm --prefix apps/web run build:persisted

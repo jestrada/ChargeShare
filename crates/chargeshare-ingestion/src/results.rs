@@ -20,6 +20,8 @@ pub struct ScopedResults {
     pub monthly: MonthlyResult,
     pub provenance: ResultProvenance,
     pub revision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry: Option<ResultRegistry>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -38,6 +40,38 @@ pub struct SessionResult {
     pub pricing: SessionPrice,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coverage: Option<CounterCoverageResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub charger: Option<SessionChargerResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_versions: Option<Vec<SessionLocationVersion>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ChargerSummary {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ResultRegistry {
+    pub car_name: String,
+    pub chargers: Vec<ChargerSummary>,
+    pub selected_charger: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionChargerResult {
+    pub id: String,
+    pub name: String,
+    pub assignment_versions: Vec<String>,
+    pub geofence_versions: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
+pub struct SessionLocationVersion {
+    pub charger_id: String,
+    pub assignment_version: String,
+    pub geofence_version: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -300,10 +334,19 @@ impl Store {
     ) -> Result<ScopedResults, IngestionError> {
         self.validate_live_storage()?;
         let ledger = self.replay(owner, vehicle)?;
-        results_from_replay(&ledger, &self.manifest, self.source_epoch(), owner, vehicle)
+        results_for_view(
+            &ledger,
+            &self.manifest,
+            self.source_epoch(),
+            owner,
+            vehicle,
+            Some(self),
+            None,
+        )
     }
 }
 
+#[cfg(test)]
 fn results_from_replay(
     ledger: &chargeshare_core::Ledger,
     manifest: &crate::Manifest,
@@ -311,20 +354,184 @@ fn results_from_replay(
     owner: &OwnerId,
     vehicle: &VehicleId,
 ) -> Result<ScopedResults, IngestionError> {
+    results_for_view(ledger, manifest, source_epoch, owner, vehicle, None, None)
+}
+
+fn results_for_view(
+    ledger: &chargeshare_core::Ledger,
+    manifest: &crate::Manifest,
+    source_epoch: &str,
+    owner: &OwnerId,
+    vehicle: &VehicleId,
+    store: Option<&Store>,
+    selected_charger: Option<&str>,
+) -> Result<ScopedResults, IngestionError> {
     let summary = ledger
         .summary(vehicle)
         .map_err(|_| IngestionError::DomainReplay)?;
     let history = manifest
         .rate_history(owner)
         .map_err(|_| IngestionError::InvalidConfiguration)?;
-    let prices = ledger
-        .time_of_use_pricing(vehicle, &history)
-        .map_err(|error| match error {
-            PricingError::Money(_) | PricingError::EnergyOverflow => {
-                IngestionError::PricingOverflow
+    let mut prices =
+        ledger
+            .time_of_use_pricing(vehicle, &history)
+            .map_err(|error| match error {
+                PricingError::Money(_) | PricingError::EnergyOverflow => {
+                    IngestionError::PricingOverflow
+                }
+                PricingError::Ledger(_) => IngestionError::DomainReplay,
+            })?;
+    let mut registry_result = None;
+    let mut session_chargers = std::collections::BTreeMap::new();
+    let mut selected_models = Vec::new();
+    if let Some(store) = store
+        && let Some(registry) = &store.registry
+    {
+        let car = registry.car(vehicle.as_str())?;
+        if store
+            .pending_recoveries()?
+            .iter()
+            .any(|pending| pending == vehicle.as_str())
+        {
+            return Err(IngestionError::RecoveryPending);
+        }
+        if selected_charger.is_some_and(|id| {
+            !car.registration
+                .chargers
+                .iter()
+                .any(|charger| charger == id)
+        }) {
+            return Err(IngestionError::RegistryConflict);
+        }
+        let matches = store.connection_chargers(vehicle.as_str())?;
+        let mut charger_prices = std::collections::BTreeMap::new();
+        for id in &car.registration.chargers {
+            let charger = registry
+                .chargers
+                .get(id)
+                .ok_or(IngestionError::RegistryIntegrity)?;
+            let models = charger
+                .rate_plan
+                .iter()
+                .map(|id| {
+                    manifest
+                        .config()
+                        .rate_models
+                        .iter()
+                        .find(|model| &model.id == id)
+                        .ok_or(IngestionError::RegistryIntegrity)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let history = chargeshare_core::RateModelHistory::new(
+                models
+                    .iter()
+                    .map(|model| {
+                        model
+                            .to_core()
+                            .map_err(|_| IngestionError::RegistryIntegrity)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+            .map_err(|_| IngestionError::RegistryIntegrity)?;
+            let pricing = ledger
+                .time_of_use_pricing(vehicle, &history)
+                .map_err(|_| IngestionError::PricingOverflow)?;
+            charger_prices.insert(
+                id.clone(),
+                pricing
+                    .sessions
+                    .into_iter()
+                    .map(|priced| {
+                        (
+                            priced.session.id.connection.as_str().to_owned(),
+                            priced.quote,
+                        )
+                    })
+                    .collect::<std::collections::BTreeMap<_, _>>(),
+            );
+            if selected_charger.is_none_or(|selected| selected == id) {
+                selected_models.extend(models.into_iter().cloned());
             }
-            PricingError::Ledger(_) => IngestionError::DomainReplay,
-        })?;
+        }
+        prices.sessions.retain(|priced| {
+            selected_charger.is_none_or(|id| {
+                matches
+                    .get(priced.session.id.connection.as_str())
+                    .is_some_and(|ids| ids.contains(id))
+            })
+        });
+        for priced in &mut prices.sessions {
+            let connection = priced.session.id.connection.as_str();
+            if let Some(ids) = matches.get(connection)
+                && ids.len() == 1
+            {
+                let id = ids.first().unwrap();
+                let charger = registry
+                    .chargers
+                    .get(id)
+                    .ok_or(IngestionError::RegistryIntegrity)?;
+                priced.quote = charger_prices
+                    .get(id)
+                    .and_then(|prices| prices.get(connection))
+                    .ok_or(IngestionError::RegistryIntegrity)?
+                    .clone();
+                let (assignments, geofences) =
+                    store.session_location_versions(vehicle.as_str(), connection, id)?;
+                session_chargers.insert(
+                    connection.to_owned(),
+                    SessionChargerResult {
+                        id: id.clone(),
+                        name: charger.name.clone(),
+                        assignment_versions: assignments,
+                        geofence_versions: geofences,
+                    },
+                );
+            }
+        }
+        prices.priced_energy = Energy::ZERO;
+        prices.exact_subtotal = chargeshare_core::ExactUsd::ZERO;
+        for priced in &prices.sessions {
+            if let Ok(quote) = &priced.quote {
+                prices.priced_energy = prices
+                    .priced_energy
+                    .checked_add(priced.session.observed_ac)
+                    .map_err(|_| IngestionError::PricingOverflow)?;
+                prices.exact_subtotal = prices
+                    .exact_subtotal
+                    .checked_add(quote.exact_cost)
+                    .map_err(|_| IngestionError::PricingOverflow)?;
+            }
+        }
+        prices.rounded_subtotal = prices.exact_subtotal.round_half_up_to_cents();
+        selected_models.sort_by(|left, right| left.id.cmp(&right.id));
+        selected_models.dedup_by(|left, right| left.id == right.id);
+        registry_result = Some(ResultRegistry {
+            car_name: car.registration.name.clone(),
+            chargers: car
+                .registration
+                .chargers
+                .iter()
+                .filter_map(|id| registry.chargers.get(id))
+                .map(|charger| ChargerSummary {
+                    id: charger.id.clone(),
+                    name: charger.name.clone(),
+                })
+                .collect(),
+            selected_charger: selected_charger.map(str::to_owned),
+        });
+    }
+    let mut observed = Energy::ZERO;
+    let mut eligible = Energy::ZERO;
+    for priced in &prices.sessions {
+        observed = observed
+            .checked_add(priced.session.observed_ac)
+            .map_err(|_| IngestionError::PricingOverflow)?;
+        if priced.session.is_eligible() {
+            eligible = eligible
+                .checked_add(priced.session.observed_ac)
+                .map_err(|_| IngestionError::PricingOverflow)?;
+        }
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| IngestionError::DomainReplay)?
@@ -338,6 +545,10 @@ fn results_from_replay(
             }
         })?
         .into();
+    let all_eligible = prices
+        .sessions
+        .iter()
+        .all(|priced| priced.session.is_eligible());
     let mut sessions = Vec::new();
     for priced in prices.sessions {
         if priced.session.id.vehicle != *vehicle || priced.session.owner != *owner {
@@ -345,6 +556,13 @@ fn results_from_replay(
         }
         let mut session = SessionResult::from(priced.session);
         session.pricing = SessionPrice::from_quote(priced.quote);
+        session.charger = session_chargers.remove(&session.connection);
+        if let Some(store) = store
+            && store.registry.is_some()
+        {
+            session.location_versions =
+                Some(store.session_location_provenance(vehicle.as_str(), &session.connection)?);
+        }
         sessions.push(session);
     }
     let quoted_session_count = sessions
@@ -362,7 +580,7 @@ fn results_from_replay(
         vehicle: vehicle.as_str().to_owned(),
         state: if sessions.is_empty() {
             "empty"
-        } else if summary.held_or_excluded.is_empty() {
+        } else if all_eligible {
             "eligible"
         } else {
             "held"
@@ -372,8 +590,8 @@ fn results_from_replay(
         } else {
             summary.evidence_label
         },
-        observed_ac_kwh: kwh(summary.observed_ac),
-        eligible_shared_charger_kwh: kwh(summary.eligible_shared_charger),
+        observed_ac_kwh: kwh(observed),
+        eligible_shared_charger_kwh: kwh(eligible),
         pricing: PricingResult {
             state: if sessions.is_empty() {
                 "empty"
@@ -382,22 +600,30 @@ fn results_from_replay(
             } else {
                 "quoted"
             },
-            charger_id: config
-                .owner_chargers
-                .iter()
-                .find(|charger| charger.owner_id == owner.as_str())
-                .map(|charger| charger.charger_id.clone()),
-            rate_models: history
-                .versions()
-                .iter()
-                .filter_map(|version| {
-                    config
-                        .rate_models
-                        .iter()
-                        .find(|model| model.id == version.definition().id)
-                        .cloned()
-                })
-                .collect(),
+            charger_id: if registry_result.is_some() {
+                selected_charger.map(str::to_owned)
+            } else {
+                config
+                    .owner_chargers
+                    .iter()
+                    .find(|charger| charger.owner_id == owner.as_str())
+                    .map(|charger| charger.charger_id.clone())
+            },
+            rate_models: if registry_result.is_some() {
+                selected_models
+            } else {
+                history
+                    .versions()
+                    .iter()
+                    .filter_map(|version| {
+                        config
+                            .rate_models
+                            .iter()
+                            .find(|model| model.id == version.definition().id)
+                            .cloned()
+                    })
+                    .collect()
+            },
             calculation_version: TOU_CALCULATION_VERSION,
             estimate_boundary: if manifest.is_live() {
                 LIVE_PRICING_BOUNDARY
@@ -428,8 +654,15 @@ fn results_from_replay(
             calculation_version: "scoped-core-replay-v3",
             geofence_version: config.geofence_version.clone(),
         },
+        registry: registry_result,
         revision: String::new(),
     };
+    if let Some(store) = store
+        && let Some(registry) = &store.registry
+    {
+        result.provenance.mapping_version =
+            registry.car(vehicle.as_str())?.identity_version.clone();
+    }
     let canonical = serde_json::to_vec(&result).map_err(|_| IngestionError::DomainReplay)?;
     let hash = canonical.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
@@ -446,6 +679,8 @@ impl From<Session> for SessionResult {
             Energy::ZERO
         };
         Self {
+            charger: None,
+            location_versions: None,
             pricing: SessionPrice {
                 state: "ineligible",
                 hold_reason: Some("IneligibleSession"),
@@ -503,6 +738,168 @@ impl From<Session> for SessionResult {
                 .map(|reason| format!("{reason:?}"))
                 .collect(),
         }
+    }
+}
+
+impl Store {
+    pub fn results_for_charger(
+        &self,
+        owner: &OwnerId,
+        vehicle: &VehicleId,
+        charger: &str,
+    ) -> Result<ScopedResults, IngestionError> {
+        self.validate_live_storage()?;
+        let ledger = self.replay(owner, vehicle)?;
+        results_for_view(
+            &ledger,
+            &self.manifest,
+            self.source_epoch(),
+            owner,
+            vehicle,
+            Some(self),
+            Some(charger),
+        )
+    }
+
+    fn session_location_provenance(
+        &self,
+        vehicle: &str,
+        connection: &str,
+    ) -> Result<Vec<SessionLocationVersion>, IngestionError> {
+        let registry = self
+            .registry
+            .as_ref()
+            .ok_or(IngestionError::RegistryIntegrity)?;
+        let mut versions = std::collections::BTreeSet::new();
+        let events = self
+            .connection
+            .prepare("SELECT id,event_json FROM event_variants WHERE vehicle=?1 AND connection=?2")
+            .map_err(crate::schema::storage_error)?
+            .query_map(rusqlite::params![vehicle, connection], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(crate::schema::storage_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(crate::schema::storage_error)?;
+        for (id, json) in events {
+            let event: crate::NormalizedEvent =
+                serde_json::from_str(&json).map_err(|_| IngestionError::RegistryIntegrity)?;
+            match event.location {
+                Some(crate::NormalizedLocation::MatchedCharger {
+                    charger_id,
+                    assignment_version,
+                    geofence_version,
+                }) => {
+                    versions.insert(SessionLocationVersion {
+                        charger_id,
+                        assignment_version,
+                        geofence_version,
+                    });
+                }
+                Some(crate::NormalizedLocation::OutsideChargers {
+                    assignment_version,
+                    geofence_versions,
+                })
+                | Some(crate::NormalizedLocation::AmbiguousChargers {
+                    assignment_version,
+                    geofence_versions,
+                }) => {
+                    for geofence_version in geofence_versions {
+                        let (charger_id, _) = registry
+                            .geofence_versions
+                            .get(&geofence_version)
+                            .ok_or(IngestionError::RegistryIntegrity)?;
+                        versions.insert(SessionLocationVersion {
+                            charger_id: charger_id.clone(),
+                            assignment_version: assignment_version.clone(),
+                            geofence_version,
+                        });
+                    }
+                }
+                Some(
+                    crate::NormalizedLocation::InsideGeofence
+                    | crate::NormalizedLocation::OutsideGeofence,
+                ) => {
+                    let charger_id = registry
+                        .legacy_charger
+                        .as_ref()
+                        .ok_or(IngestionError::RegistryIntegrity)?
+                        .clone();
+                    let assignment_version = format!(
+                        "assignment-{:016x}",
+                        crate::live::fingerprint(
+                            crate::registry::json(&(vehicle, vec![charger_id.clone()]))?.as_bytes()
+                        )
+                    );
+                    if !registry.assignments.contains_key(&assignment_version) {
+                        return Err(IngestionError::RegistryIntegrity);
+                    }
+                    let legacy: String = self
+                        .connection
+                        .query_row(
+                            "SELECT manifest_json FROM legacy_registry_contract",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .map_err(crate::schema::storage_error)?;
+                    let legacy = crate::Manifest::from_json(legacy.as_bytes())
+                        .map_err(|_| IngestionError::RegistryIntegrity)?;
+                    let provenance = self
+                        .connection
+                        .prepare(
+                            "SELECT DISTINCT provenance_json FROM deliveries WHERE variant_id=?1",
+                        )
+                        .map_err(crate::schema::storage_error)?
+                        .query_map([id], |row| row.get::<_, String>(0))
+                        .map_err(crate::schema::storage_error)?
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                        .map_err(crate::schema::storage_error)?;
+                    let mut geofences = std::collections::BTreeSet::new();
+                    for json in provenance {
+                        let provenance: crate::EvidenceProvenance = serde_json::from_str(&json)
+                            .map_err(|_| IngestionError::RegistryIntegrity)?;
+                        if provenance.mapping_version.starts_with("live-config-") {
+                            geofences.insert(provenance.mapping_version);
+                        }
+                    }
+                    if geofences.is_empty() {
+                        geofences.insert(legacy.config().geofence_version.clone());
+                    }
+                    for geofence_version in geofences {
+                        versions.insert(SessionLocationVersion {
+                            charger_id: charger_id.clone(),
+                            assignment_version: assignment_version.clone(),
+                            geofence_version,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(versions.into_iter().collect())
+    }
+
+    fn session_location_versions(
+        &self,
+        vehicle: &str,
+        connection: &str,
+        charger_id: &str,
+    ) -> Result<(Vec<String>, Vec<String>), IngestionError> {
+        let versions = self.session_location_provenance(vehicle, connection)?;
+        let assignments = versions
+            .iter()
+            .filter(|version| version.charger_id == charger_id)
+            .map(|version| version.assignment_version.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let geofences = versions
+            .into_iter()
+            .filter(|version| version.charger_id == charger_id)
+            .map(|version| version.geofence_version)
+            .collect::<std::collections::BTreeSet<_>>();
+        Ok((
+            assignments.into_iter().collect(),
+            geofences.into_iter().collect(),
+        ))
     }
 }
 

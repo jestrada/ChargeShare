@@ -32,15 +32,17 @@ fn main() {
 fn run() -> Result<(), IngestionError> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("car") => car_command(&args[1..]),
+        Some("registry") => registry_command(&args[1..]),
         Some("rebuild-live") if args.len() == 3 => {
-            let original = private_live_config(&args[1])?;
-            let replacement = private_live_config(&args[2])?;
+            let original = private_runtime_settings(&args[1])?;
+            let replacement = private_runtime_settings(&args[2])?;
             chargeshare_ingestion::rebuild_live(&original, &replacement)?;
             println!("Live rebuild completed in the separate dataset; original preserved.");
             Ok(())
         }
         Some("live") if args.len() == 2 => {
-            chargeshare_ingestion::run_live(&private_live_config(&args[1])?)
+            chargeshare_ingestion::run_live(&private_runtime_settings(&args[1])?)
         }
         Some("serve") if args.len() == 4 => {
             let runtime = owned_runtime(&args[1])?;
@@ -139,7 +141,7 @@ fn run() -> Result<(), IngestionError> {
     }
 }
 
-fn private_live_config(input: &str) -> Result<Vec<u8>, IngestionError> {
+fn private_runtime_settings(input: &str) -> Result<Vec<u8>, IngestionError> {
     let path = Path::new(input);
     let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -575,4 +577,146 @@ fn write_unchanged_fixture(path: &Path, contents: &[u8]) -> Result<(), Ingestion
     file.write_all(contents)
         .and_then(|()| file.sync_all())
         .map_err(|_| IngestionError::StorageUnavailable)
+}
+
+fn command_options(
+    args: &[String],
+    allowed: &[&str],
+    repeated: &[&str],
+) -> Result<std::collections::BTreeMap<String, Vec<String>>, IngestionError> {
+    if !args.len().is_multiple_of(2) {
+        return Err(IngestionError::InvalidCommand);
+    }
+    let mut options = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for pair in args.as_chunks::<2>().0 {
+        if !allowed.contains(&pair[0].as_str()) {
+            return Err(IngestionError::InvalidCommand);
+        }
+        let values = options.entry(pair[0].clone()).or_default();
+        if !values.is_empty() && !repeated.contains(&pair[0].as_str()) {
+            return Err(IngestionError::InvalidCommand);
+        }
+        values.push(pair[1].clone());
+    }
+    Ok(options)
+}
+
+fn required_option(
+    options: &std::collections::BTreeMap<String, Vec<String>>,
+    name: &str,
+) -> Result<String, IngestionError> {
+    options
+        .get(name)
+        .and_then(|values| values.first())
+        .cloned()
+        .ok_or(IngestionError::InvalidCommand)
+}
+
+fn car_command(args: &[String]) -> Result<(), IngestionError> {
+    let command = args.first().ok_or(IngestionError::InvalidCommand)?;
+    let allowed: &[&str] = match command.as_str() {
+        "add" => &[
+            "--database",
+            "--vin",
+            "--vehicle",
+            "--owner",
+            "--name",
+            "--charger",
+            "--make",
+            "--model",
+            "--year",
+        ],
+        "rename" => &["--database", "--vehicle", "--name"],
+        "remove" => &["--database", "--vehicle"],
+        _ => return Err(IngestionError::InvalidCommand),
+    };
+    let options = command_options(&args[1..], allowed, &["--charger"])?;
+    let database = PathBuf::from(required_option(&options, "--database")?);
+    let vehicle = required_option(&options, "--vehicle")?;
+    let outcome = match command.as_str() {
+        "add" => Store::add_car(
+            &database,
+            chargeshare_ingestion::CarRegistration {
+                device: required_option(&options, "--vin")?,
+                vehicle,
+                owner: required_option(&options, "--owner")?,
+                name: required_option(&options, "--name")?,
+                chargers: options
+                    .get("--charger")
+                    .cloned()
+                    .ok_or(IngestionError::InvalidCommand)?,
+                make: options
+                    .get("--make")
+                    .and_then(|values| values.first())
+                    .cloned(),
+                model: options
+                    .get("--model")
+                    .and_then(|values| values.first())
+                    .cloned(),
+                year: options
+                    .get("--year")
+                    .and_then(|values| values.first())
+                    .map(|value| value.parse().map_err(|_| IngestionError::InvalidCommand))
+                    .transpose()?,
+            },
+        )?,
+        "rename" => Store::rename_car(&database, &vehicle, &required_option(&options, "--name")?)?,
+        "remove" => Store::remove_car(&database, &vehicle)?,
+        _ => return Err(IngestionError::InvalidCommand),
+    };
+    println!(
+        "{}",
+        match outcome {
+            chargeshare_ingestion::RegistryWrite::RecoveryPending =>
+                "Car stored; retained recovery pending.",
+            chargeshare_ingestion::RegistryWrite::RecoveryComplete =>
+                "Car already stored; retained recovery complete.",
+            chargeshare_ingestion::RegistryWrite::Updated => "Car registry updated.",
+        }
+    );
+    Ok(())
+}
+
+fn registry_command(args: &[String]) -> Result<(), IngestionError> {
+    if args.first().map(String::as_str) != Some("migrate") {
+        return Err(IngestionError::InvalidCommand);
+    }
+    let options = command_options(
+        &args[1..],
+        &[
+            "--database",
+            "--bootstrap",
+            "--car-name",
+            "--charger-name",
+            "--charger-owner",
+        ],
+        &["--car-name"],
+    )?;
+    let database = PathBuf::from(required_option(&options, "--database")?);
+    let bootstrap = chargeshare_ingestion::RegistryBootstrap::from_json(
+        &private_runtime_settings(&required_option(&options, "--bootstrap")?)?,
+    )?;
+    let mut car_names = std::collections::BTreeMap::new();
+    for entry in options
+        .get("--car-name")
+        .ok_or(IngestionError::InvalidCommand)?
+    {
+        let (vehicle, name) = entry
+            .split_once('=')
+            .ok_or(IngestionError::InvalidCommand)?;
+        if car_names
+            .insert(vehicle.to_owned(), name.to_owned())
+            .is_some()
+        {
+            return Err(IngestionError::InvalidCommand);
+        }
+    }
+    let setup = chargeshare_ingestion::RegistrySetup {
+        car_names,
+        charger_name: required_option(&options, "--charger-name")?,
+        charger_owner: required_option(&options, "--charger-owner")?,
+    };
+    chargeshare_ingestion::migrate_registry(&database, &bootstrap, &setup)?;
+    println!("Registry migration complete; retained history preserved.");
+    Ok(())
 }

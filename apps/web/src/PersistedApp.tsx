@@ -15,9 +15,11 @@ function initialScope(): Scope | null {
 
 export function PersistedApp() {
   const [scope, setScope] = useState(initialScope)
+  const [charger, setCharger] = useState<string>("")
   const [refresh, setRefresh] = useState(0)
   const [configured, setConfigured] = useState<{ synthetic_only: boolean; scopes: Scope[] } | null>(null)
-  const key = scope ? `${scope.owner}/${scope.vehicle}` : ""
+  const scopeKey = scope ? `${scope.owner}/${scope.vehicle}` : ""
+  const key = `${scopeKey}/${charger}`
   const scopesAvailable = configured !== null
   const [view, setView] = useState<View>({ scope: key, state: "loading" })
   useEffect(() => {
@@ -30,7 +32,7 @@ export function PersistedApp() {
         const next = parseScopes(await response.json())
         if (active) {
           setConfigured(next)
-          setScope(previous => previous ?? next.scopes[0])
+          setScope(previous => previous && next.scopes.some(option => option.owner === previous.owner && option.vehicle === previous.vehicle) ? next.scopes.find(option => option.vehicle === previous.vehicle)! : next.scopes[0] ?? null)
         }
       }).catch(() => {
         if (active) { setConfigured(null); setView({ scope: key, state: "unavailable" }) }
@@ -44,7 +46,7 @@ export function PersistedApp() {
     let active = true
     setView(previous => previous.scope === key && previous.state === "available" ? previous : { scope: key, state: "loading" })
     const timeout = window.setTimeout(() => controller.abort(), 5000)
-    fetch(resultPath(scope), { signal: controller.signal, cache: "no-store" })
+    fetch(resultPath(scope, charger), { signal: controller.signal, cache: "no-store" })
       .then(async response => {
         if (!response.ok) {
           if (active) setView({ scope: key, state: response.status === 400 || response.status === 404 ? "refused" : "unavailable" })
@@ -56,11 +58,12 @@ export function PersistedApp() {
       .catch(() => { if (active) setView({ scope: key, state: "unavailable" }) })
       .finally(() => window.clearTimeout(timeout))
     return () => { active = false; controller.abort(); window.clearTimeout(timeout); window.clearTimeout(poll) }
-  }, [scope, key, refresh, scopesAvailable])
+  }, [scope, key, charger, refresh, scopesAvailable])
   const current: View = !scopesAvailable && view.state === "available" ? { scope: key, state: "unavailable" } :
     view.scope === key ? view : { scope: key, state: "loading" }
   function chooseScope(next: Scope) {
     setScope(next)
+    setCharger("")
     const params = new URLSearchParams({ owner: next.owner, vehicle: next.vehicle })
     window.history.replaceState(null, "", `/?${params}`)
   }
@@ -69,38 +72,47 @@ export function PersistedApp() {
     <header className="persisted-heading">
       <div><p className="persisted-label">{configured?.synthetic_only ? "Synthetic evidence" : "Charging history"}</p><h1>ChargeShare</h1></div>
       <div className="persisted-controls">
-        <label className="persisted-selector">Vehicle
-          <select aria-label="Owner and vehicle" value={key} disabled={!configured} onChange={event => {
+        <label className="persisted-selector">Car
+          <select aria-label="Car" value={scopeKey} disabled={!configured?.scopes.length} onChange={event => {
             const next = configured?.scopes.find(option => `${option.owner}/${option.vehicle}` === event.target.value)
             if (next) chooseScope(next)
           }}>
-            {!configured?.scopes.some(option => `${option.owner}/${option.vehicle}` === key) && <option value={key}>Select vehicle</option>}
-            {(configured?.scopes ?? []).map(option => <option key={option.vehicle} value={`${option.owner}/${option.vehicle}`}>{option.owner} / {option.vehicle}</option>)}
+            {!configured?.scopes.some(option => `${option.owner}/${option.vehicle}` === scopeKey) && <option value={scopeKey}>Select car</option>}
+            {(configured?.scopes ?? []).map(option => <option key={option.vehicle} value={`${option.owner}/${option.vehicle}`}>{option.name ?? "Car"}</option>)}
+          </select>
+        </label>
+        <label className="persisted-selector">Charger
+          <select aria-label="Charger" value={charger} disabled={!scope || !configured?.scopes.length} onChange={event => setCharger(event.target.value)}>
+            <option value="">All chargers</option>
+            {(scope?.chargers ?? []).map(option => <option key={option.id} value={option.id}>{option.name}</option>)}
           </select>
         </label>
         <Button className="control" variant="outline" onClick={() => setRefresh(value => value + 1)}>Refresh</Button>
       </div>
     </header>
-    <main id="persisted-results" aria-live="polite" aria-busy={current.state === "loading"}>
+    <main id="persisted-results" aria-live="polite" aria-busy={configured?.scopes.length !== 0 && current.state === "loading"}>
+      {configured?.scopes.length === 0 ? <section className="glass persisted-panel"><h2>No active cars</h2><p>Add a car with the car command while ingestion is stopped, then restart to recover its available history.</p></section> : <>
       {current.state === "loading" && <section className="glass persisted-panel"><h2>Reading committed evidence…</h2></section>}
       {current.state === "unavailable" && <section className="glass persisted-panel" role="alert"><h2>Persisted API unavailable</h2><p>Committed results could not be read. Refresh when the owning runtime is ready.</p></section>}
       {current.state === "refused" && <section className="glass persisted-panel" role="alert"><h2>Scope refused</h2><p>Select a configured owner and vehicle pair to read its evidence.</p></section>}
-      {current.state === "available" && <Results key={key} results={current.results} />}
+      {current.state === "available" && <Results key={key} results={current.results} carName={scope?.name ?? "Charging history"} chargerName={scope?.chargers?.find(option => option.id === charger)?.name ?? "All chargers"} chargers={scope?.chargers ?? []} />}
+      </>}
     </main>
   </div>
 }
 
-function Results({ results }: { results: ScopedResults }) {
+function Results({ results, carName, chargerName, chargers }: { results: ScopedResults; carName: string; chargerName: string; chargers: { id: string; name: string }[] }) {
   return <section className="glass persisted-panel">
+    <h2>{results.registry?.car_name ?? carName} · {chargerName}</h2>
     <MonthlyCharging history={results.monthly} />
     {results.state === "empty" && <div><h2>No committed sessions</h2><p>This vehicle has no retained session evidence yet.</p></div>}
     <p className="muted">Vehicle-reported AC input counter energy; physical accuracy unvalidated. Quoted energy is allocated by elapsed UTC time.</p>
     <p className="muted">{results.pricing.estimate_boundary}</p>
-    <Configuration results={results} />
+    <Configuration results={results} chargers={chargers} />
     {!!results.sessions.length && <details className="persisted-history">
       <summary>Session information ({results.sessions.length})</summary>
       {results.sessions.map((session, index) => <details className="persisted-session" key={`${session.vehicle}/${session.connection}`}>
-        <summary><span>Session {index + 1} · {observationTime(session.start_utc_seconds)}</span><span>{session.observed_ac_kwh} kWh observed AC</span><span>{session.classification === "SharedCharger" ? "Shared charger" : session.classification === "OtherCharger" ? "Other charger · excluded" : "Held"}</span><span>{evidenceLabel(session)}</span><span>{session.pricing.quote ? `Estimated charging cost ${session.pricing.quote.display_cost}` : pricingHoldLabel(session.pricing.hold_reason)}</span><span>View session details</span></summary>
+        <summary><span>Session {index + 1} · {observationTime(session.start_utc_seconds)}</span><span>{session.observed_ac_kwh} kWh observed AC</span><span>{session.classification === "SharedCharger" ? (session.charger?.name ?? chargers.find(charger => charger.id === results.pricing.charger_id)?.name ?? "Shared charger") : session.classification === "OtherCharger" ? "Other charger · excluded" : "Held"}</span><span>{evidenceLabel(session)}</span><span>{session.pricing.quote ? `Estimated charging cost ${session.pricing.quote.display_cost}` : pricingHoldLabel(session.pricing.hold_reason)}</span><span>View session details</span></summary>
         <div className="persisted-detail">
           <p>{evidenceLabel(session)}</p>
           <p>Connection: {observationTime(session.start_utc_seconds)} → {observationTime(session.end_utc_seconds)}.</p>
@@ -126,10 +138,10 @@ function Results({ results }: { results: ScopedResults }) {
   </section>
 }
 
-function Configuration({ results }: { results: ScopedResults }) {
+function Configuration({ results, chargers }: { results: ScopedResults; chargers: { id: string; name: string }[] }) {
   return <section className="persisted-rates" aria-label="Configuration">
     <h2>Configuration</h2>
-    <p>Charger: {results.pricing.charger_id ?? "No rate configured"}</p>
+    <p>Charger: {results.registry ? results.registry.chargers.filter(charger => results.registry?.selected_charger === null || charger.id === results.registry?.selected_charger).map(charger => charger.name).join(", ") || "No charger selected" : chargers.map(charger => charger.name).join(", ") || "No charger selected"}</p>
     {results.pricing.rate_models.map(model => <details key={model.id}>
       <summary>{model.plan} · {model.timezone}</summary>
       <dl className="persisted-provenance">

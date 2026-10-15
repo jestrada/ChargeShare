@@ -27,9 +27,10 @@ test("persisted client only constructs an explicitly scoped persisted route", ()
 })
 test("configured scope discovery accepts live aliases and refuses private or malformed fields", () => {
   const value = { synthetic_only: false, scopes: [{ owner: "fictional-owner", vehicle: "fictional-vehicle" }] }
+  assert.deepEqual(parseScopes({ synthetic_only: false, scopes: [] }), { synthetic_only: false, scopes: [] })
   assert.deepEqual(parseScopes(value), value)
   assert.deepEqual(parseScopes({ synthetic_only: true, scopes }), { synthetic_only: true, scopes })
-  for (const invalid of [null, {}, { ...value, synthetic_only: "false" }, { ...value, scopes: [] },
+  for (const invalid of [null, {}, { ...value, synthetic_only: "false" },
     { ...value, latitude: 12.3456789 }, { ...value, scopes: [...value.scopes, ...value.scopes] },
     { ...value, scopes: [{ ...value.scopes[0], vin: "FICTIONAL-VIN-A" }] },
     { ...value, scopes: [{ owner: "a/b", vehicle: "fictional-vehicle" }] }]) {
@@ -252,4 +253,33 @@ test("monthly history rejects unsafe fields, malformed calendars and invented he
     change(value)
     assert.throws(() => parseResults(value, scopes[0]))
   }
+})
+
+test("registry discovery accepts display names and empty active scope without private fields", () => {
+  const value = { synthetic_only: false, scopes: [{ owner: "owner-b", vehicle: "vehicle-b", name: "Model Y sample", chargers: [{ id: "driveway", name: "Driveway charger" }, { id: "garage", name: "Garage charger" }] }] }
+  assert.deepEqual(parseScopes(value),value)
+  assert.deepEqual(parseScopes({ synthetic_only: false, scopes: [] }), { synthetic_only: false, scopes: [] })
+  assert.equal(resultPath(value.scopes[0],"garage"),"/api/poc/owners/owner-b/vehicles/vehicle-b/results?charger=garage")
+  for (const change of [
+    (value: any) => { value.scopes[0].name = "  " },
+    (value: any) => { value.scopes[0].chargers[0].latitude = 12.3456789 },
+    (value: any) => { value.scopes[0].chargers[0].name = "" },
+    (value: any) => { value.scopes[0].chargers.push(value.scopes[0].chargers[0]) },
+  ]) { const changed=structuredClone(value);change(changed);assert.throws(()=>parseScopes(changed)) }
+})
+
+test("named registry result retains session charger and immutable version provenance", () => {
+  const value: any=quotedResult()
+  value.registry={car_name:"Model 3 sample",chargers:[{id:"driveway",name:"Driveway charger"}],selected_charger:null}
+  value.pricing.charger_id=null
+  value.sessions[0].charger={id:"driveway",name:"Driveway charger",assignment_versions:["assignment-v1"],geofence_versions:["geofence-v1"]}
+  assert.equal(parseResults(value,scopes[0]).registry?.car_name,"Model 3 sample")
+  assert.equal(parseResults(value,scopes[0]).sessions[0].charger?.name,"Driveway charger")
+  for (const change of [
+    (value: any) => { value.registry.car_name = "  " },
+    (value: any) => { value.registry.selected_charger = "unknown" },
+    (value: any) => { value.sessions[0].charger.id = "unknown" },
+    (value: any) => { value.sessions[0].charger.geofence_versions = [] },
+    (value: any) => { value.sessions[0].charger.latitude = 12.3456789 },
+  ]) { const changed=structuredClone(value);change(changed);assert.throws(()=>parseResults(changed,scopes[0])) }
 })

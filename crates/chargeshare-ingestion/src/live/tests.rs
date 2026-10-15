@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chargeshare_core::{Energy, Ledger, OwnerId, QualityFlag, VehicleId};
 use serde_json::{Value, json};
 
-use crate::live_config::LiveConfig;
+use crate::registry_bootstrap::RegistryBootstrap;
 use crate::{
     CommitBoundary, DeliveryCoordinate, IngestionError, PartitionStart, SourceBinding, Store,
 };
@@ -14,7 +14,7 @@ static NEXT_RUNTIME: AtomicU64 = AtomicU64::new(0);
 
 struct Runtime {
     directory: PathBuf,
-    config: LiveConfig,
+    config: RegistryBootstrap,
     source: SourceBinding,
     records: Vec<Value>,
 }
@@ -35,7 +35,7 @@ impl Runtime {
             serde_json::from_slice(include_bytes!("../../../../dev/live-config.example.json"))
                 .unwrap();
         example["database"] = json!(directory.join("ingestion.sqlite3"));
-        let config = LiveConfig::from_json(&serde_json::to_vec(&example).unwrap()).unwrap();
+        let config = RegistryBootstrap::from_json(&serde_json::to_vec(&example).unwrap()).unwrap();
         let source = SourceBinding {
             epoch: config.source_epoch.clone(),
             topic: format!("{}_V", config.topic_namespace),
@@ -57,12 +57,22 @@ impl Runtime {
     }
 
     fn open(&self) -> Store {
-        Store::open(
+        if self.config.database.exists() {
+            return Store::open_runtime(&self.config.settings, &self.source).unwrap();
+        }
+        let mut store = Store::open(
             &self.config.database,
-            &self.config.manifest().unwrap(),
+            &self.config.legacy_manifest().unwrap(),
             &self.source,
         )
-        .unwrap()
+        .unwrap();
+        let setup = crate::RegistrySetup {
+            car_names: [("vehicle-a".to_owned(), "Car A".to_owned())].into(),
+            charger_name: "Charger A".to_owned(),
+            charger_owner: "owner-a".to_owned(),
+        };
+        crate::registry::migrate(&mut store, &self.config, &setup, &mut |_| Ok(())).unwrap();
+        store
     }
 
     fn ingest(
@@ -207,7 +217,7 @@ fn nanosecond_soc_only_resend_outside_a_session_rejects_only_for_missing_associa
         "vin": "FICTIONAL-VIN-A",
         "isResend": true
     });
-    let (signal, _, resend) = super::decode(
+    let (signal, _, resend) = super::decode_bootstrap(
         &runtime.config,
         &headers(&record),
         &serde_json::to_vec(&record["payload"]).unwrap(),
@@ -217,7 +227,7 @@ fn nanosecond_soc_only_resend_outside_a_session_rejects_only_for_missing_associa
     assert!(resend);
     assert_eq!(
         super::adapt(
-            &runtime.config.manifest().unwrap(),
+            &runtime.config.legacy_manifest().unwrap(),
             &mut super::AdapterState::default(),
             &signal,
             resend
@@ -236,14 +246,14 @@ fn fractional_record_ordering_survives_checkpoint_recovery() {
     field_mut(&mut runtime.records[2], "DetailedChargeState")["detailedChargeStateValue"] =
         json!("DetailedChargeStateComplete");
     runtime.records[3]["payload"]["createdAt"] = json!("2026-09-01T12:00:00.900000002Z");
-    let manifest = runtime.config.manifest().unwrap();
+    let manifest = runtime.config.legacy_manifest().unwrap();
     let mut state: super::AdapterState = serde_json::from_str(
         r#"{"previous":null,"connection":null,"next_position":0,"last_time":null,"ac_evidence":false}"#,
     )
     .unwrap();
     for (index, record) in runtime.records.iter().enumerate() {
         state = serde_json::from_str(&super::encode(&state).unwrap()).unwrap();
-        let (signal, _, resend) = super::decode(
+        let (signal, _, resend) = super::decode_bootstrap(
             &runtime.config,
             &headers(record),
             &serde_json::to_vec(&record["payload"]).unwrap(),
@@ -324,7 +334,7 @@ fn unknown_field_values_and_repeated_unknown_keys_do_not_change_decoded_signals(
         json!({"key": "FutureTelemetryField", "value": [null, 42]}),
     ]);
     let decode_record = |record: &Value| {
-        super::decode(
+        super::decode_bootstrap(
             &runtime.config,
             &headers(record),
             &serde_json::to_vec(&record["payload"]).unwrap(),
@@ -373,7 +383,7 @@ fn live_state_transitions_replay_exact_counter_energy_and_conservative_boundary_
                 _ => {}
             }
         }
-        let manifest = runtime.config.manifest().unwrap();
+        let manifest = runtime.config.legacy_manifest().unwrap();
         let vehicle = VehicleId::new("vehicle-a").unwrap();
         let mut ledger = Ledger::default();
         ledger
@@ -387,7 +397,7 @@ fn live_state_transitions_replay_exact_counter_energy_and_conservative_boundary_
             .take(if variant == "missing_end" { 3 } else { 4 })
             .skip(usize::from(variant == "missing_start"))
         {
-            let (signal, _, resend) = super::decode(
+            let (signal, _, resend) = super::decode_bootstrap(
                 &runtime.config,
                 &headers(record),
                 &serde_json::to_vec(&record["payload"]).unwrap(),
@@ -633,7 +643,7 @@ fn failed_commit_rolls_back_adapter_checkpoint_evidence_and_progress_together() 
 }
 
 #[test]
-fn coordinate_and_vin_text_never_reach_database_companions_or_http_results() {
+fn private_registry_is_separate_from_coordinate_free_telemetry_and_http_results() {
     let runtime = Runtime::new();
     let mut store = runtime.open();
     for (offset, record) in runtime.records.iter().enumerate() {
@@ -650,14 +660,34 @@ fn coordinate_and_vin_text_never_reach_database_companions_or_http_results() {
     for private in forbidden {
         assert!(!result.contains(private));
     }
-    for entry in fs::read_dir(&runtime.directory).unwrap() {
-        let bytes = fs::read(entry.unwrap().path()).unwrap();
-        for private in forbidden {
-            assert!(
-                !bytes
-                    .windows(private.len())
-                    .any(|window| window == private.as_bytes())
-            );
+    let device: String = store
+        .connection
+        .query_row("SELECT device FROM cars", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(device, "FICTIONAL-VIN-A");
+    for table_column in [
+        ("event_variants", "event_json"),
+        ("deliveries", "provenance_json"),
+        ("live_records", "signal_json"),
+        ("live_records", "disposition_json"),
+        ("live_adapter_state", "state_json"),
+    ] {
+        let query = format!(
+            "SELECT {} FROM {} WHERE {} IS NOT NULL",
+            table_column.1, table_column.0, table_column.1
+        );
+        let values = store
+            .connection
+            .prepare(&query)
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        for value in values {
+            for private in forbidden {
+                assert!(!value.contains(private));
+            }
         }
     }
     drop(store);
