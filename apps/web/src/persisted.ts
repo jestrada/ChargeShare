@@ -23,8 +23,8 @@ export type PricingResult = {
   exact_subtotal: string | null; display_subtotal: string | null
   quoted_session_count: number; rate_held_session_count: number; ineligible_session_count: number
 }
-export const pricingBoundary = "Synthetic PG&E bundled energy-only estimate; counter energy allocated by elapsed UTC time; excludes CCA/PCIA, baseline credit, daily Base Services Charge and taxes; not a bill"
-export const livePricingBoundary = "Public sample-rate PG&E bundled energy-only estimate; observed-window counter energy allocated by elapsed UTC time; excludes CCA/PCIA, baseline credit, daily Base Services Charge and taxes; not a bill"
+export const pricingBoundary = "Synthetic public rate estimate UNVERIFIED against a real bill; PG&E bundled or PG&E delivery plus CleanPowerSF Green generation and 2018 PCIA/franchise fees; AC-input counter energy allocated by elapsed UTC time; physical accuracy unvalidated; excludes Base Services Charge, Climate Credit and taxes; not a bill"
+export const livePricingBoundary = "Public rate estimate UNVERIFIED against a real bill; charger-assigned PG&E bundled or PG&E delivery plus CleanPowerSF Green generation and 2018 PCIA/franchise fees; observed-window AC-input counter energy allocated by elapsed UTC time; physical accuracy unvalidated; excludes Base Services Charge, Climate Credit and taxes; not a bill"
 export const liveQuantization = "Live counters quantized once to 0.000001 kWh, decimal half-up"
 export type CounterCoverage = {
   connection_start_utc_seconds: string | null; connection_end_utc_seconds: string | null
@@ -225,7 +225,7 @@ function validatePricing(results: ScopedResults) {
   for (const model of pricing.rate_models) {
     if (!hasExactKeys(model, ["id", "plan", "source_label", "source_url", "effective_from", "effective_until", "timezone", "timezone_rules_version", "season_rules_version", "day_type_rules_version", "holidays", "periods"]) ||
         !alias(model.id) || !alias(model.plan) || typeof model.source_label !== "string" || !/^[A-Za-z0-9 &_()./-]{1,160}$/.test(model.source_label) ||
-        model.source_url !== "https://www.pge.com/tariffs/assets/pdf/tariffbook/ELEC_SCHEDS_EV2%20%28Sch%29.pdf" ||
+        !["https://www.pge.com/tariffs/assets/pdf/tariffbook/ELEC_SCHEDS_EV2%20%28Sch%29.pdf", "https://cleanpowersf.org/residential-rate-tables"].includes(model.source_url) ||
         !date(model.effective_from) || (model.effective_until !== null && !date(model.effective_until)) || model.timezone !== "America/Los_Angeles" ||
         !/^\d{4}[a-z]$/.test(model.timezone_rules_version) || model.season_rules_version !== "june-september-v1" || model.day_type_rules_version !== "all-days-v1" ||
         !Array.isArray(model.holidays) || !model.holidays.every(date) || !Array.isArray(model.periods)) refuse()

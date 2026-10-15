@@ -283,3 +283,19 @@ test("named registry result retains session charger and immutable version proven
     (value: any) => { value.sessions[0].charger.latitude = 12.3456789 },
   ]) { const changed=structuredClone(value);change(changed);assert.throws(()=>parseResults(changed,scopes[0])) }
 })
+
+test("CleanPowerSF public provenance accepts only the approved source URL", () => {
+  const value = quotedResult()
+  const model = value.pricing.rate_models[0]
+  model.source_url = "https://cleanpowersf.org/residential-rate-tables"
+  model.source_label = "Public PG&E delivery and CleanPowerSF Green PCIA vintage 2018 UNVERIFIED"
+  model.plan = "PGE-EV2-A-CPSF-GREEN"
+  assert.equal(parseResults(value, scopes[0]).pricing.rate_models[0].plan, "PGE-EV2-A-CPSF-GREEN")
+  for (const url of ["https://cleanpowersf.org/", "https://cleanpowersf.org/residential-rate-tables?other=true", "https://unapproved.invalid/residential-rate-tables"]) {
+    model.source_url = url
+    assert.throws(() => parseResults(value, scopes[0]))
+  }
+  assert.match(livePricingBoundary, /CleanPowerSF Green generation and 2018 PCIA\/franchise fees/)
+  assert.match(livePricingBoundary, /excludes Base Services Charge, Climate Credit and taxes/)
+  assert.match(livePricingBoundary, /UNVERIFIED/)
+})

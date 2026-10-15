@@ -68,6 +68,8 @@ impl RegistryBootstrap {
             geofence: self.shared_charger.geofence.clone(),
             geofence_version: self.legacy_manifest()?.config().geofence_version.clone(),
             rate_plan: self.shared_charger.rate_model_versions.clone(),
+            active_rate_version_id: None,
+            rate_assignments: Vec::new(),
         };
         let cars = self
             .mappings

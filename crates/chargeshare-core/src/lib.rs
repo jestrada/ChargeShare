@@ -31,7 +31,7 @@ pub use session::{
 };
 pub use tariff::{RateSchedule, RateWindow, TariffError};
 pub use time_of_use::{
-    DayType, RateModelDefinition, RateModelHistory, RateModelVersion, RatePeriod, RatedSlice,
-    Season, TIMEZONE_RULES_VERSION, TOU_CALCULATION_VERSION, TimeOfUsePricing, TimeOfUseQuote,
-    TimeOfUseSession,
+    DayType, RateAssignment, RateModelDefinition, RateModelHistory, RateModelVersion, RatePeriod,
+    RatedSlice, Season, TIMEZONE_RULES_VERSION, TOU_CALCULATION_VERSION, TimeOfUsePricing,
+    TimeOfUseQuote, TimeOfUseSession,
 };

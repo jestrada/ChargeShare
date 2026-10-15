@@ -71,7 +71,7 @@ impl Store {
         let owning_lock =
             OwningLock::acquire(runtime.open_private_file(&runtime.companion_name(".lock"))?)?;
         let database_guard = runtime.open_private_file(&runtime.database_name)?;
-        let connection = Connection::open_with_flags(
+        let mut connection = Connection::open_with_flags(
             &runtime.absolute_path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX
@@ -98,6 +98,14 @@ impl Store {
         let source: SourceBinding =
             serde_json::from_str(&source_json).map_err(|_| IngestionError::StorageCorrupt)?;
         source.validate()?;
+        configure_durability(&connection)?;
+        if crate::registry::is_registry(&connection)? {
+            let transaction = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(storage_error)?;
+            crate::charger_rates::migrate(&transaction)?;
+            transaction.commit().map_err(storage_error)?;
+        }
         let (registry, manifest) = if crate::registry::is_registry(&connection)? {
             let (registry, manifest) = crate::registry::load(&connection, &fixed)?;
             (Some(registry), manifest)

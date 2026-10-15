@@ -35,9 +35,15 @@ flowchart LR
     kafka --> normalize
     kafka --> capture["Harness: curated acceptance evidence"]
     kafka --> live
-    runtime_settings["Private RuntimeSettings: Kafka/source + path/port + immutable rates"] --> live
+    runtime_settings["Private RuntimeSettings: Kafka/source + path/port + legacy rate validation"] --> live
     bootstrap["Legacy RegistryBootstrap + explicit names/charger owner"] --> migration["Stopped-owner transactional migration"] --> registry[("SQLite: cars + chargers + car_chargers + immutable identity/assignment/geofence versions")]
     commands["chargie car add / rename / remove"] --> registry
+    rate_setup["Stopped-owner explicit charger + active_from + typed rate JSON"] --> rates[("SQLite: immutable rate_model_versions.config_json")]
+    rate_setup --> assignments[("SQLite: charger_rate_assignments + chargers.active_rate_version_id")]
+    registry --> assignments
+    rates --> typed_rates["Validated typed Rust rate definitions"]
+    assignments --> pricing
+    typed_rates --> pricing
     registry --> live
     registry --> recovery["New-car retained recovery: separate cursors/evidence + durable handoff"]
     kafka --> recovery
@@ -53,7 +59,7 @@ flowchart LR
         sqlite --> replay["Scoped core replay"]
         replay --> classification["Core: automatic session location classification"]
         classification --> results["Committed energy + eligibility + quotes + monthly history + provenance"]
-        classification --> pricing["Core: observed-window coverage + local-time splits + exact quotes + holds"]
+        classification --> pricing["Core: observed-window coverage + local-time/assignment splits + exact quotes + holds"]
         sqlite --> pricing
         pricing --> monthly["Core: exact period/day/month totals + evidence notices"]
         monthly --> results
@@ -382,8 +388,8 @@ contains no fleet membership or fleet-wide mapping/geofence fingerprint. Registr
 integrity errors are distinct from fixed-settings mismatch errors. Synthetic
 manifest validation and the existing core energy/money contracts are unchanged.
 
-The migration to live schema four is one transaction in the existing database;
-synthetic ingestion retains its schema-three contract. It renames
+The registry migration to live schema four is one transaction in the existing
+database; synthetic ingestion retains its schema-three contract. It renames
 `registrations` to `cars`, retargeting retained foreign keys, recovers private
 device identities from the original validated bootstrap, sets explicit car names
 and records migration time as UTC creation time. Optional metadata starts null.
@@ -509,12 +515,38 @@ The existing scoped result replay also derives prices through the core's
 `time_of_use` module. Its concrete immutable history and named local periods use
 existing `Energy`, `UsdRate`, `ExactUsd` and `UsdCents`; SQL/config DTOs stay in
 ingestion. There is no pricing endpoint, quote storage or mutation UI. SQLite
-retains immutable rate definitions separately from the startup-selected histories.
-Reusing a version ID with changed contents refuses startup before evidence or
-progress changes. A new selected version changes quotes, provenance and semantic
-revision while preserving session identity, evidence, classification and quality.
+stores each complete version in `rate_model_versions(id, config_json)`, with JSON
+in one `TEXT NOT NULL` column and no separate period table. Typed Rust insertion
+validation and typed loading reject malformed definitions, invalid exact prices,
+unknown fields and mismatched IDs. Reusing an ID with changed contents refuses;
+corrections require another version. Alternative published versions may overlap
+in storage. The legacy synthetic manifest still selects nonoverlapping histories.
 
-The active labeled PG&E bundled EV2-A sample is Advice 7846-E, effective
+Live schema five adds `chargers.active_rate_version_id` as a foreign key and
+`charger_rate_assignments(charger_id, active_from, rate_version_id)` with a unique
+charger/UTC-second key and foreign keys. Startup migrates schema four in place
+under the existing ownership lock and a transaction, preserving saved JSON,
+evidence, progress and registry rows. Initial assignments use each previously
+selected version's effective local midnight. A failed migration rolls back.
+The latest assignment supplies the charger's active reference; each assignment
+ends when the next begins. Published effective dates remain an independent
+coverage constraint, including gaps and expiry.
+
+The stopped-owner `scripts/dev/rate_setup.py` requires an explicit database,
+charger and integral UTC `--active-from`. Rust validates and inserts the complete
+CleanPowerSF definition, appends the assignment and updates that charger's active
+reference atomically. Identical retries are harmless; conflicting timestamps,
+changed version contents and missing references refuse without a partial rate
+switch. Earlier assignments and saved definitions remain unchanged. There is no
+global rate switch, rate picker, quote storage or session snapshot.
+
+Each results read rebuilds sessions from retained normalized events and resolves
+the matched charger's timeline independently of the car's owner or driver. The
+latest assignment at or before each slice start selects its version; uncovered
+instants hold the whole quote. New assignments may change prices and provenance
+while preserving session identity, evidence, classification and quality.
+
+The unchanged labeled PG&E bundled EV2-A sample is Advice 7846-E, effective
 2026-03-01, in `America/Los_Angeles`. Summer is June through September and winter
 October through May. Named periods apply every day, including weekends/holidays:
 off-peak 00:00–15:00, part-peak 15:00–16:00 and 21:00–24:00, peak 16:00–21:00.
@@ -532,8 +564,9 @@ no infrastructure dependency. The current calendar policy is the approved
 June–September season and all-day PG&E sample schedule, not a general utility
 calendar engine.
 
-Each adjacent valid AC counter pair is split at local period edges, midnight,
-season/effective-date changes and actual UTC offset transitions. Bounds are
+Each adjacent valid AC counter pair is split at charger `active_from` instants,
+local period edges, midnight, season/effective-date changes and actual UTC offset
+transitions before allocating its energy. Bounds are
 half-open. Repeated wall times resolve to their distinct UTC instants; nonexistent
 spring wall times add no elapsed seconds. Integer micro-kWh shares use elapsed
 UTC seconds, floor each exact ratio, then assign remainders by largest fraction
@@ -550,8 +583,20 @@ model ID, allocated AC energy and exact rate/cost. The scoped response also retu
 charger/model/source/effective-date and timezone/calendar/calculation provenance.
 Checked exact slice costs form session costs and scoped subtotals, rounded half-up
 to cents once; displayed session cents are never summed in the browser. Overflow
-refuses the result with a typed error. The estimate excludes CCA/PCIA, baseline
-credit, daily Base Services Charge and taxes and is not a bill.
+refuses the result with a typed error.
+
+The current `pge-ev2-a-cpsf-green-2026-03-v1` definition uses PG&E EV2-A delivery,
+flat non-generation charges, CleanPowerSF Green generation and 2018-vintage
+PCIA/franchise fees. Its March 1, 2026 basis comes from PG&E Advice 7846-E's
+component page and CleanPowerSF's March table, independently of the PDF's June
+bundled-total page. PG&E generation and the bundled PCIA adjustment are excluded
+to avoid double counting. The primary source is the exact allowlisted
+CleanPowerSF residential rate-table URL. The existing seasons and daily windows
+apply; four entries per season retain exact decimal strings in JSON.
+
+Estimates remain UNVERIFIED against a real bill, exclude Base Services Charge,
+Climate Credit and taxes, and disclose estimated allocation and unvalidated
+physical accuracy. All-in describes included per-kWh charges, not a full bill.
 
 ## Measurement boundary
 
@@ -570,9 +615,11 @@ infer energy from battery percentage or a last power reading across gaps.
   versioned geofences. Retained inputs support restart and reclassification;
   only otherwise-eligible AC `SharedCharger` energy crosses the pricing boundary.
   There is no manual per-session classification path or coordinate display.
-- [#23](https://github.com/jestrada/ChargeShare/issues/23): startup-selected immutable
-  EV2-A rates price committed eligible sessions in the core; the persisted UI
-  presents returned amounts, provenance and whole-session hold reasons.
+- [#23](https://github.com/jestrada/ChargeShare/issues/23) and
+  [#74](https://github.com/jestrada/ChargeShare/issues/74): immutable EV2-A versions
+  price committed eligible sessions in the core. Database-owned charger timelines
+  select live rates, including CleanPowerSF Green; the persisted UI presents
+  returned amounts, provenance and whole-session holds without a rate picker.
 - Live transport, production authentication/sharing, privacy/retention and hosting
   need separate approval and contracts. Enforce any live ingress allowlist before
   sinks, payload logs or persistence; preserve receiver mTLS authentication.

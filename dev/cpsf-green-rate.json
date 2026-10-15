@@ -1,0 +1,71 @@
+{
+  "id": "pge-ev2-a-cpsf-green-2026-03-v1",
+  "plan": "PGE-EV2-A-CPSF-GREEN",
+  "source_label": "Public PG&E EV2-A delivery Advice 7846-E and CleanPowerSF Green March 2026 PCIA vintage 2018 UNVERIFIED",
+  "source_url": "https://cleanpowersf.org/residential-rate-tables",
+  "effective_from": "2026-03-01",
+  "effective_until": null,
+  "timezone": "America/Los_Angeles",
+  "timezone_rules_version": "2025b",
+  "season_rules_version": "june-september-v1",
+  "day_type_rules_version": "all-days-v1",
+  "holidays": [],
+  "periods": [
+    {
+      "season": "Summer",
+      "period": "off_peak",
+      "start_second": 0,
+      "end_second": 54000,
+      "usd_per_kwh": "0.27533"
+    },
+    {
+      "season": "Summer",
+      "period": "part_peak",
+      "start_second": 54000,
+      "end_second": 57600,
+      "usd_per_kwh": "0.47472"
+    },
+    {
+      "season": "Summer",
+      "period": "peak",
+      "start_second": 57600,
+      "end_second": 75600,
+      "usd_per_kwh": "0.58234"
+    },
+    {
+      "season": "Summer",
+      "period": "part_peak",
+      "start_second": 75600,
+      "end_second": 86400,
+      "usd_per_kwh": "0.47472"
+    },
+    {
+      "season": "Winter",
+      "period": "off_peak",
+      "start_second": 0,
+      "end_second": 54000,
+      "usd_per_kwh": "0.27578"
+    },
+    {
+      "season": "Winter",
+      "period": "part_peak",
+      "start_second": 54000,
+      "end_second": 57600,
+      "usd_per_kwh": "0.44298"
+    },
+    {
+      "season": "Winter",
+      "period": "peak",
+      "start_second": 57600,
+      "end_second": 75600,
+      "usd_per_kwh": "0.45887"
+    },
+    {
+      "season": "Winter",
+      "period": "part_peak",
+      "start_second": 75600,
+      "end_second": 86400,
+      "usd_per_kwh": "0.44298"
+    }
+  ]
+}

@@ -51,6 +51,10 @@ pub(crate) struct Charger {
     pub(crate) geofence: ChargerGeofenceConfig,
     pub(crate) geofence_version: String,
     pub(crate) rate_plan: Vec<String>,
+    #[serde(default)]
+    pub(crate) active_rate_version_id: Option<String>,
+    #[serde(default)]
+    pub(crate) rate_assignments: Vec<crate::charger_rates::ChargerRateAssignment>,
 }
 
 #[derive(Clone)]
@@ -93,7 +97,7 @@ pub(crate) fn is_registry(connection: &Connection) -> Result<bool, IngestionErro
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(storage_error)?;
-    Ok(version == 4)
+    Ok([4, 5].contains(&version))
 }
 
 fn version(prefix: &str, value: &impl Serialize) -> Result<String, IngestionError> {
@@ -136,7 +140,7 @@ pub(crate) fn load(
             row.get(0)
         })
         .map_err(storage_error)?;
-    if metadata_version != 4
+    if metadata_version != 5
         || !fixed.config().mappings.is_empty()
         || !fixed.config().owner_chargers.is_empty()
         || !fixed.is_live()
@@ -154,7 +158,7 @@ pub(crate) fn load(
     if foreign_failure || integrity != "ok" {
         return Err(IngestionError::RegistryIntegrity);
     }
-    let mut statement = connection.prepare("SELECT id, name, owner, location, radius, geofence_version, rate_plan FROM chargers ORDER BY id").map_err(storage_error)?;
+    let mut statement = connection.prepare("SELECT id, name, owner, location, radius, geofence_version, rate_plan, active_rate_version_id FROM chargers ORDER BY id").map_err(storage_error)?;
     let rows = statement
         .query_map([], |row| {
             Ok((
@@ -165,13 +169,24 @@ pub(crate) fn load(
                 row.get::<_, u32>(4)?,
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(7)?,
             ))
         })
         .map_err(storage_error)?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(storage_error)?;
     let mut chargers = BTreeMap::new();
-    for (id, name, owner, location, radius_meters, geofence_version, rate_plan) in rows {
+    for (
+        id,
+        name,
+        owner,
+        location,
+        radius_meters,
+        geofence_version,
+        rate_plan,
+        active_rate_version_id,
+    ) in rows
+    {
         let charger = Charger {
             id: id.clone(),
             name,
@@ -182,6 +197,8 @@ pub(crate) fn load(
                 radius_meters,
             },
             geofence_version,
+            active_rate_version_id,
+            rate_assignments: crate::charger_rates::load_assignments(connection, &id)?,
             rate_plan: serde_json::from_str(&rate_plan)
                 .map_err(|_| IngestionError::RegistryIntegrity)?,
         };
@@ -196,22 +213,7 @@ pub(crate) fn load(
         if retained != json(&charger.geofence)? {
             return Err(IngestionError::RegistryIntegrity);
         }
-        let selected = charger
-            .rate_plan
-            .iter()
-            .map(|id| {
-                fixed
-                    .config()
-                    .rate_models
-                    .iter()
-                    .find(|model| &model.id == id)
-                    .ok_or(IngestionError::RegistryIntegrity)?
-                    .to_core()
-                    .map_err(|_| IngestionError::RegistryIntegrity)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        chargeshare_core::RateModelHistory::new(selected)
-            .map_err(|_| IngestionError::RegistryIntegrity)?;
+        crate::charger_rates::history(connection, &charger)?;
         chargers.insert(id, charger);
     }
     let mut statement = connection.prepare("SELECT device, vehicle, owner, name, make, model, year, active, created_at FROM cars ORDER BY vehicle").map_err(storage_error)?;
@@ -284,6 +286,7 @@ pub(crate) fn load(
     }
     let mut cars = Vec::new();
     let mut config = fixed.config().clone();
+    config.rate_models = crate::charger_rates::load_versions(connection)?;
     let mut versions = BTreeMap::<String, BTreeSet<String>>::new();
     for (mut car, active, created_at) in car_rows {
         if crate::manifest::parse_utc_seconds(&created_at).is_err() {
@@ -532,6 +535,7 @@ pub(crate) fn migrate(
             },
         )?;
     }
+    crate::charger_rates::migrate(&transaction)?;
     load(&transaction, &fixed)?;
     observer(crate::CommitBoundary::BeforeCommit)?;
     transaction.commit().map_err(storage_error)?;

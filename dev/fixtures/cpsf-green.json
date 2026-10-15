@@ -1,0 +1,30 @@
+{
+  "notice": "Synthetic vehicle-reported AC-input counter energy; physical accuracy unvalidated; observed-window allocation estimated",
+  "readings": [
+    {
+      "created_at": "2026-03-02T21:59:00Z",
+      "ac_kwh": "100",
+      "state": "DetailedChargeStateDisconnected"
+    },
+    {
+      "created_at": "2026-03-02T22:00:00Z",
+      "ac_kwh": "100",
+      "state": "DetailedChargeStateCharging"
+    },
+    {
+      "created_at": "2026-03-02T23:00:00Z",
+      "ac_kwh": "115.83",
+      "state": "DetailedChargeStateCharging"
+    },
+    {
+      "created_at": "2026-03-03T00:00:00Z",
+      "ac_kwh": "115.83",
+      "state": "DetailedChargeStateCharging"
+    },
+    {
+      "created_at": "2026-03-03T01:00:00Z",
+      "ac_kwh": "124.41",
+      "state": "DetailedChargeStateComplete"
+    }
+  ]
+}
