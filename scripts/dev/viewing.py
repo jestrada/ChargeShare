@@ -62,7 +62,7 @@ def assert_golden_price(result, index, wrong_expectation=False):
     golden = PRICING_GOLDEN
     expected_cost = "0.9990000000000000 USD" if wrong_expectation else golden["exact_costs"][index]
     pricing = result["pricing"]
-    expected = {"state": "quoted", "charger_id": "fictional-shared-charger", "calculation_version": "tou-linear-micro-kwh-v1", "estimate_boundary": "Synthetic PG&E bundled energy-only estimate; counter energy allocated by elapsed UTC time; excludes CCA/PCIA, baseline credit, daily Base Services Charge and taxes; not a bill", "priced_ac_kwh": result["observed_ac_kwh"], "exact_subtotal": expected_cost, "display_subtotal": golden["display_costs"][index], "quoted_session_count": 1, "rate_held_session_count": 0, "ineligible_session_count": 0}
+    expected = {"state": "quoted", "charger_id": "fictional-shared-charger", "calculation_version": "tou-linear-micro-kwh-v1", "estimate_boundary": "Synthetic public rate estimate UNVERIFIED against a real bill; PG&E bundled or PG&E delivery plus CleanPowerSF Green generation and 2018 PCIA/franchise fees; AC-input counter energy allocated by elapsed UTC time; physical accuracy unvalidated; excludes Base Services Charge, Climate Credit and taxes; not a bill", "priced_ac_kwh": result["observed_ac_kwh"], "exact_subtotal": expected_cost, "display_subtotal": golden["display_costs"][index], "quoted_session_count": 1, "rate_held_session_count": 0, "ineligible_session_count": 0}
     if {key: value for key, value in pricing.items() if key != "rate_models"} != expected:
         raise RuntimeFailure("Scoped exact EV2-A pricing assertion failed.")
     models = pricing["rate_models"]
