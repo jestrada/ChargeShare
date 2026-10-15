@@ -67,6 +67,30 @@ impl Runtime {
             charger_owner: "charger-owner".to_owned(),
         }
     }
+    fn ingest_legacy_records(&self, store: &mut Store) {
+        let registry = self.bootstrap.decoder_registry().unwrap();
+        for (offset, record) in self.records.iter().enumerate() {
+            let (disposition, checkpoint) = store
+                .prepare_live(
+                    &registry,
+                    &Self::headers(record),
+                    &serde_json::to_vec(&record["payload"]).unwrap(),
+                )
+                .unwrap();
+            store
+                .commit_with_checkpoint(
+                    DeliveryCoordinate {
+                        partition: 0,
+                        offset: offset as i64,
+                    },
+                    offset as i64,
+                    disposition,
+                    checkpoint.as_ref(),
+                    &mut |_| Ok(()),
+                )
+                .unwrap();
+        }
+    }
     fn migrate(&self, store: &mut Store) {
         migrate(store, &self.bootstrap, &self.setup(), &mut |_| Ok(())).unwrap();
     }
@@ -1522,4 +1546,201 @@ fn invalid_legacy_rate_reference_rolls_back_schema_five_migration_in_place() {
         json!([["pge-ev2-a-2026-03-v1", rate]]),
         before["rate_model_versions"]
     );
+}
+
+fn private_config(runtime: &Runtime, edit: impl FnOnce(&mut Value)) -> Vec<u8> {
+    let mut input: Value =
+        serde_json::from_slice(include_bytes!("../../../../dev/live-config.example.json")).unwrap();
+    input["database"] = json!(runtime.bootstrap.database);
+    edit(&mut input);
+    serde_json::to_vec(&input).unwrap()
+}
+
+fn startup(config: &[u8]) -> Result<(), IngestionError> {
+    let settings = crate::RuntimeSettings::from_json(config).unwrap();
+    migrate_on_startup(config, &settings, &mut |_| Ok(()))
+}
+
+fn database_dump(path: &std::path::Path) -> Value {
+    let connection = Connection::open(path).unwrap();
+    let mut dump = serde_json::Map::new();
+    dump.insert(
+        "user_version".to_owned(),
+        json!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap()
+        ),
+    );
+    let tables: Vec<(String, String)> = connection
+        .prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    for (table, sql) in tables {
+        let mut statement = connection
+            .prepare(&format!("SELECT * FROM \"{table}\" ORDER BY 1"))
+            .unwrap();
+        let columns = statement.column_count();
+        let rows: Vec<Vec<String>> = statement
+            .query_map([], |row| {
+                (0..columns)
+                    .map(|index| Ok(format!("{:?}", row.get_ref(index)?)))
+                    .collect()
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        dump.insert(table, json!({"sql": sql, "rows": rows}));
+    }
+    Value::Object(dump)
+}
+
+fn schema_version(path: &std::path::Path) -> i64 {
+    Connection::open(path)
+        .unwrap()
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap()
+}
+
+#[test]
+fn startup_bootstraps_legacy_registry_through_schema_five_and_repeats_as_a_no_op() {
+    let runtime = Runtime::new();
+    let mut store = runtime.legacy();
+    runtime.ingest_legacy_records(&mut store);
+    let before = retained_rows(&store);
+    drop(store);
+    let config = private_config(&runtime, |_| {});
+    startup(&config).unwrap();
+    assert_eq!(schema_version(&runtime.bootstrap.database), 5);
+    let migrated = database_dump(&runtime.bootstrap.database);
+    startup(&config).unwrap();
+    assert_eq!(database_dump(&runtime.bootstrap.database), migrated);
+    let store = runtime.open();
+    assert_eq!(retained_rows(&store), before);
+    let registry = store.registry.as_ref().unwrap();
+    let charger = registry.chargers.values().next().unwrap();
+    assert_eq!(charger.name, "Home charger");
+    assert_eq!(charger.owner, "owner-a");
+    assert!(charger.active_rate_version_id.is_some());
+    assert_eq!(registry.cars[0].registration.name, "vehicle-a");
+    assert_eq!(
+        Runtime::result(&store, "owner-a", "vehicle-a").observed_ac_kwh,
+        "0.500000"
+    );
+}
+
+#[test]
+fn startup_uses_declared_private_setup_and_runtime_settings_ignore_it() {
+    let runtime = Runtime::new();
+    drop(runtime.legacy());
+    let config = private_config(&runtime, |input| {
+        input["registry_setup"] = json!({
+            "car_names": {"vehicle-a": "Car A"},
+            "charger_name": "Charger A",
+            "charger_owner": "charger-owner"
+        });
+    });
+    startup(&config).unwrap();
+    let store = runtime.open();
+    let registry = store.registry.as_ref().unwrap();
+    let charger = registry.chargers.values().next().unwrap();
+    assert_eq!(
+        (charger.name.as_str(), charger.owner.as_str()),
+        ("Charger A", "charger-owner")
+    );
+    assert_eq!(registry.cars[0].registration.name, "Car A");
+    drop(store);
+    assert!(RegistryBootstrap::from_json(&config).is_ok());
+    let unknown_car = private_config(&runtime, |input| {
+        input["registry_setup"] = json!({"car_names": {"vehicle-z": "Car Z"}});
+    });
+    assert_eq!(
+        RegistryBootstrap::startup_input(&unknown_car).err(),
+        Some(IngestionError::RegistryConflict)
+    );
+}
+
+#[test]
+fn startup_failure_before_commit_leaves_the_legacy_database_untouched() {
+    let runtime = Runtime::new();
+    let mut store = runtime.legacy();
+    runtime.ingest_legacy_records(&mut store);
+    drop(store);
+    let before = database_dump(&runtime.bootstrap.database);
+    let config = private_config(&runtime, |_| {});
+    let settings = crate::RuntimeSettings::from_json(&config).unwrap();
+    assert_eq!(
+        migrate_on_startup(&config, &settings, &mut |boundary| {
+            if boundary == CommitBoundary::BeforeCommit {
+                Err(IngestionError::Timeout)
+            } else {
+                Ok(())
+            }
+        }),
+        Err(IngestionError::Timeout)
+    );
+    assert_eq!(database_dump(&runtime.bootstrap.database), before);
+    assert_eq!(schema_version(&runtime.bootstrap.database), 3);
+}
+
+#[test]
+fn startup_leaves_an_already_migrated_registry_unchanged() {
+    let runtime = Runtime::new();
+    let mut store = runtime.legacy();
+    runtime.migrate(&mut store);
+    drop(store);
+    let before = database_dump(&runtime.bootstrap.database);
+    startup(&private_config(&runtime, |_| {})).unwrap();
+    let without_legacy = private_config(&runtime, |input| {
+        input.as_object_mut().unwrap().remove("mappings");
+        input.as_object_mut().unwrap().remove("shared_charger");
+    });
+    startup(&without_legacy).unwrap();
+    assert_eq!(database_dump(&runtime.bootstrap.database), before);
+    assert_eq!(
+        runtime
+            .open()
+            .registry
+            .as_ref()
+            .unwrap()
+            .chargers
+            .values()
+            .next()
+            .unwrap()
+            .owner,
+        "charger-owner"
+    );
+}
+
+#[test]
+fn startup_refuses_without_legacy_input_or_with_ambiguous_charger_owner() {
+    let runtime = Runtime::new();
+    let without_legacy = private_config(&runtime, |input| {
+        input.as_object_mut().unwrap().remove("mappings");
+        input.as_object_mut().unwrap().remove("shared_charger");
+    });
+    assert_eq!(
+        startup(&without_legacy),
+        Err(IngestionError::MigrationInputRequired)
+    );
+    assert!(!runtime.bootstrap.database.exists());
+    drop(runtime.legacy());
+    let before = database_dump(&runtime.bootstrap.database);
+    assert_eq!(
+        startup(&without_legacy),
+        Err(IngestionError::MigrationInputRequired)
+    );
+    let two_owners = private_config(&runtime, |input| {
+        input["mappings"].as_array_mut().unwrap().push(json!({
+            "device": "FICTIONAL-VIN-B", "owner": "owner-b", "vehicle": "vehicle-b"
+        }));
+    });
+    assert_eq!(
+        startup(&two_owners),
+        Err(IngestionError::MigrationInputRequired)
+    );
+    assert_eq!(database_dump(&runtime.bootstrap.database), before);
 }
