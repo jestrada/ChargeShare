@@ -678,6 +678,33 @@ fn car_command(args: &[String]) -> Result<(), IngestionError> {
 }
 
 fn registry_command(args: &[String]) -> Result<(), IngestionError> {
+    if args.first().map(String::as_str) == Some("set-rate") {
+        let options = command_options(
+            &args[1..],
+            &["--database", "--charger", "--active-from", "--definition"],
+            &[],
+        )?;
+        let database = PathBuf::from(required_option(&options, "--database")?);
+        let definition_path = PathBuf::from(required_option(&options, "--definition")?);
+        let contents =
+            fs::read(definition_path).map_err(|_| IngestionError::InvalidConfiguration)?;
+        if contents.len() > MAX_MANIFEST_BYTES {
+            return Err(IngestionError::InvalidConfiguration);
+        }
+        let definition =
+            serde_json::from_slice(&contents).map_err(|_| IngestionError::InvalidConfiguration)?;
+        let active_from = required_option(&options, "--active-from")?
+            .parse::<i64>()
+            .map_err(|_| IngestionError::InvalidCommand)?;
+        Store::assign_charger_rate(
+            &database,
+            &required_option(&options, "--charger")?,
+            active_from,
+            &definition,
+        )?;
+        println!("Charger rate assignment saved; earlier history preserved.");
+        return Ok(());
+    }
     if args.first().map(String::as_str) != Some("migrate") {
         return Err(IngestionError::InvalidCommand);
     }

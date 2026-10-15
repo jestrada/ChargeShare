@@ -78,8 +78,11 @@ impl RateModelVersion {
                 .source_label
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || b" -_()./&".contains(&byte))
-            || definition.source_url
-                != "https://www.pge.com/tariffs/assets/pdf/tariffbook/ELEC_SCHEDS_EV2%20%28Sch%29.pdf"
+            || ![
+                "https://www.pge.com/tariffs/assets/pdf/tariffbook/ELEC_SCHEDS_EV2%20%28Sch%29.pdf",
+                "https://cleanpowersf.org/residential-rate-tables",
+            ]
+            .contains(&definition.source_url.as_str())
             || definition.periods.len() > 48
             || definition.holidays.len() > 512
         {
@@ -137,6 +140,13 @@ impl RateModelVersion {
         &self.definition
     }
 
+    pub fn effective_from_time(&self) -> Option<i64> {
+        Los_Angeles
+            .from_local_datetime(&self.from.and_hms_opt(0, 0, 0)?)
+            .single()
+            .map(|time| time.timestamp())
+    }
+
     fn covers(&self, date: NaiveDate) -> bool {
         self.from <= date && self.until.is_none_or(|until| date < until)
     }
@@ -152,8 +162,15 @@ fn local_date(input: &str) -> Result<NaiveDate, TariffError> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateAssignment {
+    pub active_from: i64,
+    pub model_version: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RateModelHistory {
     versions: Vec<RateModelVersion>,
+    assignments: Option<Vec<RateAssignment>>,
 }
 
 impl RateModelHistory {
@@ -172,7 +189,57 @@ impl RateModelHistory {
         {
             return Err(TariffError::OverlappingWindows);
         }
-        Ok(Self { versions })
+        Ok(Self {
+            versions,
+            assignments: None,
+        })
+    }
+
+    pub fn assigned(
+        versions: Vec<RateModelVersion>,
+        mut assignments: Vec<RateAssignment>,
+    ) -> Result<Self, TariffError> {
+        let ids: BTreeSet<_> = versions
+            .iter()
+            .map(|version| version.definition.id.as_str())
+            .collect();
+        assignments.sort_by_key(|assignment| assignment.active_from);
+        if versions.len() > 64
+            || ids.len() != versions.len()
+            || assignments
+                .windows(2)
+                .any(|pair| pair[0].active_from == pair[1].active_from)
+            || assignments.iter().any(|assignment| {
+                !ids.contains(assignment.model_version.as_str())
+                    || Los_Angeles
+                        .timestamp_opt(assignment.active_from, 0)
+                        .single()
+                        .is_none()
+            })
+        {
+            return Err(TariffError::InvalidModel);
+        }
+        Ok(Self {
+            versions,
+            assignments: Some(assignments),
+        })
+    }
+
+    fn version_at(&self, time: i64, date: NaiveDate) -> Option<&RateModelVersion> {
+        let selected = self.assignments.as_ref().map(|assignments| {
+            assignments
+                .iter()
+                .rev()
+                .find(|assignment| assignment.active_from <= time)
+        });
+        self.versions.iter().find(|version| {
+            version.covers(date)
+                && match selected {
+                    None => true,
+                    Some(Some(assignment)) => assignment.model_version == version.definition.id,
+                    Some(None) => false,
+                }
+        })
     }
 
     pub fn versions(&self) -> &[RateModelVersion] {
@@ -307,9 +374,7 @@ fn rate_segment(
             .ok_or(unresolved)?;
         let date = local.date_naive();
         let version = history
-            .versions
-            .iter()
-            .find(|version| version.covers(date))
+            .version_at(cursor, date)
             .ok_or(PricingHold::MissingRate {
                 start_time: cursor,
                 end_time: end,
@@ -334,7 +399,7 @@ fn rate_segment(
                 end_time: end,
             })?;
         let boundaries = day_boundaries(date, &version.definition.periods).ok_or(unresolved)?;
-        let next = boundaries
+        let mut next = boundaries
             .range((
                 std::ops::Bound::Excluded(cursor),
                 std::ops::Bound::Unbounded,
@@ -343,6 +408,13 @@ fn rate_segment(
             .copied()
             .ok_or(unresolved)?
             .min(end);
+        if let Some(assignment) = history.assignments.as_ref().and_then(|assignments| {
+            assignments
+                .iter()
+                .find(|assignment| assignment.active_from > cursor)
+        }) {
+            next = next.min(assignment.active_from);
+        }
         let day_type = if version.holidays.contains(&date) {
             DayType::Holiday
         } else if matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
@@ -556,6 +628,166 @@ mod tests {
             }
         }
         (ledger, vehicle)
+    }
+
+    #[test]
+    fn intraperiod_assignment_splits_before_allocating_and_keeps_published_validity_separate() {
+        let first = RateModelVersion::new(model()).unwrap();
+        let mut revised = model();
+        revised.id = "cpsf-v1".to_owned();
+        for period in &mut revised.periods {
+            period.rate = UsdRate::parse_per_kwh("0.27578").unwrap();
+        }
+        let second = RateModelVersion::new(revised).unwrap();
+        assert!(RateModelHistory::new(vec![first.clone(), second.clone()]).is_err());
+        let change = timestamp("2026-03-02T20:30:00Z");
+        let history = RateModelHistory::assigned(
+            vec![first, second],
+            vec![
+                RateAssignment {
+                    active_from: timestamp("2026-03-01T08:00:00Z"),
+                    model_version: "pge-ev2-a-v1".to_owned(),
+                },
+                RateAssignment {
+                    active_from: change,
+                    model_version: "cpsf-v1".to_owned(),
+                },
+            ],
+        )
+        .unwrap();
+        let lines = rate_segment(
+            change - 1800,
+            change + 1800,
+            Energy::from_micro_kwh(3),
+            &history,
+        )
+        .unwrap();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines
+                .iter()
+                .map(|slice| slice.energy.micro_kwh())
+                .collect::<Vec<_>>(),
+            [2, 1]
+        );
+        assert_eq!(lines[0].end_time, change);
+        assert_eq!(lines[1].start_time, change);
+        assert_eq!(lines[0].model_version, "pge-ev2-a-v1");
+        assert_eq!(lines[1].model_version, "cpsf-v1");
+        assert_eq!(lines[1].rate, UsdRate::parse_per_kwh("0.27578").unwrap());
+        let mut duplicate = history.assignments.clone().unwrap();
+        duplicate.push(duplicate[0].clone());
+        assert!(RateModelHistory::assigned(history.versions.clone(), duplicate).is_err());
+        assert!(
+            RateModelHistory::assigned(
+                history.versions.clone(),
+                vec![RateAssignment {
+                    active_from: change,
+                    model_version: "missing".to_owned()
+                }]
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn assignment_coverage_holds_whole_quote_and_never_extends_published_dates() {
+        let change = timestamp("2026-03-02T20:30:00Z");
+        let history = RateModelHistory::assigned(
+            vec![RateModelVersion::new(model()).unwrap()],
+            vec![RateAssignment {
+                active_from: change,
+                model_version: "pge-ev2-a-v1".to_owned(),
+            }],
+        )
+        .unwrap();
+        let (ledger, vehicle) = ledger(&[("2026-03-02T20:00:00Z", "2026-03-02T21:00:00Z", "1")]);
+        let pricing = ledger.time_of_use_pricing(&vehicle, &history).unwrap();
+        assert!(matches!(
+            pricing.sessions[0].quote,
+            Err(PricingHold::MissingRate { .. })
+        ));
+        assert_eq!(pricing.exact_subtotal, ExactUsd::ZERO);
+        let early = RateModelHistory::assigned(
+            history.versions.clone(),
+            vec![RateAssignment {
+                active_from: 0,
+                model_version: "pge-ev2-a-v1".to_owned(),
+            }],
+        )
+        .unwrap();
+        assert!(
+            rate_segment(
+                timestamp("2026-02-28T20:00:00Z"),
+                timestamp("2026-02-28T21:00:00Z"),
+                Energy::from_micro_kwh(1),
+                &early
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn assigned_history_preserves_dst_midnight_and_season_boundaries() {
+        for (start, end, change) in [
+            (
+                "2026-03-08T09:30:00Z",
+                "2026-03-08T10:30:00Z",
+                "2026-03-08T10:15:00Z",
+            ),
+            (
+                "2026-11-01T08:30:00Z",
+                "2026-11-01T09:30:00Z",
+                "2026-11-01T09:15:00Z",
+            ),
+            (
+                "2026-06-01T06:30:00Z",
+                "2026-06-01T07:30:00Z",
+                "2026-06-01T07:15:00Z",
+            ),
+            (
+                "2026-10-01T06:30:00Z",
+                "2026-10-01T07:30:00Z",
+                "2026-10-01T07:15:00Z",
+            ),
+        ] {
+            let first = RateModelVersion::new(model()).unwrap();
+            let mut next = model();
+            next.id = "assigned-v2".to_owned();
+            let history = RateModelHistory::assigned(
+                vec![first, RateModelVersion::new(next).unwrap()],
+                vec![
+                    RateAssignment {
+                        active_from: timestamp("2026-03-01T08:00:00Z"),
+                        model_version: "pge-ev2-a-v1".to_owned(),
+                    },
+                    RateAssignment {
+                        active_from: timestamp(change),
+                        model_version: "assigned-v2".to_owned(),
+                    },
+                ],
+            )
+            .unwrap();
+            let lines = rate_segment(
+                timestamp(start),
+                timestamp(end),
+                Energy::from_micro_kwh(7),
+                &history,
+            )
+            .unwrap();
+            assert_eq!(lines.len(), 3);
+            assert_eq!(
+                lines
+                    .iter()
+                    .map(|line| line.energy.micro_kwh())
+                    .sum::<u64>(),
+                7
+            );
+            assert_eq!(lines[2].start_time, timestamp(change));
+            assert_eq!(lines[2].model_version, "assigned-v2");
+            assert_eq!(lines[0].end_time - lines[0].start_time, 1800);
+            assert_eq!(lines[1].end_time - lines[1].start_time, 900);
+        }
     }
 
     #[test]

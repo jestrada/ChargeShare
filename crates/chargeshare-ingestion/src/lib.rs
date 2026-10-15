@@ -7,6 +7,7 @@ pub use stream::{
     DeliveryCoordinate, PartitionRange, PartitionStart, SYNTHETIC_TOPIC, SourceBinding,
 };
 
+mod charger_rates;
 mod rates;
 pub use rates::{ChargerGeofenceConfig, OwnerChargerConfig, RateModelConfig, RatePeriodConfig};
 

@@ -586,7 +586,7 @@ fn seed_charger(
     store
         .connection
         .execute(
-            "INSERT INTO chargers VALUES (?1,?2,?3,?4,'charger-owner',?5,?6)",
+            "INSERT INTO chargers VALUES (?1,?2,?3,?4,'charger-owner',?5,?6,NULL)",
             params![
                 id,
                 "Garage charger",
@@ -604,6 +604,34 @@ fn seed_charger(
             params![geofence_version, id, json(&geofence).unwrap()],
         )
         .unwrap();
+    for rate in &rates {
+        let definition: crate::RateModelConfig = serde_json::from_str(
+            &store
+                .connection
+                .query_row::<String, _, _>(
+                    "SELECT config_json FROM rate_model_versions WHERE id=?1",
+                    [rate],
+                    |row| row.get(0),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let start = definition.to_core().unwrap().effective_from_time().unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO charger_rate_assignments VALUES (?1,?2,?3)",
+                params![id, start, rate],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE chargers SET active_rate_version_id=?1 WHERE id=?2",
+                params![rate, id],
+            )
+            .unwrap();
+    }
     let fixed = crate::RuntimeSettings::from_json(
         store
             .connection
@@ -983,4 +1011,515 @@ fn registry_api_serves_names_charger_filter_empty_active_scopes_and_private_hist
     assert!(refused.ends_with("{\"error\":\"charger_refused\"}"));
     stop.store(true, Ordering::SeqCst);
     server.join().unwrap().unwrap();
+}
+
+fn cpsf_definition() -> crate::RateModelConfig {
+    serde_json::from_slice(include_bytes!("../../../../dev/cpsf-green-rate.json")).unwrap()
+}
+
+#[test]
+fn cpsf_assignment_replays_winter_acceptance_cost_monthly_totals_and_provenance() {
+    let runtime = Runtime::new();
+    let mut store = runtime.legacy();
+    runtime.migrate(&mut store);
+    let fixture: Value =
+        serde_json::from_slice(include_bytes!("../../../../dev/fixtures/cpsf-green.json")).unwrap();
+    for (offset, reading) in fixture["readings"].as_array().unwrap().iter().enumerate() {
+        let mut record = runtime.records[1].clone();
+        record["headers"]["txid"] = json!(format!("fictional-cpsf-{offset}"));
+        record["payload"]["createdAt"] = reading["created_at"].clone();
+        record["payload"]["data"][0]["value"]["detailedChargeStateValue"] =
+            reading["state"].clone();
+        record["payload"]["data"][1]["value"] = json!({"stringValue": reading["ac_kwh"]});
+        runtime.ingest(&mut store, offset as i64, &record);
+    }
+    let sample = Runtime::result(&store, "owner-a", "vehicle-a");
+    assert_eq!(sample.observed_ac_kwh, "24.410000");
+    assert_eq!(
+        sample.pricing.exact_subtotal.as_deref(),
+        Some("7.0972256000000000 USD")
+    );
+    assert_eq!(sample.pricing.display_subtotal.as_deref(), Some("$7.10"));
+    let evidence = retained_rows(&store);
+    drop(store);
+    let definition = cpsf_definition();
+    let active_from = 1772438400;
+    for _ in 0..2 {
+        Store::assign_charger_rate(
+            &runtime.bootstrap.database,
+            "fictional-shared-charger",
+            active_from,
+            &definition,
+        )
+        .unwrap();
+    }
+    let store = runtime.open();
+    assert_eq!(
+        store
+            .connection
+            .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+            .unwrap(),
+        5
+    );
+    let result = Runtime::result(&store, "owner-a", "vehicle-a");
+    assert_ne!(result.revision, sample.revision);
+    assert_eq!(result.observed_ac_kwh, "24.410000");
+    assert_eq!(
+        result.pricing.exact_subtotal.as_deref(),
+        Some("8.3027020000000000 USD")
+    );
+    assert_eq!(result.pricing.display_subtotal.as_deref(), Some("$8.30"));
+    let quote = result.sessions[0].pricing.quote.as_ref().unwrap();
+    assert_eq!(
+        quote
+            .slices
+            .iter()
+            .map(|slice| slice.allocated_ac_kwh.as_str())
+            .collect::<Vec<_>>(),
+        ["15.830000", "8.580000"]
+    );
+    assert!(
+        quote
+            .slices
+            .iter()
+            .all(|slice| slice.model_version == definition.id)
+    );
+    let month = result
+        .monthly
+        .months
+        .iter()
+        .find(|month| month.month == "2026-03")
+        .unwrap();
+    assert_eq!(month.total.as_ref().unwrap().display_cost, "$8.30");
+    assert_eq!(
+        month.total.as_ref().unwrap().exact_cost,
+        "8.3027020000000000 USD"
+    );
+    assert!(result.pricing.estimate_boundary.contains("UNVERIFIED"));
+    let saved: String = store
+        .connection
+        .query_row(
+            "SELECT config_json FROM rate_model_versions WHERE id = ?1",
+            [&definition.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let loaded: crate::RateModelConfig = serde_json::from_str(&saved).unwrap();
+    assert_eq!(loaded, definition);
+    assert_eq!(loaded.periods.len(), 8);
+    for (season, off, part, peak) in [
+        ("Winter", "0.27578", "0.44298", "0.45887"),
+        ("Summer", "0.27533", "0.47472", "0.58234"),
+    ] {
+        let periods = loaded
+            .periods
+            .iter()
+            .filter(|period| period.season == season)
+            .map(|period| {
+                (
+                    period.period.as_str(),
+                    period.start_second,
+                    period.end_second,
+                    period.usd_per_kwh.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            periods,
+            [
+                ("off_peak", 0, 54000, off),
+                ("part_peak", 54000, 57600, part),
+                ("peak", 57600, 75600, peak),
+                ("part_peak", 75600, 86400, part)
+            ]
+        );
+    }
+    let off_peak = loaded
+        .to_core()
+        .unwrap()
+        .definition()
+        .periods
+        .iter()
+        .find(|period| {
+            period.season == chargeshare_core::Season::Winter && period.period == "off_peak"
+        })
+        .unwrap()
+        .rate
+        .cost_for(chargeshare_core::Energy::parse_kwh("24.41").unwrap());
+    assert_eq!(off_peak.to_string(), "6.7317898000000000 USD");
+    assert_eq!(off_peak.round_half_up_to_cents().as_cents(), 673);
+    let rows = retained_rows(&store);
+    for table in [
+        "event_variants",
+        "deliveries",
+        "live_records",
+        "partition_progress",
+    ] {
+        assert_eq!(rows[table], evidence[table]);
+    }
+    assert_eq!(
+        store
+            .connection
+            .query_row::<i64, _, _>("SELECT count(*) FROM rate_model_versions", [], |row| row
+                .get(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        store
+            .connection
+            .query_row::<i64, _, _>("SELECT count(*) FROM charger_rate_assignments", [], |row| {
+                row.get(0)
+            })
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        store
+            .connection
+            .query_row::<i64, _, _>(
+                "SELECT count(*) FROM sqlite_schema WHERE name = 'rate_periods'",
+                [],
+                |row| row.get(0)
+            )
+            .unwrap(),
+        0
+    );
+    drop(store);
+    assert_eq!(
+        Runtime::result(&runtime.open(), "owner-a", "vehicle-a"),
+        result
+    );
+}
+
+#[test]
+fn rate_setup_refuses_reused_definitions_duplicate_instants_and_invalid_references_atomically() {
+    let runtime = Runtime::new();
+    let mut store = runtime.legacy();
+    runtime.migrate(&mut store);
+    let before = retained_rows(&store);
+    drop(store);
+    let mut definition = cpsf_definition();
+    assert!(
+        Store::assign_charger_rate(
+            &runtime.bootstrap.database,
+            "missing-charger",
+            1772438400,
+            &definition
+        )
+        .is_err()
+    );
+    assert_eq!(retained_rows(&runtime.open()), before);
+    definition.periods[0].usd_per_kwh = "invalid".to_owned();
+    assert!(
+        Store::assign_charger_rate(
+            &runtime.bootstrap.database,
+            "fictional-shared-charger",
+            1772438400,
+            &definition
+        )
+        .is_err()
+    );
+    assert_eq!(retained_rows(&runtime.open()), before);
+    let definition = cpsf_definition();
+    assert!(
+        Store::assign_charger_rate(
+            &runtime.bootstrap.database,
+            "fictional-shared-charger",
+            i64::MAX,
+            &definition
+        )
+        .is_err()
+    );
+    assert_eq!(retained_rows(&runtime.open()), before);
+    Store::assign_charger_rate(
+        &runtime.bootstrap.database,
+        "fictional-shared-charger",
+        1772438400,
+        &definition,
+    )
+    .unwrap();
+    let before = retained_rows(&runtime.open());
+    let mut changed = definition.clone();
+    changed.periods[0].usd_per_kwh = "0.3".to_owned();
+    assert_eq!(
+        Store::assign_charger_rate(
+            &runtime.bootstrap.database,
+            "fictional-shared-charger",
+            1772438500,
+            &changed
+        ),
+        Err(IngestionError::ConfigurationMismatch)
+    );
+    changed.id = "fictional-other-version".to_owned();
+    assert_eq!(
+        Store::assign_charger_rate(
+            &runtime.bootstrap.database,
+            "fictional-shared-charger",
+            1772438400,
+            &changed
+        ),
+        Err(IngestionError::RegistryConflict)
+    );
+    let store = runtime.open();
+    assert_eq!(retained_rows(&store), before);
+    assert!(store.connection.execute("INSERT INTO charger_rate_assignments VALUES ('fictional-shared-charger',1772438400,?1)", [&definition.id]).is_err());
+    assert!(store.connection.execute("INSERT INTO charger_rate_assignments VALUES ('fictional-shared-charger',1772438500,'missing-version')", []).is_err());
+}
+
+#[test]
+fn rate_setup_changes_only_the_explicit_charger_independent_of_the_car_owner() {
+    let runtime = Runtime::new();
+    let mut store = runtime.legacy();
+    runtime.migrate(&mut store);
+    store.connection.execute("INSERT INTO chargers SELECT 'fictional-other-charger','Other sample',location,radius,'owner-b',rate_plan,geofence_version,active_rate_version_id FROM chargers", []).unwrap();
+    let geofence = runtime.bootstrap.shared_charger.geofence.clone();
+    let geofence_id = version("geofence", &("fictional-other-charger", &geofence)).unwrap();
+    store
+        .connection
+        .execute(
+            "UPDATE chargers SET geofence_version=?1 WHERE id='fictional-other-charger'",
+            [&geofence_id],
+        )
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO charger_geofence_versions VALUES (?1,'fictional-other-charger',?2)",
+            params![geofence_id, json(&geofence).unwrap()],
+        )
+        .unwrap();
+    store.connection.execute("INSERT INTO charger_rate_assignments SELECT 'fictional-other-charger',active_from,rate_version_id FROM charger_rate_assignments", []).unwrap();
+    for (offset, record) in runtime.records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record);
+    }
+    let before = Runtime::result(&store, "owner-a", "vehicle-a");
+    drop(store);
+    Store::assign_charger_rate(
+        &runtime.bootstrap.database,
+        "fictional-shared-charger",
+        1772438400,
+        &cpsf_definition(),
+    )
+    .unwrap();
+    let store = runtime.open();
+    let other: String = store
+        .connection
+        .query_row(
+            "SELECT active_rate_version_id FROM chargers WHERE id='fictional-other-charger'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(other, "pge-ev2-a-2026-03-v1");
+    let result = Runtime::result(&store, "owner-a", "vehicle-a");
+    assert_eq!(before.observed_ac_kwh, result.observed_ac_kwh);
+    assert_eq!(result.pricing.display_subtotal.as_deref(), Some("$0.14"));
+    assert_eq!(
+        store.registry.as_ref().unwrap().chargers["fictional-shared-charger"].owner,
+        "charger-owner"
+    );
+}
+
+#[test]
+fn schema_four_database_migrates_in_place_preserving_existing_prices_evidence_and_json() {
+    let runtime = Runtime::new();
+    let mut store = runtime.legacy();
+    runtime.migrate(&mut store);
+    for (offset, record) in runtime.records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record);
+    }
+    let before = Runtime::result(&store, "owner-a", "vehicle-a");
+    let rows = retained_rows(&store);
+    store.connection.execute_batch("DROP TABLE charger_rate_assignments;
+        ALTER TABLE chargers DROP COLUMN active_rate_version_id;
+        ALTER TABLE runtime_metadata RENAME TO current_metadata;
+        CREATE TABLE runtime_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton = 1), schema_version INTEGER NOT NULL CHECK(schema_version = 4), manifest_json TEXT NOT NULL, source_json TEXT NOT NULL) STRICT;
+        INSERT INTO runtime_metadata SELECT singleton,4,manifest_json,source_json FROM current_metadata;
+        DROP TABLE current_metadata;
+        PRAGMA user_version = 4;").unwrap();
+    drop(store);
+    let store = runtime.open();
+    assert_eq!(
+        store
+            .connection
+            .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+            .unwrap(),
+        5
+    );
+    assert_eq!(retained_rows(&store), rows);
+    assert_eq!(Runtime::result(&store, "owner-a", "vehicle-a"), before);
+    assert!(
+        !store
+            .connection
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .exists([])
+            .unwrap()
+    );
+}
+
+#[test]
+fn typed_loading_rejects_malformed_and_invalid_saved_rate_definitions() {
+    for contents in ["{", "{}", "invalid-price", "unknown-field", "mismatched-id"] {
+        let runtime = Runtime::new();
+        let mut store = runtime.legacy();
+        runtime.migrate(&mut store);
+        let mut config = serde_json::to_value(cpsf_definition()).unwrap();
+        let saved = match contents {
+            "invalid-price" => {
+                config["periods"][0]["usd_per_kwh"] = json!("NaN");
+                config.to_string()
+            }
+            "unknown-field" => {
+                config["unexpected"] = json!(true);
+                config.to_string()
+            }
+            "mismatched-id" => {
+                config["id"] = json!("other-id");
+                config.to_string()
+            }
+            value => value.to_owned(),
+        };
+        store
+            .connection
+            .execute(
+                "INSERT INTO rate_model_versions VALUES (?1,?2)",
+                params![cpsf_definition().id, saved],
+            )
+            .unwrap();
+        drop(store);
+        assert!(runtime.open_result().is_err());
+    }
+}
+
+impl Runtime {
+    fn open_result(&self) -> Result<Store, IngestionError> {
+        Store::open_runtime(&self.bootstrap.settings, &self.source)
+    }
+}
+
+#[test]
+fn intraperiod_charger_change_splits_replayed_counter_segment_and_conserves_energy() {
+    let runtime = Runtime::new();
+    let mut store = runtime.legacy();
+    runtime.migrate(&mut store);
+    for (offset, record) in runtime.records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record);
+    }
+    drop(store);
+    Store::assign_charger_rate(
+        &runtime.bootstrap.database,
+        "fictional-shared-charger",
+        1788264150,
+        &cpsf_definition(),
+    )
+    .unwrap();
+    let store = runtime.open();
+    let result = Runtime::result(&store, "owner-a", "vehicle-a");
+    let slices = &result.sessions[0].pricing.quote.as_ref().unwrap().slices;
+    assert_eq!(
+        slices
+            .iter()
+            .map(|slice| slice.allocated_ac_kwh.as_str())
+            .collect::<Vec<_>>(),
+        ["0.125000", "0.125000", "0.250000"]
+    );
+    assert_eq!(slices[0].end_utc_seconds, "1788264150");
+    assert_eq!(slices[1].start_utc_seconds, "1788264150");
+    assert_eq!(slices[0].model_version, "pge-ev2-a-2026-03-v1");
+    assert_eq!(slices[1].model_version, cpsf_definition().id);
+    assert_eq!(result.pricing.priced_ac_kwh, "0.500000");
+    assert_eq!(
+        result.pricing.exact_subtotal.as_deref(),
+        Some("0.1314462500000000 USD")
+    );
+    assert_eq!(result.pricing.display_subtotal.as_deref(), Some("$0.13"));
+    drop(store);
+    assert_eq!(
+        Runtime::result(&runtime.open(), "owner-a", "vehicle-a"),
+        result
+    );
+}
+
+#[test]
+fn failed_rate_assignment_transaction_rolls_back_the_new_definition_and_active_reference() {
+    let runtime = Runtime::new();
+    let mut store = runtime.legacy();
+    runtime.migrate(&mut store);
+    let before = retained_rows(&store);
+    store.connection.execute_batch("CREATE TRIGGER reject_rate_setup BEFORE INSERT ON charger_rate_assignments BEGIN SELECT RAISE(ABORT, 'synthetic assignment failure'); END;").unwrap();
+    drop(store);
+    assert!(
+        Store::assign_charger_rate(
+            &runtime.bootstrap.database,
+            "fictional-shared-charger",
+            1772438400,
+            &cpsf_definition()
+        )
+        .is_err()
+    );
+    let store = runtime.open();
+    assert_eq!(retained_rows(&store), before);
+    let active: String = store
+        .connection
+        .query_row("SELECT active_rate_version_id FROM chargers", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(active, "pge-ev2-a-2026-03-v1");
+    assert_eq!(
+        store
+            .connection
+            .query_row::<i64, _, _>("SELECT count(*) FROM charger_rate_assignments", [], |row| {
+                row.get(0)
+            })
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn invalid_legacy_rate_reference_rolls_back_schema_five_migration_in_place() {
+    let runtime = Runtime::new();
+    let mut store = runtime.legacy();
+    runtime.migrate(&mut store);
+    store.connection.execute_batch("DROP TABLE charger_rate_assignments;
+        ALTER TABLE chargers DROP COLUMN active_rate_version_id;
+        UPDATE chargers SET rate_plan = '[\"missing-version\"]';
+        ALTER TABLE runtime_metadata RENAME TO current_metadata;
+        CREATE TABLE runtime_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton = 1), schema_version INTEGER NOT NULL CHECK(schema_version = 4), manifest_json TEXT NOT NULL, source_json TEXT NOT NULL) STRICT;
+        INSERT INTO runtime_metadata SELECT singleton,4,manifest_json,source_json FROM current_metadata;
+        DROP TABLE current_metadata;
+        PRAGMA user_version = 4;").unwrap();
+    let before = retained_rows(&store);
+    drop(store);
+    assert!(runtime.open_result().is_err());
+    let connection = Connection::open(&runtime.bootstrap.database).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+            .unwrap(),
+        4
+    );
+    assert_eq!(connection.query_row::<i64, _, _>("SELECT count(*) FROM pragma_table_info('chargers') WHERE name='active_rate_version_id'", [], |row| row.get(0)).unwrap(), 0);
+    assert_eq!(
+        connection
+            .query_row::<i64, _, _>(
+                "SELECT count(*) FROM sqlite_schema WHERE name='charger_rate_assignments'",
+                [],
+                |row| row.get(0)
+            )
+            .unwrap(),
+        0
+    );
+    let rate: String = connection
+        .query_row("SELECT config_json FROM rate_model_versions", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        json!([["pge-ev2-a-2026-03-v1", rate]]),
+        before["rate_model_versions"]
+    );
 }

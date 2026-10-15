@@ -212,7 +212,7 @@ impl From<MonthlyHistory> for MonthlyResult {
 }
 
 pub const LIVE_QUANTIZATION: &str = "Live counters quantized once to 0.000001 kWh, decimal half-up";
-pub const LIVE_PRICING_BOUNDARY: &str = "Public sample-rate PG&E bundled energy-only estimate; observed-window counter energy allocated by elapsed UTC time; excludes CCA/PCIA, baseline credit, daily Base Services Charge and taxes; not a bill";
+pub const LIVE_PRICING_BOUNDARY: &str = "Public rate estimate UNVERIFIED against a real bill; charger-assigned PG&E bundled or PG&E delivery plus CleanPowerSF Green generation and 2018 PCIA/franchise fees; observed-window AC-input counter energy allocated by elapsed UTC time; physical accuracy unvalidated; excludes Base Services Charge, Climate Credit and taxes; not a bill";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ResultProvenance {
@@ -226,7 +226,7 @@ pub struct ResultProvenance {
     pub geofence_version: String,
 }
 
-pub const PRICING_BOUNDARY: &str = "Synthetic PG&E bundled energy-only estimate; counter energy allocated by elapsed UTC time; excludes CCA/PCIA, baseline credit, daily Base Services Charge and taxes; not a bill";
+pub const PRICING_BOUNDARY: &str = "Synthetic public rate estimate UNVERIFIED against a real bill; PG&E bundled or PG&E delivery plus CleanPowerSF Green generation and 2018 PCIA/franchise fees; AC-input counter energy allocated by elapsed UTC time; physical accuracy unvalidated; excludes Base Services Charge, Climate Credit and taxes; not a bill";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PricingResult {
@@ -410,29 +410,19 @@ fn results_for_view(
                 .chargers
                 .get(id)
                 .ok_or(IngestionError::RegistryIntegrity)?;
-            let models = charger
-                .rate_plan
+            let history = crate::charger_rates::history(&store.connection, charger)?;
+            let models = history
+                .versions()
                 .iter()
-                .map(|id| {
+                .map(|version| {
                     manifest
                         .config()
                         .rate_models
                         .iter()
-                        .find(|model| &model.id == id)
+                        .find(|model| model.id == version.definition().id)
                         .ok_or(IngestionError::RegistryIntegrity)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let history = chargeshare_core::RateModelHistory::new(
-                models
-                    .iter()
-                    .map(|model| {
-                        model
-                            .to_core()
-                            .map_err(|_| IngestionError::RegistryIntegrity)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            )
-            .map_err(|_| IngestionError::RegistryIntegrity)?;
             let pricing = ledger
                 .time_of_use_pricing(vehicle, &history)
                 .map_err(|_| IngestionError::PricingOverflow)?;

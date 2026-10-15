@@ -145,9 +145,9 @@ function Configuration({ results, chargers }: { results: ScopedResults; chargers
     {results.pricing.rate_models.map(model => <details key={model.id}>
       <summary>{model.plan} · {model.timezone}</summary>
       <dl className="persisted-provenance">
-        <div><dt>Public sample source</dt><dd><a href={model.source_url}>{model.source_label}</a></dd></div>
+        <div><dt>Public rate source</dt><dd><a href={model.source_url}>{model.source_label}</a></dd></div>
         <div><dt>Effective local dates [from, until)</dt><dd>{model.effective_from} → {model.effective_until ?? "Open-ended"}</dd></div>
-        <div><dt>Sample energy rates · USD/kWh</dt><dd><ul>{model.periods.map((period, index) => <li key={index}>{period.season} / {periodLabel(period.period)} / {period.usd_per_kwh}</li>)}</ul></dd></div>
+        <div><dt>Estimated energy rates · USD/kWh</dt><dd><ul>{model.periods.map((period, index) => <li key={index}>{period.season} / {periodLabel(period.period)} / {period.usd_per_kwh}</li>)}</ul></dd></div>
       </dl>
     </details>)}
   </section>
