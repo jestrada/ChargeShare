@@ -78,11 +78,12 @@ def generate_dashboard_fixture(multiple: bool = False) -> dict:
                             {"key": "DetailedChargeState", "value": {"detailedChargeStateValue": "DetailedChargeStateComplete" if kind == "end" else "DetailedChargeStateCharging"}},
                             {"key": "ACChargingEnergyIn", "value": {"stringValue": counter_kwh(observed_counter)}},
                             {"key": "Location", "value": {"locationValue": location}},
+                            {"key": "BatteryLevel", "value": {"stringValue": "82" if kind == "end" else "45"}},
                         ],
                     },
                 })
             counter_micro_kwh += energy_micro_kwh
-    display_registry = [{"owner": OWNER, "vehicle": VEHICLE, "name": "Model 3 sample", "chargers": [{"id": manifest["owner_chargers"][0]["charger_id"], "name": "Driveway charger"}]}]
+    display_registry = [{"owner": OWNER, "vehicle": VEHICLE, "name": "Model 3 sample", "color": "#B8BDC3", "chargers": [{"id": manifest["owner_chargers"][0]["charger_id"], "name": "Driveway charger"}]}]
     if multiple:
         mapping = {"device": "vehicle-b", "vehicle": "vehicle-b", "owner": "owner-b"}
         manifest["mappings"].append(mapping)
@@ -97,9 +98,10 @@ def generate_dashboard_fixture(multiple: bool = False) -> dict:
             record = json.loads(json.dumps(record))
             record["key"] = "vehicle-b"
             record["payload"]["vin"] = "vehicle-b"
+            next(field for field in record["payload"]["data"] if field["key"] == "BatteryLevel")["value"]["stringValue"] = "67" if annotation["kind"] == "end" else "32"
             manifest["annotations"].append(annotation)
             records.append(record)
-        display_registry.append({"owner": "owner-b", "vehicle": "vehicle-b", "name": "Model Y sample", "chargers": [{"id": charger["charger_id"], "name": "Garage charger"}]})
+        display_registry.append({"owner": "owner-b", "vehicle": "vehicle-b", "name": "Model Y sample", "color": "#16181C", "chargers": [{"id": charger["charger_id"], "name": "Garage charger"}]})
     return {
         "notice": SYNTHETIC_NOTICE,
         "as_of_utc_seconds": int(datetime(2026, 9, 30, 23, 59, 59, tzinfo=LOCAL_TIMEZONE).timestamp()),

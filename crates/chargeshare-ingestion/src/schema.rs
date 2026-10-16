@@ -36,7 +36,7 @@ pub(crate) fn inspect_version(connection: &Connection) -> Result<bool, Ingestion
     if version == 0 && application == 0 && objects == 0 {
         return Ok(true);
     }
-    if ![1, 2, SCHEMA_VERSION, 4, 5].contains(&version) || application != APPLICATION_ID {
+    if ![1, 2, SCHEMA_VERSION, 4, 5, 6].contains(&version) || application != APPLICATION_ID {
         return Err(IngestionError::SchemaMismatch);
     }
     Ok(false)

@@ -26,13 +26,15 @@ pub use runtime_settings::{RuntimeSettings, run_live};
 
 pub use manifest::{Annotation, DeviceMapping, Manifest, ManifestConfig, OwnerGeofence};
 pub use model::{
-    AcceptedEvidence, EvidenceProvenance, INPUT_CONTRACT_VERSION, MAX_ANNOTATIONS,
+    AcceptedEvidence, BatteryPercent, EvidenceProvenance, INPUT_CONTRACT_VERSION, MAX_ANNOTATIONS,
     MAX_MANIFEST_BYTES, MAX_MAPPINGS, MAX_PAYLOAD_BYTES, NORMALIZER_VERSION, NormalizedChargeType,
     NormalizedCounter, NormalizedEvent, NormalizedEventKind, NormalizedLocation, RejectionReason,
     SafeCounterProblem, TIMESTAMP_VERSION,
 };
 pub use normalize::normalize;
+mod last_charge;
 mod replay;
+pub use last_charge::LastCharge;
 mod schema;
 mod store;
 

@@ -627,6 +627,7 @@ fn car_command(args: &[String]) -> Result<(), IngestionError> {
             "--year",
         ],
         "rename" => &["--database", "--vehicle", "--name"],
+        "set-color" => &["--database", "--vehicle", "--color"],
         "remove" => &["--database", "--vehicle"],
         _ => return Err(IngestionError::InvalidCommand),
     };
@@ -661,6 +662,9 @@ fn car_command(args: &[String]) -> Result<(), IngestionError> {
             },
         )?,
         "rename" => Store::rename_car(&database, &vehicle, &required_option(&options, "--name")?)?,
+        "set-color" => {
+            Store::set_car_color(&database, &vehicle, &required_option(&options, "--color")?)?
+        }
         "remove" => Store::remove_car(&database, &vehicle)?,
         _ => return Err(IngestionError::InvalidCommand),
     };

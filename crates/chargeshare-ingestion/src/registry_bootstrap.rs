@@ -75,6 +75,7 @@ impl RegistryBootstrap {
             .mappings
             .iter()
             .map(|mapping| crate::registry::Car {
+                color: crate::registry::DEFAULT_CAR_COLOR.to_owned(),
                 registration: crate::registry::CarRegistration {
                     device: mapping.device.clone(),
                     vehicle: mapping.vehicle.clone(),

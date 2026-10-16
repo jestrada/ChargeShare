@@ -91,7 +91,7 @@ pub(crate) fn migrate(connection: &Connection) -> Result<(), IngestionError> {
     let schema: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(storage_error)?;
-    if schema == 5 {
+    if [5, 6].contains(&schema) {
         return Ok(());
     }
     if schema != 4 {

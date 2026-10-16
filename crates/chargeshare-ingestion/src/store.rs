@@ -104,6 +104,7 @@ impl Store {
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .map_err(storage_error)?;
             crate::charger_rates::migrate(&transaction)?;
+            crate::registry::migrate_colors(&transaction)?;
             transaction.commit().map_err(storage_error)?;
         }
         let (registry, manifest) = if crate::registry::is_registry(&connection)? {
@@ -355,7 +356,20 @@ impl Store {
             return Err(IngestionError::ConfigurationMismatch);
         }
         let disposition = match normalize(manifest, key, payload) {
-            Ok(evidence) => RecordDisposition::Accepted(Box::new(evidence)),
+            Ok(mut evidence) => {
+                if evidence.event.battery_percent.is_some() {
+                    let retained: Option<String> = self.connection.query_row(
+                        "SELECT v.event_json FROM deliveries d JOIN event_variants v ON v.id = d.variant_id WHERE d.partition = ?1 AND d.offset = ?2",
+                        params![coordinate.partition, coordinate.offset], |row| row.get(0),
+                    ).optional().map_err(storage_error)?;
+                    let mut unknown_soc = evidence.event.clone();
+                    unknown_soc.battery_percent = None;
+                    if retained == Some(crate::registry::json(&unknown_soc)?) {
+                        evidence.event = unknown_soc;
+                    }
+                }
+                RecordDisposition::Accepted(Box::new(evidence))
+            }
             Err(reason) => RecordDisposition::Rejected(reason),
         };
         self.commit_record_observed(coordinate, expected_resume_position, disposition, observer)

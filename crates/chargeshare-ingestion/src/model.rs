@@ -302,7 +302,30 @@ pub struct NormalizedEvent {
     pub charge_type: NormalizedChargeType,
     pub counter: Option<NormalizedCounter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery_percent: Option<BatteryPercent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<NormalizedLocation>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(try_from = "f64", into = "f64")]
+pub struct BatteryPercent(u64);
+
+impl TryFrom<f64> for BatteryPercent {
+    type Error = RejectionReason;
+
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        if !value.is_finite() || !(0.0..=100.0).contains(&value) {
+            return Err(RejectionReason::InvalidEvidence);
+        }
+        Ok(Self(if value == 0.0 { 0.0 } else { value }.to_bits()))
+    }
+}
+
+impl From<BatteryPercent> for f64 {
+    fn from(value: BatteryPercent) -> Self {
+        Self::from_bits(value.0)
+    }
 }
 
 impl NormalizedEvent {

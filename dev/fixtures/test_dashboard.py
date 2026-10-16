@@ -75,6 +75,10 @@ class DashboardFixtureTests(unittest.TestCase):
         self.assertEqual([scope["chargers"][0]["name"] for scope in fixture["display_registry"]], ["Driveway charger", "Garage charger"])
         self.assertEqual({record["key"] for record in fixture["records"]}, {"vehicle-a", "vehicle-b"})
         self.assertEqual(len(fixture["records"]), 2 * len(self.fixture["records"]))
+        self.assertEqual([scope["color"] for scope in fixture["display_registry"]], ["#B8BDC3", "#16181C"])
+        for vehicle, expected in [("vehicle-a", "82"), ("vehicle-b", "67")]:
+            end = next(record for annotation, record in reversed(list(zip(fixture["manifest"]["annotations"], fixture["records"], strict=True))) if record["key"] == vehicle and annotation["kind"] == "end")
+            self.assertEqual(next(field["value"]["stringValue"] for field in end["payload"]["data"] if field["key"] == "BatteryLevel"), expected)
         for mapping in fixture["manifest"]["mappings"]:
             self.assertTrue(all(record["payload"]["vin"] == mapping["vehicle"] for record in fixture["records"] if record["key"] == mapping["vehicle"]))
 

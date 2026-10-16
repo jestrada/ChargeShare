@@ -26,6 +26,7 @@ struct DisplayScope {
     owner: String,
     vehicle: String,
     name: String,
+    color: String,
     chargers: Vec<DisplayCharger>,
 }
 
@@ -90,11 +91,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let api = output.join("http/api/poc");
     fs::create_dir_all(&api)?;
-    let scopes: Vec<_> = fixture.display_registry.iter().map(|scope| json!({"owner":scope.owner,"vehicle":scope.vehicle,"name":scope.name,"chargers":scope.chargers.iter().map(|charger| json!({"id":charger.id,"name":charger.name})).collect::<Vec<_>>()})).collect();
-    fs::write(
-        api.join("scopes"),
-        serde_json::to_vec(&json!({"synthetic_only": true, "scopes": scopes}))?,
-    )?;
+    let mut scopes = Vec::new();
     for mapping in &manifest.config().mappings {
         let owner = OwnerId::new(&mapping.owner)?;
         let vehicle = VehicleId::new(&mapping.vehicle)?;
@@ -112,6 +109,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             .iter()
             .find(|scope| scope.owner == mapping.owner && scope.vehicle == mapping.vehicle)
             .ok_or("missing synthetic display name")?;
+        let color = &display.color;
+        if color.len() != 7
+            || !color.starts_with('#')
+            || !color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+        {
+            return Err("invalid synthetic car color".into());
+        }
+        scopes.push(json!({"owner":display.owner,"vehicle":display.vehicle,"name":display.name,"color":color,"last_charge":result.last_charge,"chargers":display.chargers.iter().map(|charger| json!({"id":charger.id,"name":charger.name})).collect::<Vec<_>>()}));
         result.registry = Some(chargeshare_ingestion::ResultRegistry {
             car_name: display.name.clone(),
             chargers: display
@@ -159,6 +164,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             fs::write(path.join("results"), serde_json::to_vec(&result)?)?;
         }
     }
+    fs::write(
+        api.join("scopes"),
+        serde_json::to_vec(&json!({"synthetic_only":true,"scopes":scopes}))?,
+    )?;
     println!(
         "Synthetic demo: {} records ingested into SQLite; Rust-priced dashboard snapshot exported. Receiver/Kafka transport not exercised.",
         statistics.accepted_deliveries

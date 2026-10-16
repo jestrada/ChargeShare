@@ -38,6 +38,7 @@ pub enum RegistryWrite {
 #[derive(Clone)]
 pub(crate) struct Car {
     pub(crate) registration: CarRegistration,
+    pub(crate) color: String,
     pub(crate) active: bool,
     pub(crate) identity_version: String,
     pub(crate) assignment_version: String,
@@ -97,7 +98,33 @@ pub(crate) fn is_registry(connection: &Connection) -> Result<bool, IngestionErro
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(storage_error)?;
-    Ok([4, 5].contains(&version))
+    Ok([4, 5, 6].contains(&version))
+}
+
+pub(crate) const DEFAULT_CAR_COLOR: &str = "#808080";
+
+fn color_valid(color: &str) -> bool {
+    color.len() == 7
+        && color.starts_with('#')
+        && color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+}
+
+pub(crate) fn migrate_colors(connection: &Connection) -> Result<(), IngestionError> {
+    let schema: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(storage_error)?;
+    if schema == 6 {
+        return Ok(());
+    }
+    if schema != 5 {
+        return Err(IngestionError::SchemaMismatch);
+    }
+    connection.execute_batch("ALTER TABLE cars ADD COLUMN color TEXT NOT NULL DEFAULT '#808080' CHECK(length(color) = 7 AND substr(color,1,1) = '#' AND substr(color,2) NOT GLOB '*[^0-9A-Fa-f]*');
+        ALTER TABLE runtime_metadata RENAME TO color_legacy_metadata;
+        CREATE TABLE runtime_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton = 1), schema_version INTEGER NOT NULL CHECK(schema_version = 6), manifest_json TEXT NOT NULL, source_json TEXT NOT NULL) STRICT;
+        INSERT INTO runtime_metadata SELECT singleton,6,manifest_json,source_json FROM color_legacy_metadata;
+        DROP TABLE color_legacy_metadata;
+        PRAGMA user_version = 6;").map_err(storage_error)
 }
 
 fn version(prefix: &str, value: &impl Serialize) -> Result<String, IngestionError> {
@@ -140,7 +167,7 @@ pub(crate) fn load(
             row.get(0)
         })
         .map_err(storage_error)?;
-    if metadata_version != 5
+    if metadata_version != 6
         || !fixed.config().mappings.is_empty()
         || !fixed.config().owner_chargers.is_empty()
         || !fixed.is_live()
@@ -216,7 +243,7 @@ pub(crate) fn load(
         crate::charger_rates::history(connection, &charger)?;
         chargers.insert(id, charger);
     }
-    let mut statement = connection.prepare("SELECT device, vehicle, owner, name, make, model, year, active, created_at FROM cars ORDER BY vehicle").map_err(storage_error)?;
+    let mut statement = connection.prepare("SELECT device, vehicle, owner, name, make, model, year, active, created_at, color FROM cars ORDER BY vehicle").map_err(storage_error)?;
     let car_rows = statement
         .query_map([], |row| {
             Ok((
@@ -232,6 +259,7 @@ pub(crate) fn load(
                 },
                 row.get::<_, bool>(7)?,
                 row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
             ))
         })
         .map_err(storage_error)?
@@ -288,8 +316,8 @@ pub(crate) fn load(
     let mut config = fixed.config().clone();
     config.rate_models = crate::charger_rates::load_versions(connection)?;
     let mut versions = BTreeMap::<String, BTreeSet<String>>::new();
-    for (mut car, active, created_at) in car_rows {
-        if crate::manifest::parse_utc_seconds(&created_at).is_err() {
+    for (mut car, active, created_at, color) in car_rows {
+        if crate::manifest::parse_utc_seconds(&created_at).is_err() || !color_valid(&color) {
             return Err(IngestionError::RegistryIntegrity);
         }
         car.chargers = connection
@@ -332,6 +360,7 @@ pub(crate) fn load(
         });
         cars.push(Car {
             registration: car,
+            color,
             active,
             identity_version,
             assignment_version,
@@ -536,6 +565,7 @@ pub(crate) fn migrate(
         )?;
     }
     crate::charger_rates::migrate(&transaction)?;
+    migrate_colors(&transaction)?;
     load(&transaction, &fixed)?;
     observer(crate::CommitBoundary::BeforeCommit)?;
     transaction.commit().map_err(storage_error)?;
@@ -545,6 +575,32 @@ pub(crate) fn migrate(
 }
 
 impl Store {
+    pub fn set_car_color(
+        database: &Path,
+        vehicle: &str,
+        color: &str,
+    ) -> Result<RegistryWrite, IngestionError> {
+        if VehicleId::new(vehicle).is_err() || !color_valid(color) {
+            return Err(IngestionError::RegistryConflict);
+        }
+        let store = Self::open_registry_database(database)?;
+        if store.registry.is_none() {
+            return Err(IngestionError::MigrationInputRequired);
+        }
+        if store
+            .connection
+            .execute(
+                "UPDATE cars SET color = ?1 WHERE vehicle = ?2",
+                params![color, vehicle],
+            )
+            .map_err(storage_error)?
+            != 1
+        {
+            return Err(IngestionError::RegistryConflict);
+        }
+        Ok(RegistryWrite::Updated)
+    }
+
     pub(crate) fn refresh_registry(&mut self, fixed: &Manifest) -> Result<(), IngestionError> {
         let (registry, manifest) = load(&self.connection, fixed)?;
         self.registry = Some(registry);
@@ -794,18 +850,40 @@ impl Store {
 
     pub(crate) fn active_scopes(&self) -> Result<Vec<serde_json::Value>, IngestionError> {
         self.validate_live_storage()?;
+        let mut scopes = Vec::new();
         if let Some(registry) = &self.registry {
             let pending = self.pending_recoveries()?;
-            Ok(registry.cars.iter().filter(|car| car.active && !pending.contains(&car.registration.vehicle)).map(|car| {
-                let chargers: Vec<_> = car.registration.chargers.iter().filter_map(|id| registry.chargers.get(id)).map(|charger| serde_json::json!({"id":charger.id,"name":charger.name})).collect();
-                serde_json::json!({"owner":car.registration.owner,"vehicle":car.registration.vehicle,"name":car.registration.name,"chargers":chargers})
-            }).collect())
+            for car in registry
+                .cars
+                .iter()
+                .filter(|car| car.active && !pending.contains(&car.registration.vehicle))
+            {
+                let registration = &car.registration;
+                let vehicle = VehicleId::new(&registration.vehicle)
+                    .map_err(|_| IngestionError::RegistryIntegrity)?;
+                let owner = OwnerId::new(&registration.owner)
+                    .map_err(|_| IngestionError::RegistryIntegrity)?;
+                let last_charge = self.last_charge(&vehicle, &self.sessions(&owner, &vehicle)?)?;
+                let chargers: Vec<_> = registration
+                    .chargers
+                    .iter()
+                    .filter_map(|id| registry.chargers.get(id))
+                    .map(|charger| serde_json::json!({"id":charger.id,"name":charger.name}))
+                    .collect();
+                scopes.push(serde_json::json!({"owner":registration.owner,"vehicle":registration.vehicle,"name":registration.name,"chargers":chargers,"color":car.color,"last_charge":last_charge}));
+            }
         } else {
-            Ok(self.manifest.config().mappings.iter().enumerate().map(|(index,mapping)| {
+            for (index, mapping) in self.manifest.config().mappings.iter().enumerate() {
+                let vehicle =
+                    VehicleId::new(&mapping.vehicle).map_err(|_| IngestionError::StorageCorrupt)?;
+                let owner =
+                    OwnerId::new(&mapping.owner).map_err(|_| IngestionError::StorageCorrupt)?;
+                let last_charge = self.last_charge(&vehicle, &self.sessions(&owner, &vehicle)?)?;
                 let chargers: Vec<_> = self.manifest.config().owner_chargers.iter().filter(|charger| charger.owner_id == mapping.owner).map(|charger| serde_json::json!({"id":charger.charger_id,"name":"Sample charger"})).collect();
-                serde_json::json!({"owner":mapping.owner,"vehicle":mapping.vehicle,"name":format!("Sample car {}",index + 1),"chargers":chargers})
-            }).collect())
+                scopes.push(serde_json::json!({"owner":mapping.owner,"vehicle":mapping.vehicle,"name":format!("Sample car {}",index + 1),"chargers":chargers,"color":DEFAULT_CAR_COLOR,"last_charge":last_charge}));
+            }
         }
+        Ok(scopes)
     }
 }
 

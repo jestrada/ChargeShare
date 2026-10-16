@@ -27,6 +27,7 @@ fn signal(time: &str) -> Signal {
         time: parse_utc_timestamp(time).unwrap().0,
         state: None,
         counter: None,
+        battery_percent: None,
         ac_power: None,
         location: None,
         odometer: None,

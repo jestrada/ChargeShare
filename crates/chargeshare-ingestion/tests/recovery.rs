@@ -103,6 +103,7 @@ fn record(
             kind,
             charge_type,
             counter,
+            battery_percent: None,
             location: None,
         },
         provenance: EvidenceProvenance {

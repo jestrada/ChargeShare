@@ -1,4 +1,6 @@
 export type ChargerOption = { id: string; name: string }
+export type LastCharge = { battery_percent: number | null; end_utc_seconds: string }
+export type CarScope = Scope & { name: string; chargers: ChargerOption[]; color: string; last_charge: LastCharge | null }
 export type Scope = { owner: string; vehicle: string; name?: string; chargers?: ChargerOption[] }
 export type RateModel = {
   id: string; plan: string; source_label: string; source_url: string
@@ -49,6 +51,7 @@ export type SessionResult = {
   coverage?: CounterCoverage
 }
 export type ScopedResults = Scope & {
+  last_charge: LastCharge | null
   state: "empty" | "held" | "eligible"
   evidence_boundary: string
   observed_ac_kwh: string
@@ -96,7 +99,7 @@ export const scopes: Scope[] = [
 const qualityReasons = ["InsufficientCounterReadings", "MissingConnectionStart", "MissingConnectionEnd", "MissingBaseline", "MissingTerminalSample", "CounterRollback", "ConflictingEvidence", "InvalidBoundaryOrder", "InvalidCounter(Invalid)", "InvalidCounter(Negative)", "InvalidCounter(UnsupportedPrecision)", "InvalidCounter(Overflow)"]
 const exclusionReasons = ["LocationUnavailable", "LocationAmbiguous", "OtherCharger", "DcEvidence", "AmbiguousChargeType"]
 const classificationReasons = { SharedCharger: ["InsideGeofence"], OtherCharger: ["OutsideGeofence"], Held: ["LocationUnavailable", "LocationAmbiguous"] }
-const resultKeys = ["owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "revision", "provenance", "pricing", "monthly"]
+const resultKeys = ["owner", "vehicle", "last_charge", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "revision", "provenance", "pricing", "monthly"]
 const sessionKeys = ["vehicle", "connection", "start_utc_seconds", "end_utc_seconds", "classification", "classification_reason", "evidence_state", "observed_ac_kwh", "eligible_shared_charger_kwh", "quality_flags", "exclusion_reasons", "pricing"]
 const provenanceKeys = ["source", "source_epoch", "input_contract", "mapping_version", "manifest_version", "normalizer_version", "calculation_version", "geofence_version"]
 function hasExactKeys(value: unknown, keys: string[]) {
@@ -109,11 +112,18 @@ function isEligible(session: SessionResult) {
 export function resultPath(scope: Scope, charger?: string) {
   return `/api/poc/owners/${encodeURIComponent(scope.owner)}/vehicles/${encodeURIComponent(scope.vehicle)}/results${charger ? `?charger=${encodeURIComponent(charger)}` : ""}`
 }
-export function parseScopes(value: unknown): { synthetic_only: boolean; scopes: Scope[] } {
-  const object = value as { synthetic_only: boolean; scopes: Scope[] }
+function validLastCharge(value: unknown): value is LastCharge | null {
+  if (value === null) return true
+  const charge = value as LastCharge
+  return hasExactKeys(charge, ["battery_percent", "end_utc_seconds"]) &&
+    (charge.battery_percent === null || typeof charge.battery_percent === "number" && Number.isFinite(charge.battery_percent) && charge.battery_percent >= 0 && charge.battery_percent <= 100) &&
+    typeof charge.end_utc_seconds === "string" && epochSeconds(charge.end_utc_seconds)
+}
+export function parseScopes(value: unknown): { synthetic_only: boolean; scopes: CarScope[] } {
+  const object = value as { synthetic_only: boolean; scopes: CarScope[] }
   if (!hasExactKeys(object, ["synthetic_only", "scopes"]) || typeof object.synthetic_only !== "boolean" ||
       !Array.isArray(object.scopes) || object.scopes.length > 256 ||
-      object.scopes.some(scope => !hasExactKeys(scope, scope.name === undefined ? ["owner", "vehicle"] : ["owner", "vehicle", "name", "chargers"]) || !alias(scope.owner) || !alias(scope.vehicle) || (scope.name !== undefined && (!displayName(scope.name) || !chargerOptions(scope.chargers)))) ||
+      object.scopes.some(scope => !hasExactKeys(scope, ["owner", "vehicle", "name", "chargers", "color", "last_charge"]) || !alias(scope.owner) || !alias(scope.vehicle) || !displayName(scope.name) || !chargerOptions(scope.chargers) || typeof scope.color !== "string" || !/^#[0-9A-Fa-f]{6}$/.test(scope.color) || !validLastCharge(scope.last_charge)) ||
       new Set(object.scopes.map(scope => scope.vehicle)).size !== object.scopes.length) {
     throw new Error("Persisted scopes unavailable")
   }
@@ -123,7 +133,7 @@ export function parseResults(value: unknown, scope: Scope): ScopedResults {
   const object = value as ScopedResults
   const energy = (value: unknown) => typeof value === "string" && /^\d+\.\d{6}$/.test(value)
   const reasons = (value: unknown, allowed: string[]) => Array.isArray(value) && value.every(reason => allowed.includes(reason))
-  if (!hasExactKeys(object, object.registry ? [...resultKeys, "registry"] : resultKeys) || object.owner !== scope.owner || object.vehicle !== scope.vehicle ||
+  if (!hasExactKeys(object, object.registry ? [...resultKeys, "registry"] : resultKeys) || object.owner !== scope.owner || object.vehicle !== scope.vehicle || !validLastCharge(object.last_charge) ||
       !["empty", "held", "eligible"].includes(object.state) || !energy(object.observed_ac_kwh) || !energy(object.eligible_shared_charger_kwh) ||
       !["Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated", "Vehicle-reported AC input counter energy; physical accuracy unvalidated"].includes(object.evidence_boundary) ||
       typeof object.revision !== "string" || !/^results-v2-[a-f0-9]{16}$/.test(object.revision) ||
@@ -185,6 +195,19 @@ export function observationTime(seconds: string | null) {
   if (seconds === null) return "Unavailable"
   const time = new Date(Number(seconds) * 1000)
   return Number.isFinite(time.getTime()) ? time.toISOString().replace("T", " ").replace(".000Z", " UTC") : "Unavailable"
+}
+export function chargeEndTime(seconds: string | null, timezone: string | null) {
+  if (seconds === null || timezone === null) return "Unavailable"
+  const time = new Date(Number(seconds) * 1000)
+  if (!Number.isFinite(time.getTime())) return "Unavailable"
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone, year: "numeric", month: "short", day: "numeric",
+      hour: "numeric", minute: "2-digit", timeZoneName: "short",
+    }).format(time)
+  } catch {
+    return "Unavailable"
+  }
 }
 export function evidenceLabel(session: SessionResult) {
   if (session.evidence_state === "partial") return "Partial coverage · observed counter window"

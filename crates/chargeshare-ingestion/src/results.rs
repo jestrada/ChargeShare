@@ -11,6 +11,7 @@ use crate::{IngestionError, Store};
 pub struct ScopedResults {
     pub owner: String,
     pub vehicle: String,
+    pub last_charge: Option<crate::LastCharge>,
     pub state: &'static str,
     pub evidence_boundary: &'static str,
     pub observed_ac_kwh: String,
@@ -568,6 +569,15 @@ fn results_for_view(
     let mut result = ScopedResults {
         owner: owner.as_str().to_owned(),
         vehicle: vehicle.as_str().to_owned(),
+        last_charge: match store {
+            Some(store) => store.last_charge(
+                vehicle,
+                &ledger
+                    .sessions(vehicle)
+                    .map_err(|_| IngestionError::DomainReplay)?,
+            )?,
+            None => None,
+        },
         state: if sessions.is_empty() {
             "empty"
         } else if all_eligible {
