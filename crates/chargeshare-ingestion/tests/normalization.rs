@@ -166,6 +166,47 @@ fn candidate_golden_records_equal_direct_core_events_with_separate_provenance() 
 }
 
 #[test]
+fn receiver_replays_preserve_terminal_soc_and_duplicate_event_identity() {
+    let manifest = manifest();
+    let complete: Value =
+        serde_json::from_slice(include_bytes!("../../../dev/fixtures/complete.json")).unwrap();
+    let normalize_record = |record: &Value| {
+        normalize(
+            &manifest,
+            Some(record["key"].as_str().unwrap().as_bytes()),
+            &serde_json::to_vec(&record["payload"]).unwrap(),
+        )
+        .unwrap()
+        .event
+    };
+    let originals: Vec<_> = complete["expected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(normalize_record)
+        .collect();
+    for contents in [
+        include_bytes!("../../../dev/fixtures/adverse.json").as_slice(),
+        include_bytes!("../../../dev/fixtures/missing.json").as_slice(),
+    ] {
+        let replay: Value = serde_json::from_slice(contents).unwrap();
+        for record in replay["expected"].as_array().unwrap() {
+            let event = normalize_record(record);
+            let original = originals
+                .iter()
+                .find(|original| {
+                    original.vehicle == event.vehicle && original.position == event.position
+                })
+                .unwrap();
+            assert_eq!(event.battery_percent, original.battery_percent);
+            if event.counter.is_some() {
+                assert_eq!(&event, original);
+            }
+        }
+    }
+}
+
+#[test]
 fn runtime_manifest_and_inspected_receiver_shape_bind_the_existing_normalizer_contract() {
     let runtime_manifest =
         Manifest::from_json(include_bytes!("../../../dev/ingestion-manifest.json")).unwrap();
