@@ -47,6 +47,10 @@ agents. This page explains the steps each issue goes through.
    posted on the issue in one short result comment (pass/fail, a few bullets,
    details collapsed). Checklist boxes on the issue are
    ticked only where there is real evidence. No browser proof, no PR.
+   For customer-visible or setup changes, Chargie DevEx flags the need and Luna
+   updates README and synthetic sample data/screenshots to the latest version
+   (synthetic only, see [Public repo safety](../AGENTS.md#public-repo-safety)).
+   Internal-only changes skip this.
 7. **Open the PR.** The PR body says `Closes #N`. CI extends the existing
    workflows; features do not add new workflows. The evidence check fails if the
    linked issue has no screenshot comment. The `no-evidence` label skips it.
