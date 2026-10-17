@@ -104,6 +104,7 @@ impl Store {
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .map_err(storage_error)?;
             crate::charger_rates::migrate(&transaction)?;
+            crate::registry::migrate_colors(&transaction)?;
             transaction.commit().map_err(storage_error)?;
         }
         let (registry, manifest) = if crate::registry::is_registry(&connection)? {
@@ -355,7 +356,27 @@ impl Store {
             return Err(IngestionError::ConfigurationMismatch);
         }
         let disposition = match normalize(manifest, key, payload) {
-            Ok(evidence) => RecordDisposition::Accepted(Box::new(evidence)),
+            Ok(mut evidence) => {
+                let retained: Option<String> = self.connection.query_row(
+                    "SELECT v.event_json FROM deliveries d JOIN event_variants v ON v.id = d.variant_id WHERE d.partition = ?1 AND d.offset = ?2",
+                    params![coordinate.partition, coordinate.offset], |row| row.get(0),
+                ).optional().map_err(storage_error)?;
+                if let Some(retained) = retained {
+                    let fields: serde_json::Value = serde_json::from_str(&retained)
+                        .map_err(|_| IngestionError::StorageCorrupt)?;
+                    let mut legacy_event = evidence.event.clone();
+                    if fields.get("battery_percent").is_none() {
+                        legacy_event.battery_percent = None;
+                    }
+                    if fields.get("charging").is_none() {
+                        legacy_event.charging = None;
+                    }
+                    if retained == crate::registry::json(&legacy_event)? {
+                        evidence.event = legacy_event;
+                    }
+                }
+                RecordDisposition::Accepted(Box::new(evidence))
+            }
             Err(reason) => RecordDisposition::Rejected(reason),
         };
         self.commit_record_observed(coordinate, expected_resume_position, disposition, observer)

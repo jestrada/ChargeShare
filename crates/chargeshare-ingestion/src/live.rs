@@ -18,7 +18,7 @@ pub(crate) const LIVE_INPUT_CONTRACT: &str = "tesla-decoded-live-v1";
 pub(crate) const LIVE_NORMALIZER_VERSION: &str = "chargeshare-live-adapter-v2";
 
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
-enum ChargeState {
+pub(crate) enum ChargeState {
     #[serde(rename = "DetailedChargeStateUnknown")]
     Unknown,
     #[serde(rename = "DetailedChargeStateDisconnected")]
@@ -73,6 +73,8 @@ struct Signal {
     time: i64,
     state: Option<ChargeState>,
     counter: Option<NormalizedCounter>,
+    #[serde(default)]
+    battery_percent: Option<crate::BatteryPercent>,
     ac_power: Option<bool>,
     location: Option<NormalizedLocation>,
     odometer: Option<OdometerReading>,
@@ -259,6 +261,9 @@ impl Store {
             _ => signal.location.clone(),
         };
         let legacy_signal_json = encode(&legacy_signal)?;
+        let soc_field = format!(",\"battery_percent\":{}", encode(&signal.battery_percent)?);
+        let old_signal_json = signal_json.replacen(&soc_field, "", 1);
+        let old_legacy_signal_json = legacy_signal_json.replacen(&soc_field, "", 1);
         let retained: Option<(String, String)> = self
             .connection
             .query_row(
@@ -270,17 +275,20 @@ impl Store {
             .optional()
             .map_err(storage_error)?;
         if let Some((original, disposition)) = retained {
-            if original != signal_json && original != legacy_signal_json {
+            let disposition: RecordDisposition =
+                serde_json::from_str(&disposition).map_err(|_| IngestionError::StorageCorrupt)?;
+            if original != signal_json
+                && original != legacy_signal_json
+                && original != old_signal_json
+                && original != old_legacy_signal_json
+            {
                 return Err(IngestionError::DeliveryConflict);
             }
-            return Ok((
-                serde_json::from_str(&disposition).map_err(|_| IngestionError::StorageCorrupt)?,
-                None,
-            ));
+            return Ok((disposition, None));
         }
-        let repeated: Option<String> = self.connection.query_row(
-            "SELECT disposition_json FROM live_records WHERE vehicle = ?1 AND (signal_json = ?2 OR signal_json = ?3) LIMIT 1",
-            params![signal.vehicle, signal_json, legacy_signal_json], |row| row.get(0),
+        let repeated: Option<(String, String)> = self.connection.query_row(
+            "SELECT signal_json, disposition_json FROM live_records WHERE vehicle = ?1 AND (signal_json = ?2 OR signal_json = ?3 OR signal_json = ?4 OR signal_json = ?5) LIMIT 1",
+            params![signal.vehicle, signal_json, legacy_signal_json, old_signal_json, old_legacy_signal_json], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional().map_err(storage_error)?;
         let state_json: Option<String> = self
             .connection
@@ -295,10 +303,16 @@ impl Store {
             .map(|json| serde_json::from_str(&json).map_err(|_| IngestionError::StorageCorrupt))
             .transpose()?
             .unwrap_or_default();
-        let disposition = if let Some(repeated) = repeated {
-            serde_json::from_str(&repeated).map_err(|_| IngestionError::StorageCorrupt)?
+        let (disposition, signal_json) = if let Some((retained_signal, repeated)) = repeated {
+            (
+                serde_json::from_str(&repeated).map_err(|_| IngestionError::StorageCorrupt)?,
+                retained_signal,
+            )
         } else {
-            adapt(&self.manifest, &mut state, &signal, is_resend)?
+            (
+                adapt(&self.manifest, &mut state, &signal, is_resend)?,
+                signal_json,
+            )
         };
         let checkpoint = LiveCheckpoint {
             vehicle: signal.vehicle,
@@ -409,6 +423,8 @@ fn adapt(
                 NormalizedChargeType::Unknown
             },
             counter: signal.counter.clone(),
+            battery_percent: signal.battery_percent,
+            charging: None,
             location: if late {
                 Some(NormalizedLocation::Invalid)
             } else {
@@ -570,6 +586,7 @@ fn decode(
         time,
         state: None,
         counter: None,
+        battery_percent: None,
         ac_power: None,
         location: None,
         odometer: None,
@@ -586,14 +603,29 @@ fn decode(
                 | "Location"
                 | "Odometer"
                 | "FastChargerPresent"
+                | "Soc"
         ) {
             continue;
         }
         if !keys.insert(field.key.clone()) {
+            if field.key == "Soc" {
+                signal.battery_percent = None;
+                continue;
+            }
             invalid_evidence = true;
             continue;
         }
         match field.key.as_str() {
+            "Soc" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct SocValue {
+                    double_value: f64,
+                }
+                signal.battery_percent = serde_json::from_str::<SocValue>(field.value.get())
+                    .ok()
+                    .and_then(|value| crate::BatteryPercent::try_from(value.double_value).ok());
+            }
             "DetailedChargeState" => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase", deny_unknown_fields)]

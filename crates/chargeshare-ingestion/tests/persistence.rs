@@ -70,6 +70,8 @@ fn evidence(
             kind,
             charge_type: NormalizedChargeType::Ac,
             counter,
+            battery_percent: None,
+            charging: None,
             location: None,
         },
         provenance: EvidenceProvenance {
@@ -852,4 +854,216 @@ fn persisted_location_enrichment_settles_held_sessions_and_survives_duplicate_re
     drop(store);
     let store = Store::open(&directory.database(), &manifest, &source()).unwrap();
     assert_eq!(store.results(&owner, &vehicle).unwrap(), settled);
+}
+
+#[test]
+fn current_readings_are_car_scoped_and_duplicates_never_change_energy() {
+    let directory = RuntimeDirectory::new();
+    let mut records = vec![
+        evidence(
+            "device-a",
+            "connection-1",
+            1,
+            0,
+            NormalizedEventKind::Start,
+            valid_counter("0.000000"),
+        ),
+        evidence(
+            "device-b",
+            "connection-1",
+            1,
+            0,
+            NormalizedEventKind::Start,
+            valid_counter("0.000000"),
+        ),
+        evidence(
+            "device-a",
+            "connection-1",
+            2,
+            10,
+            NormalizedEventKind::End,
+            valid_counter("1.000000"),
+        ),
+        evidence(
+            "device-b",
+            "connection-1",
+            2,
+            20,
+            NormalizedEventKind::End,
+            valid_counter("2.000000"),
+        ),
+    ];
+    records[2].event.battery_percent = Some(BatteryPercent::try_from(82.0).unwrap());
+    records[3].event.battery_percent = Some(BatteryPercent::try_from(67.0).unwrap());
+    let manifest = manifest(&records);
+    let mut store = Store::open(&directory.database(), &manifest, &source()).unwrap();
+    for (offset, record) in records.iter().enumerate() {
+        commit(&mut store, offset as i64, record.clone());
+    }
+    let a = store
+        .results(
+            &OwnerId::new("owner-a").unwrap(),
+            &VehicleId::new("vehicle-a").unwrap(),
+        )
+        .unwrap();
+    let b = store
+        .results(
+            &OwnerId::new("owner-b").unwrap(),
+            &VehicleId::new("vehicle-b").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        f64::from(a.battery_reading.as_ref().unwrap().battery_percent),
+        82.0_f64
+    );
+    assert_eq!(
+        a.battery_reading.as_ref().unwrap().observed_at,
+        "1970-01-01T00:00:10Z"
+    );
+    assert_eq!(
+        f64::from(b.battery_reading.as_ref().unwrap().battery_percent),
+        67.0_f64
+    );
+    assert_eq!(
+        b.battery_reading.as_ref().unwrap().observed_at,
+        "1970-01-01T00:00:20Z"
+    );
+    commit(&mut store, 4, records[2].clone());
+    records[2].event.battery_percent = Some(BatteryPercent::try_from(83.0).unwrap());
+    commit(&mut store, 5, records[2].clone());
+    let conflict = store
+        .results(
+            &OwnerId::new("owner-a").unwrap(),
+            &VehicleId::new("vehicle-a").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(conflict.battery_reading, a.battery_reading);
+    assert_eq!(conflict.sessions, a.sessions);
+    assert_eq!(conflict.pricing, a.pricing);
+    drop(store);
+    let store = Store::open(&directory.database(), &manifest, &source()).unwrap();
+    assert_eq!(
+        store
+            .results(
+                &OwnerId::new("owner-a").unwrap(),
+                &VehicleId::new("vehicle-a").unwrap()
+            )
+            .unwrap(),
+        conflict
+    );
+    assert_eq!(
+        store
+            .results(
+                &OwnerId::new("owner-b").unwrap(),
+                &VehicleId::new("vehicle-b").unwrap()
+            )
+            .unwrap(),
+        b
+    );
+}
+
+#[test]
+fn legacy_synthetic_terminal_stays_unknown_when_original_delivery_now_decodes_soc() {
+    let directory = RuntimeDirectory::new();
+    let records = vec![
+        evidence(
+            "device-a",
+            "connection-1",
+            1,
+            0,
+            NormalizedEventKind::Start,
+            valid_counter("0.000000"),
+        ),
+        evidence(
+            "device-a",
+            "connection-1",
+            2,
+            10,
+            NormalizedEventKind::End,
+            valid_counter("1.000000"),
+        ),
+    ];
+    let manifest = manifest(&records);
+    let mut store = Store::open(&directory.database(), &manifest, &source()).unwrap();
+    for (offset, record) in records.iter().enumerate() {
+        commit(&mut store, offset as i64, record.clone());
+    }
+    let owner = OwnerId::new("owner-a").unwrap();
+    let vehicle = VehicleId::new("vehicle-a").unwrap();
+    let before = store.results(&owner, &vehicle).unwrap();
+    assert_eq!(before.battery_reading, None);
+    drop(store);
+    let mut store = Store::open(&directory.database(), &manifest, &source()).unwrap();
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "vin":"device-a","createdAt":"1970-01-01T00:00:10Z","isResend":false,
+        "data":[{"key":"ACChargingEnergyIn","value":{"stringValue":"1.000000"}},
+                {"key":"BatteryLevel","value":{"stringValue":"82"}},
+                {"key":"DetailedChargeState","value":{"detailedChargeStateValue":"DetailedChargeStateComplete"}}]
+    }))
+    .unwrap();
+    let outcome = store
+        .ingest(
+            &manifest,
+            DeliveryCoordinate {
+                partition: 0,
+                offset: 1,
+            },
+            2,
+            Some(b"device-a"),
+            &payload,
+        )
+        .unwrap();
+    assert!(outcome.duplicate_delivery);
+    assert!(!outcome.inserted_variant);
+    assert_eq!(store.results(&owner, &vehicle).unwrap(), before);
+}
+
+#[test]
+fn synthetic_readings_order_source_time_independently_of_delivery_and_charge_state() {
+    let directory = RuntimeDirectory::new();
+    let mut records: Vec<_> = (0..4)
+        .map(|index| {
+            evidence(
+                "device-a",
+                "connection-1",
+                index + 1,
+                (index * 10) as u8,
+                if index == 0 {
+                    NormalizedEventKind::Start
+                } else {
+                    NormalizedEventKind::Sample
+                },
+                None,
+            )
+        })
+        .collect();
+    records[0].event.battery_percent = Some(BatteryPercent::try_from(100.0).unwrap());
+    records[0].event.charging = Some(true);
+    records[1].event.battery_percent = Some(BatteryPercent::try_from(0.0).unwrap());
+    records[2].event.battery_percent = Some(BatteryPercent::try_from(62.0).unwrap());
+    records[3].event.charging = Some(false);
+    let manifest = manifest(&records);
+    let mut store = Store::open(&directory.database(), &manifest, &source()).unwrap();
+    for (offset, index) in [2, 0, 1, 3, 0, 2].into_iter().enumerate() {
+        commit(&mut store, offset as i64, records[index].clone());
+    }
+    let owner = OwnerId::new("owner-a").unwrap();
+    let vehicle = VehicleId::new("vehicle-a").unwrap();
+    let result = store.results(&owner, &vehicle).unwrap();
+    assert_eq!(
+        f64::from(result.battery_reading.as_ref().unwrap().battery_percent),
+        62.0
+    );
+    assert_eq!(
+        result.battery_reading.as_ref().unwrap().observed_at,
+        "1970-01-01T00:00:20Z"
+    );
+    assert!(!result.charging.as_ref().unwrap().active);
+    assert_eq!(
+        result.charging.as_ref().unwrap().observed_at,
+        "1970-01-01T00:00:30Z"
+    );
+    drop(store);
+    let store = Store::open(&directory.database(), &manifest, &source()).unwrap();
+    assert_eq!(store.results(&owner, &vehicle).unwrap(), result);
 }

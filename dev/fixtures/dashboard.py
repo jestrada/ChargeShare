@@ -35,7 +35,7 @@ def session_schedule(day: int, random_source: random.Random) -> tuple[int, int]:
     return random_source.choice((0, 10, 20, 30, 45, 60)), random_source.randrange(135, 301, 15)
 
 
-def generate_dashboard_fixture(multiple: bool = False) -> dict:
+def generate_dashboard_fixture(multiple: bool = False, battery_example: str = "old") -> dict:
     random_source = random.Random(70)
     manifest = json.loads((FIXTURES.parent / "ingestion-manifest.json").read_text())
     manifest["manifest_version"] = "fictional-dashboard-v1"
@@ -78,11 +78,12 @@ def generate_dashboard_fixture(multiple: bool = False) -> dict:
                             {"key": "DetailedChargeState", "value": {"detailedChargeStateValue": "DetailedChargeStateComplete" if kind == "end" else "DetailedChargeStateCharging"}},
                             {"key": "ACChargingEnergyIn", "value": {"stringValue": counter_kwh(observed_counter)}},
                             {"key": "Location", "value": {"locationValue": location}},
+                            {"key": "BatteryLevel", "value": {"stringValue": "82" if kind == "end" else "45"}},
                         ],
                     },
                 })
             counter_micro_kwh += energy_micro_kwh
-    display_registry = [{"owner": OWNER, "vehicle": VEHICLE, "name": "Model 3 sample", "chargers": [{"id": manifest["owner_chargers"][0]["charger_id"], "name": "Driveway charger"}]}]
+    display_registry = [{"owner": OWNER, "vehicle": VEHICLE, "name": "Model 3 sample", "color": "#B8BDC3", "chargers": [{"id": manifest["owner_chargers"][0]["charger_id"], "name": "Driveway charger"}]}]
     if multiple:
         mapping = {"device": "vehicle-b", "vehicle": "vehicle-b", "owner": "owner-b"}
         manifest["mappings"].append(mapping)
@@ -97,12 +98,36 @@ def generate_dashboard_fixture(multiple: bool = False) -> dict:
             record = json.loads(json.dumps(record))
             record["key"] = "vehicle-b"
             record["payload"]["vin"] = "vehicle-b"
+            next(field for field in record["payload"]["data"] if field["key"] == "BatteryLevel")["value"]["stringValue"] = "67" if annotation["kind"] == "end" else "32"
             manifest["annotations"].append(annotation)
             records.append(record)
-        display_registry.append({"owner": "owner-b", "vehicle": "vehicle-b", "name": "Model Y sample", "chargers": [{"id": charger["charger_id"], "name": "Garage charger"}]})
+        display_registry.append({"owner": "owner-b", "vehicle": "vehicle-b", "name": "Model Y sample", "color": "#16181C", "chargers": [{"id": charger["charger_id"], "name": "Garage charger"}]})
+    as_of = datetime(2026, 9, 30, 23, 59, 59, tzinfo=LOCAL_TIMEZONE)
+    if battery_example == "fresh":
+        prior = next(record for record in reversed(records) if record["key"] == VEHICLE)
+        prior_counter = next(field["value"]["stringValue"] for field in prior["payload"]["data"] if field["key"] == "ACChargingEnergyIn")
+        for age, kind, percent in [(12, "start", "60"), (8, "sample", "62")]:
+            created_at = utc_timestamp(as_of - timedelta(minutes=age))
+            record = json.loads(json.dumps(prior))
+            record["payload"]["createdAt"] = created_at
+            fields = record["payload"]["data"]
+            next(field for field in fields if field["key"] == "BatteryLevel")["value"]["stringValue"] = percent
+            next(field for field in fields if field["key"] == "ACChargingEnergyIn")["value"]["stringValue"] = prior_counter
+            state = next(field for field in fields if field["key"] == "DetailedChargeState")
+            if kind == "start":
+                state["value"]["detailedChargeStateValue"] = "DetailedChargeStateCharging"
+            else:
+                fields.remove(state)
+            manifest["annotations"].append({"device": VEHICLE, "created_at": created_at, "position": str(len(records) + 1), "connection": "demo-current", "kind": kind, "charge_type": "ac"})
+            records.append(record)
+    elif battery_example == "never":
+        for record in records:
+            record["payload"]["data"] = [field for field in record["payload"]["data"] if field["key"] != "BatteryLevel"]
+    elif battery_example != "old":
+        raise ValueError("unknown synthetic battery example")
     return {
         "notice": SYNTHETIC_NOTICE,
-        "as_of_utc_seconds": int(datetime(2026, 9, 30, 23, 59, 59, tzinfo=LOCAL_TIMEZONE).timestamp()),
+        "as_of_utc_seconds": int(as_of.timestamp()),
         "manifest": manifest,
         "display_registry": display_registry,
         "records": records,
@@ -133,8 +158,9 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=SYNTHETIC_NOTICE)
     parser.add_argument("--serve", type=Path)
+    parser.add_argument("--battery-example", choices=("fresh", "old", "never"), default="fresh")
     options = parser.parse_args()
     if options.serve:
         serve_dashboard(options.serve)
     else:
-        print(json.dumps(generate_dashboard_fixture(multiple=True), indent=2))
+        print(json.dumps(generate_dashboard_fixture(multiple=True, battery_example=options.battery_example), indent=2))

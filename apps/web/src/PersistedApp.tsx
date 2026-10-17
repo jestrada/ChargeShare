@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react"
 import { Button } from "./components/ui/button"
-import { evidenceLabel, observationTime, pricingHoldLabel, parseResults, parseScopes, reasonLabel, resultPath, type Scope, type ScopedResults, periodLabel } from "./persisted"
+import { evidenceLabel, retainCarReadings, observationTime, pricingHoldLabel, parseResults, parseScopes, reasonLabel, resultPath, type Scope, type CarScope, type ScopedResults, periodLabel } from "./persisted"
+
+import { CarCards } from "./components/car-cards"
 
 import { MonthlyCharging } from "./components/monthly-charging"
 
@@ -16,11 +18,11 @@ function initialScope(): Scope | null {
 export function PersistedApp() {
   const [scope, setScope] = useState(initialScope)
   const [charger, setCharger] = useState<string>("")
+  const [scopesAvailable, setScopesAvailable] = useState(false)
   const [refresh, setRefresh] = useState(0)
-  const [configured, setConfigured] = useState<{ synthetic_only: boolean; scopes: Scope[] } | null>(null)
+  const [configured, setConfigured] = useState<{ synthetic_only: boolean; scopes: CarScope[] } | null>(null)
   const scopeKey = scope ? `${scope.owner}/${scope.vehicle}` : ""
   const key = `${scopeKey}/${charger}`
-  const scopesAvailable = configured !== null
   const [view, setView] = useState<View>({ scope: key, state: "loading" })
   useEffect(() => {
     const controller = new AbortController()
@@ -31,11 +33,12 @@ export function PersistedApp() {
         if (!response.ok) throw new Error("Persisted scopes unavailable")
         const next = parseScopes(await response.json())
         if (active) {
-          setConfigured(next)
+          setScopesAvailable(true)
+          setConfigured(previous => ({ ...next, scopes: retainCarReadings(previous?.scopes ?? [], next.scopes) }))
           setScope(previous => previous && next.scopes.some(option => option.owner === previous.owner && option.vehicle === previous.vehicle) ? next.scopes.find(option => option.vehicle === previous.vehicle)! : next.scopes[0] ?? null)
         }
       }).catch(() => {
-        if (active) { setConfigured(null); setView({ scope: key, state: "unavailable" }) }
+        if (active) { setScopesAvailable(false); setView({ scope: key, state: "unavailable" }) }
       }).finally(() => window.clearTimeout(timeout))
     return () => { active = false; controller.abort(); window.clearTimeout(timeout) }
   }, [refresh])
@@ -53,7 +56,9 @@ export function PersistedApp() {
           return
         }
         const results = parseResults(await response.json(), scope)
-        if (active) setView({ scope: key, state: "available", results })
+        if (active) {
+          setView({ scope: key, state: "available", results })
+        }
       })
       .catch(() => { if (active) setView({ scope: key, state: "unavailable" }) })
       .finally(() => window.clearTimeout(timeout))
@@ -72,15 +77,6 @@ export function PersistedApp() {
     <header className="persisted-heading">
       <div><p className="persisted-label">{configured?.synthetic_only ? "Synthetic evidence" : "Charging history"}</p><h1>ChargeShare</h1></div>
       <div className="persisted-controls">
-        <label className="persisted-selector">Car
-          <select aria-label="Car" value={scopeKey} disabled={!configured?.scopes.length} onChange={event => {
-            const next = configured?.scopes.find(option => `${option.owner}/${option.vehicle}` === event.target.value)
-            if (next) chooseScope(next)
-          }}>
-            {!configured?.scopes.some(option => `${option.owner}/${option.vehicle}` === scopeKey) && <option value={scopeKey}>Select car</option>}
-            {(configured?.scopes ?? []).map(option => <option key={option.vehicle} value={`${option.owner}/${option.vehicle}`}>{option.name ?? "Car"}</option>)}
-          </select>
-        </label>
         <label className="persisted-selector">Charger
           <select aria-label="Charger" value={charger} disabled={!scope || !configured?.scopes.length} onChange={event => setCharger(event.target.value)}>
             <option value="">All chargers</option>
@@ -90,6 +86,7 @@ export function PersistedApp() {
         <Button className="control" variant="outline" onClick={() => setRefresh(value => value + 1)}>Refresh</Button>
       </div>
     </header>
+    {configured && <CarCards cars={configured.scopes} selected={scopeKey} chooseScope={chooseScope} />}
     <main id="persisted-results" aria-live="polite" aria-busy={configured?.scopes.length !== 0 && current.state === "loading"}>
       {configured?.scopes.length === 0 ? <section className="glass persisted-panel"><h2>No active cars</h2><p>Add a car with the car command while ingestion is stopped, then restart to recover its available history.</p></section> : <>
       {current.state === "loading" && <section className="glass persisted-panel"><h2>Reading committed evidence…</h2></section>}

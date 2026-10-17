@@ -166,6 +166,48 @@ fn candidate_golden_records_equal_direct_core_events_with_separate_provenance() 
 }
 
 #[test]
+fn receiver_replays_preserve_battery_state_and_duplicate_event_identity() {
+    let manifest = manifest();
+    let complete: Value =
+        serde_json::from_slice(include_bytes!("../../../dev/fixtures/complete.json")).unwrap();
+    let normalize_record = |record: &Value| {
+        normalize(
+            &manifest,
+            Some(record["key"].as_str().unwrap().as_bytes()),
+            &serde_json::to_vec(&record["payload"]).unwrap(),
+        )
+        .unwrap()
+        .event
+    };
+    let originals: Vec<_> = complete["expected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(normalize_record)
+        .collect();
+    for contents in [
+        include_bytes!("../../../dev/fixtures/adverse.json").as_slice(),
+        include_bytes!("../../../dev/fixtures/missing.json").as_slice(),
+    ] {
+        let replay: Value = serde_json::from_slice(contents).unwrap();
+        for record in replay["expected"].as_array().unwrap() {
+            let event = normalize_record(record);
+            let original = originals
+                .iter()
+                .find(|original| {
+                    original.vehicle == event.vehicle && original.position == event.position
+                })
+                .unwrap();
+            assert_eq!(event.battery_percent, original.battery_percent);
+            assert_eq!(event.charging, original.charging);
+            if event.counter.is_some() {
+                assert_eq!(&event, original);
+            }
+        }
+    }
+}
+
+#[test]
 fn runtime_manifest_and_inspected_receiver_shape_bind_the_existing_normalizer_contract() {
     let runtime_manifest =
         Manifest::from_json(include_bytes!("../../../dev/ingestion-manifest.json")).unwrap();
@@ -549,7 +591,7 @@ fn unsupported_typed_fields_and_duplicate_json_members_cannot_be_accepted() {
             RejectionReason::UnsupportedPayload
         );
     }
-    for key in ["VehicleName", "BatteryLevel", "ACChargingEnergyIn"] {
+    for key in ["VehicleName", "ACChargingEnergyIn"] {
         let mut payload = original.clone();
         payload["data"] = json!([
             {"key":key,"value":{"stringValue":"fictional-private-value"}},
@@ -1343,4 +1385,64 @@ fn geofence_configuration_requires_unique_registered_owners_valid_centers_and_ap
         Manifest::new(invalid).unwrap_err(),
         RejectionReason::InvalidManifest
     );
+}
+
+#[test]
+fn synthetic_battery_percent_is_optional_validated_and_independent_of_energy() {
+    let original: Value = serde_json::from_slice(&receiver_payload(
+        "device-1",
+        "2026-09-01T12:00:00Z",
+        Some("100"),
+    ))
+    .unwrap();
+    for (value, expected) in [
+        (json!({"stringValue":"0"}), Some(0.0)),
+        (json!({"stringValue":"100"}), Some(100.0)),
+        (json!({"stringValue":"82.5"}), Some(82.5)),
+        (json!({"stringValue":"-1"}), None),
+        (json!({"stringValue":"101"}), None),
+        (json!({"stringValue":"NaN"}), None),
+        (json!({"stringValue":"inf"}), None),
+        (json!({"doubleValue":82}), None),
+    ] {
+        let mut payload = original.clone();
+        payload["data"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"key":"BatteryLevel","value":value}));
+        let normalized = normalize(
+            &manifest(),
+            Some(b"device-1"),
+            &serde_json::to_vec(&payload).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(normalized.event.battery_percent.map(f64::from), expected);
+        assert_eq!(
+            normalized.event.to_core().unwrap(),
+            evidence(Some("100")).event.to_core().unwrap()
+        );
+        let retained = serde_json::to_vec(&normalized.event).unwrap();
+        let restored: chargeshare_ingestion::NormalizedEvent =
+            serde_json::from_slice(&retained).unwrap();
+        assert_eq!(restored, normalized.event);
+    }
+    let mut duplicate = original.clone();
+    duplicate["data"].as_array_mut().unwrap().extend([
+        json!({"key":"BatteryLevel","value":{"stringValue":"82"}}),
+        json!({"key":"BatteryLevel","value":{"stringValue":"83"}}),
+    ]);
+    let normalized = normalize(
+        &manifest(),
+        Some(b"device-1"),
+        &serde_json::to_vec(&duplicate).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(normalized.event.battery_percent, None);
+    assert_eq!(
+        normalized.event.to_core().unwrap(),
+        evidence(Some("100")).event.to_core().unwrap()
+    );
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 101.0] {
+        assert!(chargeshare_ingestion::BatteryPercent::try_from(value).is_err());
+    }
 }

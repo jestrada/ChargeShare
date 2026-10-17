@@ -793,3 +793,232 @@ fn reused_transaction_with_changed_signals_refuses_without_mutating_progress() {
     );
     drop(store);
 }
+
+fn battery_record(runtime: &Runtime, time: &str, percent: Value, state: Option<&str>) -> Value {
+    let mut record = runtime.records[0].clone();
+    record["headers"]["txid"] = json!(format!("fictional-{time}-{percent}-{state:?}"));
+    record["payload"]["createdAt"] = json!(time);
+    record["payload"]["data"] = json!([{"key":"Soc","value":percent}]);
+    if let Some(state) = state {
+        record["payload"]["data"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"key":"DetailedChargeState","value":{"detailedChargeStateValue":state}}));
+    }
+    record
+}
+
+#[test]
+fn current_battery_orders_fractional_source_times_outside_sessions_and_survives_replay_restart() {
+    let runtime = Runtime::new();
+    let mut store = runtime.open();
+    assert!(runtime.results(&store).battery_reading.is_none());
+    assert!(runtime.results(&store).charging.is_none());
+    let idle = battery_record(
+        &runtime,
+        "2026-09-01T10:00:00Z",
+        json!({"doubleValue":100}),
+        None,
+    );
+    runtime.ingest(&mut store, 0, &idle).unwrap();
+    assert!(runtime.results(&store).sessions.is_empty());
+    assert_eq!(
+        f64::from(
+            runtime
+                .results(&store)
+                .battery_reading
+                .unwrap()
+                .battery_percent
+        ),
+        100.0
+    );
+    let observations = [
+        (
+            "2026-09-01T11:00:00.9Z",
+            100.0,
+            Some("DetailedChargeStateCharging"),
+        ),
+        ("2026-09-01T11:00:00.900000001Z", 62.5, None),
+        (
+            "2026-09-01T11:00:00.89Z",
+            99.0,
+            Some("DetailedChargeStateComplete"),
+        ),
+    ];
+    for (offset, (time, percent, state)) in observations.into_iter().enumerate() {
+        let record = battery_record(&runtime, time, json!({"doubleValue":percent}), state);
+        runtime
+            .ingest(&mut store, offset as i64 + 1, &record)
+            .unwrap();
+    }
+    let result = runtime.results(&store);
+    let battery = result.battery_reading.as_ref().unwrap();
+    assert_eq!(f64::from(battery.battery_percent), 62.5);
+    assert_eq!(battery.observed_at, "2026-09-01T11:00:00.900000001Z");
+    let charging = result.charging.as_ref().unwrap();
+    assert!(charging.active);
+    assert_eq!(charging.observed_at, "2026-09-01T11:00:00.9Z");
+    let mut duplicate = battery_record(
+        &runtime,
+        observations[1].0,
+        json!({"doubleValue":62.5}),
+        None,
+    );
+    runtime.ingest(&mut store, 2, &duplicate).unwrap();
+    duplicate["headers"]["txid"] = json!("fictional-battery-resend");
+    duplicate["payload"]["isResend"] = json!(true);
+    runtime.ingest(&mut store, 4, &duplicate).unwrap();
+    assert_eq!(runtime.results(&store), result);
+    assert_eq!(
+        store.active_scopes().unwrap()[0]["battery_reading"],
+        serde_json::to_value(battery).unwrap()
+    );
+    let filtered = store
+        .results_for_charger(
+            &OwnerId::new("owner-a").unwrap(),
+            &VehicleId::new("vehicle-a").unwrap(),
+            "fictional-shared-charger",
+        )
+        .unwrap();
+    assert_eq!(filtered.battery_reading, result.battery_reading);
+    assert_eq!(filtered.charging, result.charging);
+    drop(store);
+    assert_eq!(runtime.results(&runtime.open()), result);
+}
+
+#[test]
+fn missing_invalid_duplicate_soc_never_erases_or_refreshes_a_known_reading() {
+    for value in [
+        None,
+        Some(json!({"doubleValue":-1})),
+        Some(json!({"doubleValue":101})),
+        Some(json!({"doubleValue":"NaN"})),
+        Some(json!({"stringValue":"82"})),
+        Some(json!({"doubleValue":null})),
+        Some(json!({"doubleValue":82,"extra":true})),
+        Some(json!({"duplicate":true})),
+    ] {
+        let runtime = Runtime::new();
+        let mut store = runtime.open();
+        let initial = battery_record(
+            &runtime,
+            "2026-09-01T11:00:00Z",
+            json!({"doubleValue":0}),
+            None,
+        );
+        runtime.ingest(&mut store, 0, &initial).unwrap();
+        let before = runtime.results(&store).battery_reading;
+        let mut invalid = battery_record(
+            &runtime,
+            "2026-09-10T11:00:00Z",
+            json!({"doubleValue":99}),
+            Some("DetailedChargeStateCharging"),
+        );
+        match value {
+            None => remove_field(&mut invalid, "Soc"),
+            Some(value) if value.get("duplicate").is_some() => invalid["payload"]["data"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"key":"Soc","value":{"doubleValue":20}})),
+            Some(value) => *field_mut(&mut invalid, "Soc") = value,
+        }
+        runtime.ingest(&mut store, 1, &invalid).unwrap();
+        let result = runtime.results(&store);
+        assert_eq!(result.battery_reading, before);
+        assert_eq!(
+            f64::from(result.battery_reading.unwrap().battery_percent),
+            0.0
+        );
+        assert_eq!(result.charging.unwrap().observed_at, "2026-09-10T11:00:00Z");
+        assert!(
+            result
+                .sessions
+                .iter()
+                .all(|session| session.observed_ac_kwh == "0.000000")
+        );
+    }
+}
+
+#[test]
+fn charging_and_idle_battery_updates_preserve_session_energy_rates_and_independent_state() {
+    let runtime = Runtime::new();
+    let mut store = runtime.open();
+    for (offset, record) in runtime.records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record).unwrap();
+        assert!(runtime.results(&store).battery_reading.is_some());
+    }
+    let before = runtime.results(&store);
+    for (offset, percent) in [100.0, 0.0].into_iter().enumerate() {
+        let record = battery_record(
+            &runtime,
+            &format!("2026-10-0{}T11:00:00Z", offset + 1),
+            json!({"doubleValue":percent}),
+            None,
+        );
+        runtime
+            .ingest(&mut store, offset as i64 + 4, &record)
+            .unwrap();
+        let result = runtime.results(&store);
+        assert_eq!(
+            f64::from(result.battery_reading.unwrap().battery_percent),
+            percent
+        );
+        assert_eq!(result.charging, before.charging);
+        assert_eq!(result.sessions, before.sessions);
+        assert_eq!(result.pricing, before.pricing);
+    }
+    assert_eq!(before.observed_ac_kwh, "0.500000");
+    assert_eq!(before.pricing.display_subtotal.as_deref(), Some("$0.11"));
+}
+
+#[test]
+fn legacy_records_keep_unknown_soc_on_restart_original_redelivery_and_resend() {
+    let runtime = Runtime::new();
+    let mut store = runtime.open();
+    for (offset, record) in runtime.records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record).unwrap();
+    }
+    store.connection.execute_batch("UPDATE event_variants SET event_json = json_remove(event_json, '$.battery_percent');
+        UPDATE live_records SET signal_json = json_remove(signal_json, '$.battery_percent'), disposition_json = json_remove(disposition_json, '$.Accepted.event.battery_percent');").unwrap();
+    let before = runtime.results(&store);
+    assert_eq!(before.battery_reading, None);
+    drop(store);
+    let mut store = runtime.open();
+    for (offset, record) in runtime.records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record).unwrap();
+    }
+    let mut resend = runtime.records[3].clone();
+    resend["headers"]["txid"] = json!("fictional-legacy-terminal-resend");
+    resend["payload"]["isResend"] = json!(true);
+    runtime.ingest(&mut store, 4, &resend).unwrap();
+    assert_eq!(runtime.results(&store), before);
+}
+
+#[test]
+fn live_fixture_covers_never_old_fresh_and_independently_dated_charging() {
+    let runtime = Runtime::new();
+    let mut store = runtime.open();
+    let fixture: Value =
+        serde_json::from_slice(include_bytes!("../../../../dev/fixtures/live.json")).unwrap();
+    let examples = fixture["battery_examples"].as_array().unwrap();
+    runtime
+        .ingest(&mut store, 0, &examples[3]["record"])
+        .unwrap();
+    assert!(runtime.results(&store).battery_reading.is_none());
+    for (offset, example) in examples[..3].iter().enumerate() {
+        runtime
+            .ingest(&mut store, offset as i64 + 1, &example["record"])
+            .unwrap();
+    }
+    let result = runtime.results(&store);
+    assert_eq!(
+        f64::from(result.battery_reading.as_ref().unwrap().battery_percent),
+        62.0
+    );
+    assert_eq!(
+        result.battery_reading.unwrap().observed_at,
+        "2026-09-10T11:52:00Z"
+    );
+    assert!(result.charging.as_ref().unwrap().active);
+    assert_eq!(result.charging.unwrap().observed_at, "2026-09-10T11:48:00Z");
+}

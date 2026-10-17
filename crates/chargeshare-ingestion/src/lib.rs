@@ -26,13 +26,15 @@ pub use runtime_settings::{RuntimeSettings, run_live};
 
 pub use manifest::{Annotation, DeviceMapping, Manifest, ManifestConfig, OwnerGeofence};
 pub use model::{
-    AcceptedEvidence, EvidenceProvenance, INPUT_CONTRACT_VERSION, MAX_ANNOTATIONS,
+    AcceptedEvidence, BatteryPercent, EvidenceProvenance, INPUT_CONTRACT_VERSION, MAX_ANNOTATIONS,
     MAX_MANIFEST_BYTES, MAX_MAPPINGS, MAX_PAYLOAD_BYTES, NORMALIZER_VERSION, NormalizedChargeType,
     NormalizedCounter, NormalizedEvent, NormalizedEventKind, NormalizedLocation, RejectionReason,
     SafeCounterProblem, TIMESTAMP_VERSION,
 };
 pub use normalize::normalize;
 mod replay;
+mod vehicle_status;
+pub use vehicle_status::{BatteryReading, ChargingObservation};
 mod schema;
 mod store;
 

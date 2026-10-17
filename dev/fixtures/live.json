@@ -240,13 +240,92 @@
           {
             "key": "Soc",
             "value": {
-              "doubleValue": 50
+              "doubleValue": 82
             }
           }
         ],
         "createdAt": "2026-09-01T12:10:00.123456789Z",
         "vin": "FICTIONAL-VIN-A",
         "isResend": false
+      }
+    }
+  ],
+  "battery_examples": [
+    {
+      "name": "old",
+      "record": {
+        "headers": {
+          "vin": "FICTIONAL-VIN-A",
+          "txid": "fictional-battery-old",
+          "txtype": "V"
+        },
+        "payload": {
+          "createdAt": "2026-09-01T12:00:00.123456789Z",
+          "data": [
+            {
+              "key": "Soc",
+              "value": {
+                "doubleValue": 100
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "charging",
+      "record": {
+        "headers": {
+          "vin": "FICTIONAL-VIN-A",
+          "txid": "fictional-charging",
+          "txtype": "V"
+        },
+        "payload": {
+          "createdAt": "2026-09-10T11:48:00Z",
+          "data": [
+            {
+              "key": "DetailedChargeState",
+              "value": {
+                "detailedChargeStateValue": "DetailedChargeStateCharging"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "fresh",
+      "record": {
+        "headers": {
+          "vin": "FICTIONAL-VIN-A",
+          "txid": "fictional-battery-fresh",
+          "txtype": "V"
+        },
+        "payload": {
+          "createdAt": "2026-09-10T11:52:00Z",
+          "data": [
+            {
+              "key": "Soc",
+              "value": {
+                "doubleValue": 62
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "never",
+      "record": {
+        "headers": {
+          "vin": "FICTIONAL-VIN-A",
+          "txid": "fictional-no-battery",
+          "txtype": "V"
+        },
+        "payload": {
+          "createdAt": "2026-09-10T12:00:00Z",
+          "data": []
+        }
       }
     }
   ]

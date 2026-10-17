@@ -75,8 +75,26 @@ class DashboardFixtureTests(unittest.TestCase):
         self.assertEqual([scope["chargers"][0]["name"] for scope in fixture["display_registry"]], ["Driveway charger", "Garage charger"])
         self.assertEqual({record["key"] for record in fixture["records"]}, {"vehicle-a", "vehicle-b"})
         self.assertEqual(len(fixture["records"]), 2 * len(self.fixture["records"]))
+        self.assertEqual([scope["color"] for scope in fixture["display_registry"]], ["#B8BDC3", "#16181C"])
+        for vehicle, expected in [("vehicle-a", "82"), ("vehicle-b", "67")]:
+            end = next(record for annotation, record in reversed(list(zip(fixture["manifest"]["annotations"], fixture["records"], strict=True))) if record["key"] == vehicle and annotation["kind"] == "end")
+            self.assertEqual(next(field["value"]["stringValue"] for field in end["payload"]["data"] if field["key"] == "BatteryLevel"), expected)
         for mapping in fixture["manifest"]["mappings"]:
             self.assertTrue(all(record["payload"]["vin"] == mapping["vehicle"] for record in fixture["records"] if record["key"] == mapping["vehicle"]))
+
+    def test_current_old_and_never_reported_examples_keep_independent_source_ages(self):
+        fresh = generate_dashboard_fixture(multiple=True, battery_example="fresh")
+        old = generate_dashboard_fixture(multiple=True, battery_example="old")
+        never = generate_dashboard_fixture(multiple=True, battery_example="never")
+        self.assertEqual(len(fresh["records"]), len(old["records"]) + 2)
+        start, sample = fresh["records"][-2:]
+        self.assertEqual(start["payload"]["data"][0]["value"]["detailedChargeStateValue"], "DetailedChargeStateCharging")
+        self.assertFalse(any(field["key"] == "DetailedChargeState" for field in sample["payload"]["data"]))
+        self.assertEqual(next(field["value"]["stringValue"] for field in sample["payload"]["data"] if field["key"] == "BatteryLevel"), "62")
+        for record, age in [(start, 12), (sample, 8)]:
+            self.assertEqual(fresh["as_of_utc_seconds"] - int(datetime.fromisoformat(record["payload"]["createdAt"]).timestamp()), age * 60)
+        self.assertGreater(old["as_of_utc_seconds"] - int(datetime.fromisoformat(old["records"][-1]["payload"]["createdAt"]).timestamp()), 86400)
+        self.assertFalse(any(field["key"] == "BatteryLevel" for record in never["records"] for field in record["payload"]["data"]))
 
 
 if __name__ == "__main__":

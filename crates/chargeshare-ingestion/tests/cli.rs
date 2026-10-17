@@ -352,14 +352,14 @@ fn reread_requires_finite_explicit_committed_range_and_never_initializes_missing
 
 #[test]
 fn decoded_verification_requires_real_capture_provenance_and_complete_associations() {
-    let fixture = Fixture::new();
+    let fixture = Fixture::in_checkout(Path::new("/tmp"));
     let capture = fixture.runtime.join("decoded-capture.json");
-    let candidate: serde_json::Value =
-        serde_json::from_slice(include_bytes!("fixtures/candidate-v.json")).unwrap();
+    let transport: serde_json::Value =
+        serde_json::from_slice(include_bytes!("../../../dev/fixtures/complete.json")).unwrap();
     let manifest =
         chargeshare_ingestion::Manifest::from_json(include_bytes!("fixtures/manifest-v1.json"))
             .unwrap();
-    let evidence: Vec<_> = candidate["records"]
+    let evidence: Vec<_> = transport["expected"]
         .as_array()
         .unwrap()
         .iter()
@@ -376,7 +376,7 @@ fn decoded_verification_requires_real_capture_provenance_and_complete_associatio
     for (verified, records, succeeds) in [
         (false, evidence.clone(), false),
         (true, serde_json::json!([]), false),
-        (true, candidate["records"].clone(), false),
+        (true, transport["expected"].clone(), false),
         (true, evidence, true),
     ] {
         private_file(
@@ -508,6 +508,50 @@ fn chargie_registry_and_car_commands_use_explicit_private_database_and_safe_outp
             "Car stored; retained recovery pending."
         );
     }
+    let set_color = |vehicle: &str, color: &str| {
+        invoke(&[
+            "car",
+            "set-color",
+            "--database",
+            database.to_str().unwrap(),
+            "--vehicle",
+            vehicle,
+            "--color",
+            color,
+        ])
+    };
+    assert!(set_color("vehicle-a", "#B8BDC3").status.success());
+    assert!(set_color("vehicle-b", "#16181C").status.success());
+    for invalid in ["silver", "#fff", "#12GG56"] {
+        assert_safe_failure(
+            &set_color("vehicle-b", invalid),
+            "registry: conflicting identity or invalid metadata",
+        );
+    }
+    assert_safe_failure(
+        &set_color("missing-car", "#123456"),
+        "registry: conflicting identity or invalid metadata",
+    );
+    let settings = chargeshare_ingestion::RuntimeSettings::from_json(
+        &serde_json::to_vec(&configuration).unwrap(),
+    )
+    .unwrap();
+    let owner = chargeshare_ingestion::Store::open_runtime(&settings, &source).unwrap();
+    assert_safe_failure(
+        &set_color("vehicle-b", "#FFFFFF"),
+        "storage: another writer owns this runtime",
+    );
+    drop(owner);
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let colors = connection
+        .prepare("SELECT color FROM cars ORDER BY vehicle")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(colors, ["#B8BDC3", "#16181C"]);
+    drop(connection);
     let mut invalid = add;
     invalid[5] = "PRIVATE-INPUT-SHOULD-NOT-ECHO";
     let failure = invoke(&invalid);

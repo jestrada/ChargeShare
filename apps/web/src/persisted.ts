@@ -1,4 +1,7 @@
 export type ChargerOption = { id: string; name: string }
+export type BatteryReading = { battery_percent: number; observed_at: string }
+export type ChargingObservation = { active: boolean; observed_at: string }
+export type CarScope = Scope & { name: string; chargers: ChargerOption[]; color: string; battery_reading: BatteryReading | null; charging: ChargingObservation | null }
 export type Scope = { owner: string; vehicle: string; name?: string; chargers?: ChargerOption[] }
 export type RateModel = {
   id: string; plan: string; source_label: string; source_url: string
@@ -49,6 +52,7 @@ export type SessionResult = {
   coverage?: CounterCoverage
 }
 export type ScopedResults = Scope & {
+  battery_reading: BatteryReading | null; charging: ChargingObservation | null
   state: "empty" | "held" | "eligible"
   evidence_boundary: string
   observed_ac_kwh: string
@@ -96,7 +100,7 @@ export const scopes: Scope[] = [
 const qualityReasons = ["InsufficientCounterReadings", "MissingConnectionStart", "MissingConnectionEnd", "MissingBaseline", "MissingTerminalSample", "CounterRollback", "ConflictingEvidence", "InvalidBoundaryOrder", "InvalidCounter(Invalid)", "InvalidCounter(Negative)", "InvalidCounter(UnsupportedPrecision)", "InvalidCounter(Overflow)"]
 const exclusionReasons = ["LocationUnavailable", "LocationAmbiguous", "OtherCharger", "DcEvidence", "AmbiguousChargeType"]
 const classificationReasons = { SharedCharger: ["InsideGeofence"], OtherCharger: ["OutsideGeofence"], Held: ["LocationUnavailable", "LocationAmbiguous"] }
-const resultKeys = ["owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "revision", "provenance", "pricing", "monthly"]
+const resultKeys = ["owner", "vehicle", "battery_reading", "charging", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "revision", "provenance", "pricing", "monthly"]
 const sessionKeys = ["vehicle", "connection", "start_utc_seconds", "end_utc_seconds", "classification", "classification_reason", "evidence_state", "observed_ac_kwh", "eligible_shared_charger_kwh", "quality_flags", "exclusion_reasons", "pricing"]
 const provenanceKeys = ["source", "source_epoch", "input_contract", "mapping_version", "manifest_version", "normalizer_version", "calculation_version", "geofence_version"]
 function hasExactKeys(value: unknown, keys: string[]) {
@@ -109,11 +113,49 @@ function isEligible(session: SessionResult) {
 export function resultPath(scope: Scope, charger?: string) {
   return `/api/poc/owners/${encodeURIComponent(scope.owner)}/vehicles/${encodeURIComponent(scope.vehicle)}/results${charger ? `?charger=${encodeURIComponent(charger)}` : ""}`
 }
-export function parseScopes(value: unknown): { synthetic_only: boolean; scopes: Scope[] } {
-  const object = value as { synthetic_only: boolean; scopes: Scope[] }
+function sourceTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|\+00:00)$/.test(value)) return false
+  const time = new Date(value)
+  return Number.isFinite(time.getTime()) && time.toISOString().slice(0, 19) === value.slice(0, 19)
+}
+function validBatteryReading(value: unknown): value is BatteryReading | null {
+  if (value === null) return true
+  const reading = value as BatteryReading
+  return hasExactKeys(reading, ["battery_percent", "observed_at"]) &&
+    typeof reading.battery_percent === "number" && Number.isFinite(reading.battery_percent) && reading.battery_percent >= 0 && reading.battery_percent <= 100 && sourceTimestamp(reading.observed_at)
+}
+function validCharging(value: unknown): value is ChargingObservation | null {
+  if (value === null) return true
+  const state = value as ChargingObservation
+  return hasExactKeys(state, ["active", "observed_at"]) && typeof state.active === "boolean" && sourceTimestamp(state.observed_at)
+}
+export function retainCarReadings(previous: CarScope[], next: CarScope[]): CarScope[] {
+  return next.map(car => {
+    const known = previous.find(value => value.owner === car.owner && value.vehicle === car.vehicle)
+    return { ...car, battery_reading: car.battery_reading ?? known?.battery_reading ?? null, charging: car.charging ?? known?.charging ?? null }
+  })
+}
+export function readingAge(observedAt: string, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - Date.parse(observedAt)) / 1000))
+  if (seconds < 60) return "just now"
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} hr ago`
+  const days = Math.floor(seconds / 86400)
+  return `${days} ${days === 1 ? "day" : "days"} ago`
+}
+export function carArtwork(color: string): "silver" | "black" | "silhouette" {
+  const channels = [1, 3, 5].map(start => parseInt(color.slice(start, start + 2), 16))
+  const brightest = Math.max(...channels)
+  const darkest = Math.min(...channels)
+  if (brightest <= 64) return "black"
+  if (darkest >= 128 && brightest - darkest <= 32) return "silver"
+  return "silhouette"
+}
+export function parseScopes(value: unknown): { synthetic_only: boolean; scopes: CarScope[] } {
+  const object = value as { synthetic_only: boolean; scopes: CarScope[] }
   if (!hasExactKeys(object, ["synthetic_only", "scopes"]) || typeof object.synthetic_only !== "boolean" ||
       !Array.isArray(object.scopes) || object.scopes.length > 256 ||
-      object.scopes.some(scope => !hasExactKeys(scope, scope.name === undefined ? ["owner", "vehicle"] : ["owner", "vehicle", "name", "chargers"]) || !alias(scope.owner) || !alias(scope.vehicle) || (scope.name !== undefined && (!displayName(scope.name) || !chargerOptions(scope.chargers)))) ||
+      object.scopes.some(scope => !hasExactKeys(scope, ["owner", "vehicle", "name", "chargers", "color", "battery_reading", "charging"]) || !alias(scope.owner) || !alias(scope.vehicle) || !displayName(scope.name) || !chargerOptions(scope.chargers) || typeof scope.color !== "string" || !/^#[0-9A-Fa-f]{6}$/.test(scope.color) || !validBatteryReading(scope.battery_reading) || !validCharging(scope.charging)) ||
       new Set(object.scopes.map(scope => scope.vehicle)).size !== object.scopes.length) {
     throw new Error("Persisted scopes unavailable")
   }
@@ -123,7 +165,7 @@ export function parseResults(value: unknown, scope: Scope): ScopedResults {
   const object = value as ScopedResults
   const energy = (value: unknown) => typeof value === "string" && /^\d+\.\d{6}$/.test(value)
   const reasons = (value: unknown, allowed: string[]) => Array.isArray(value) && value.every(reason => allowed.includes(reason))
-  if (!hasExactKeys(object, object.registry ? [...resultKeys, "registry"] : resultKeys) || object.owner !== scope.owner || object.vehicle !== scope.vehicle ||
+  if (!hasExactKeys(object, object.registry ? [...resultKeys, "registry"] : resultKeys) || object.owner !== scope.owner || object.vehicle !== scope.vehicle || !validBatteryReading(object.battery_reading) || !validCharging(object.charging) ||
       !["empty", "held", "eligible"].includes(object.state) || !energy(object.observed_ac_kwh) || !energy(object.eligible_shared_charger_kwh) ||
       !["Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated", "Vehicle-reported AC input counter energy; physical accuracy unvalidated"].includes(object.evidence_boundary) ||
       typeof object.revision !== "string" || !/^results-v2-[a-f0-9]{16}$/.test(object.revision) ||

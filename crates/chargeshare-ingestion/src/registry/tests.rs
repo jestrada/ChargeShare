@@ -135,6 +135,11 @@ impl Runtime {
                 let mut record = record.clone();
                 record["headers"]["vin"] = json!("FICTIONAL-VIN-B");
                 record["payload"]["vin"] = json!("FICTIONAL-VIN-B");
+                for field in record["payload"]["data"].as_array_mut().unwrap() {
+                    if field["key"] == "Soc" {
+                        field["value"]["doubleValue"] = json!(67);
+                    }
+                }
                 record
             })
             .collect()
@@ -1083,7 +1088,7 @@ fn cpsf_assignment_replays_winter_acceptance_cost_monthly_totals_and_provenance(
             .connection
             .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
             .unwrap(),
-        5
+        6
     );
     let result = Runtime::result(&store, "owner-a", "vehicle-a");
     assert_ne!(result.revision, sample.revision);
@@ -1355,7 +1360,8 @@ fn schema_four_database_migrates_in_place_preserving_existing_prices_evidence_an
     }
     let before = Runtime::result(&store, "owner-a", "vehicle-a");
     let rows = retained_rows(&store);
-    store.connection.execute_batch("DROP TABLE charger_rate_assignments;
+    store.connection.execute_batch("ALTER TABLE cars DROP COLUMN color;
+        DROP TABLE charger_rate_assignments;
         ALTER TABLE chargers DROP COLUMN active_rate_version_id;
         ALTER TABLE runtime_metadata RENAME TO current_metadata;
         CREATE TABLE runtime_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton = 1), schema_version INTEGER NOT NULL CHECK(schema_version = 4), manifest_json TEXT NOT NULL, source_json TEXT NOT NULL) STRICT;
@@ -1363,13 +1369,24 @@ fn schema_four_database_migrates_in_place_preserving_existing_prices_evidence_an
         DROP TABLE current_metadata;
         PRAGMA user_version = 4;").unwrap();
     drop(store);
+    assert_eq!(schema_version(&runtime.bootstrap.database), 4);
+    startup(&private_config(&runtime, |input| {
+        input.as_object_mut().unwrap().remove("mappings");
+        input.as_object_mut().unwrap().remove("shared_charger");
+    }))
+    .unwrap();
+    assert_eq!(schema_version(&runtime.bootstrap.database), 6);
     let store = runtime.open();
     assert_eq!(
         store
             .connection
             .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
             .unwrap(),
-        5
+        6
+    );
+    assert_eq!(
+        store.active_scopes().unwrap()[0]["color"],
+        DEFAULT_CAR_COLOR
     );
     assert_eq!(retained_rows(&store), rows);
     assert_eq!(Runtime::result(&store, "owner-a", "vehicle-a"), before);
@@ -1508,7 +1525,8 @@ fn invalid_legacy_rate_reference_rolls_back_schema_five_migration_in_place() {
     let runtime = Runtime::new();
     let mut store = runtime.legacy();
     runtime.migrate(&mut store);
-    store.connection.execute_batch("DROP TABLE charger_rate_assignments;
+    store.connection.execute_batch("ALTER TABLE cars DROP COLUMN color;
+        DROP TABLE charger_rate_assignments;
         ALTER TABLE chargers DROP COLUMN active_rate_version_id;
         UPDATE chargers SET rate_plan = '[\"missing-version\"]';
         ALTER TABLE runtime_metadata RENAME TO current_metadata;
@@ -1546,6 +1564,179 @@ fn invalid_legacy_rate_reference_rolls_back_schema_five_migration_in_place() {
         json!([["pge-ev2-a-2026-03-v1", rate]]),
         before["rate_model_versions"]
     );
+}
+
+fn downgrade_car_colors(store: &Store) {
+    store.connection.execute_batch("ALTER TABLE cars DROP COLUMN color;
+        ALTER TABLE runtime_metadata RENAME TO color_current_metadata;
+        CREATE TABLE runtime_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton = 1), schema_version INTEGER NOT NULL CHECK(schema_version = 5), manifest_json TEXT NOT NULL, source_json TEXT NOT NULL) STRICT;
+        INSERT INTO runtime_metadata SELECT singleton,5,manifest_json,source_json FROM color_current_metadata;
+        DROP TABLE color_current_metadata;
+        PRAGMA user_version = 5;").unwrap();
+}
+
+#[test]
+fn startup_migrates_schema_five_colors_preserving_rates_evidence_and_neutral_defaults() {
+    let runtime = Runtime::new();
+    let mut store = runtime.legacy();
+    runtime.migrate(&mut store);
+    for (offset, record) in runtime.records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record);
+    }
+    drop(store);
+    Store::assign_charger_rate(
+        &runtime.bootstrap.database,
+        "fictional-shared-charger",
+        1772438400,
+        &cpsf_definition(),
+    )
+    .unwrap();
+    let store = runtime.open();
+    let evidence = retained_rows(&store);
+    let result = Runtime::result(&store, "owner-a", "vehicle-a");
+    let scopes = store.active_scopes().unwrap();
+    let rates = json(
+        &crate::charger_rates::load_assignments(&store.connection, "fictional-shared-charger")
+            .unwrap(),
+    )
+    .unwrap();
+    downgrade_car_colors(&store);
+    drop(store);
+    assert_eq!(schema_version(&runtime.bootstrap.database), 5);
+    let config = private_config(&runtime, |input| {
+        input.as_object_mut().unwrap().remove("mappings");
+        input.as_object_mut().unwrap().remove("shared_charger");
+        input.as_object_mut().unwrap().remove("registry_setup");
+    });
+    startup(&config).unwrap();
+    assert_eq!(schema_version(&runtime.bootstrap.database), 6);
+    let migrated = database_dump(&runtime.bootstrap.database);
+    startup(&config).unwrap();
+    assert_eq!(database_dump(&runtime.bootstrap.database), migrated);
+    let store = runtime.open();
+    assert_eq!(store.active_scopes().unwrap(), scopes);
+    assert_eq!(Runtime::result(&store, "owner-a", "vehicle-a"), result);
+    assert_eq!(retained_rows(&store), evidence);
+    assert_eq!(
+        json(
+            &crate::charger_rates::load_assignments(&store.connection, "fictional-shared-charger")
+                .unwrap()
+        )
+        .unwrap(),
+        rates
+    );
+    assert_eq!(store.active_scopes().unwrap()[0]["color"], "#808080");
+    assert_eq!(
+        store
+            .connection
+            .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+            .unwrap(),
+        6
+    );
+    drop(store);
+    Store::add_car(&runtime.bootstrap.database, runtime.second()).unwrap();
+    let store = runtime.open();
+    assert_eq!(
+        store
+            .registry
+            .as_ref()
+            .unwrap()
+            .car("vehicle-b")
+            .unwrap()
+            .color,
+        DEFAULT_CAR_COLOR
+    );
+    assert!(matches!(
+        Store::set_car_color(&runtime.bootstrap.database, "vehicle-a", "#B8BDC3"),
+        Err(IngestionError::OwnershipConflict)
+    ));
+    drop(store);
+    for invalid in [
+        "",
+        "silver",
+        "#fff",
+        "#1234567",
+        "#12GG56",
+        " #123456",
+        "#123456\n",
+    ] {
+        assert!(Store::set_car_color(&runtime.bootstrap.database, "vehicle-a", invalid).is_err());
+    }
+    assert!(Store::set_car_color(&runtime.bootstrap.database, "missing-car", "#123456").is_err());
+    Store::set_car_color(&runtime.bootstrap.database, "vehicle-a", "#b8BdC3").unwrap();
+    Store::set_car_color(&runtime.bootstrap.database, "vehicle-b", "#16181C").unwrap();
+    let store = runtime.open();
+    assert_eq!(store.active_scopes().unwrap()[0]["color"], "#b8BdC3");
+    assert_eq!(
+        store
+            .registry
+            .as_ref()
+            .unwrap()
+            .car("vehicle-b")
+            .unwrap()
+            .color,
+        "#16181C"
+    );
+    assert!(
+        store
+            .connection
+            .execute("UPDATE cars SET color = '#zzzzzz'", [])
+            .is_err()
+    );
+    assert_eq!(
+        retained_rows(&store)["event_variants"],
+        evidence["event_variants"]
+    );
+}
+
+#[test]
+fn failed_startup_color_migration_rolls_back_schema_registry_evidence_and_rates() {
+    let runtime = Runtime::new();
+    let mut store = runtime.legacy();
+    runtime.migrate(&mut store);
+    downgrade_car_colors(&store);
+    let before = retained_rows(&store);
+    let rates = json(
+        &crate::charger_rates::load_assignments(&store.connection, "fictional-shared-charger")
+            .unwrap(),
+    )
+    .unwrap();
+    store
+        .connection
+        .execute_batch("CREATE TABLE color_legacy_metadata(synthetic_failure INTEGER);")
+        .unwrap();
+    drop(store);
+    assert!(startup(&private_config(&runtime, |_| {})).is_err());
+    let connection = Connection::open(&runtime.bootstrap.database).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+            .unwrap(),
+        5
+    );
+    assert_eq!(
+        connection
+            .query_row::<i64, _, _>(
+                "SELECT count(*) FROM pragma_table_info('cars') WHERE name='color'",
+                [],
+                |row| row.get(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        json(
+            &crate::charger_rates::load_assignments(&connection, "fictional-shared-charger")
+                .unwrap()
+        )
+        .unwrap(),
+        rates
+    );
+    connection
+        .execute_batch("DROP TABLE color_legacy_metadata")
+        .unwrap();
+    drop(connection);
+    assert_eq!(retained_rows(&runtime.open()), before);
 }
 
 fn private_config(runtime: &Runtime, edit: impl FnOnce(&mut Value)) -> Vec<u8> {
@@ -1606,15 +1797,17 @@ fn schema_version(path: &std::path::Path) -> i64 {
 }
 
 #[test]
-fn startup_bootstraps_legacy_registry_through_schema_five_and_repeats_as_a_no_op() {
+fn startup_bootstraps_legacy_registry_through_schema_six_and_repeats_as_a_no_op() {
     let runtime = Runtime::new();
     let mut store = runtime.legacy();
     runtime.ingest_legacy_records(&mut store);
     let before = retained_rows(&store);
     drop(store);
-    let config = private_config(&runtime, |_| {});
+    let config = private_config(&runtime, |input| {
+        input.as_object_mut().unwrap().remove("registry_setup");
+    });
     startup(&config).unwrap();
-    assert_eq!(schema_version(&runtime.bootstrap.database), 5);
+    assert_eq!(schema_version(&runtime.bootstrap.database), 6);
     let migrated = database_dump(&runtime.bootstrap.database);
     startup(&config).unwrap();
     assert_eq!(database_dump(&runtime.bootstrap.database), migrated);
@@ -1626,6 +1819,7 @@ fn startup_bootstraps_legacy_registry_through_schema_five_and_repeats_as_a_no_op
     assert_eq!(charger.owner, "owner-a");
     assert!(charger.active_rate_version_id.is_some());
     assert_eq!(registry.cars[0].registration.name, "vehicle-a");
+    assert_eq!(registry.cars[0].color, DEFAULT_CAR_COLOR);
     assert_eq!(
         Runtime::result(&store, "owner-a", "vehicle-a").observed_ac_kwh,
         "0.500000"
@@ -1636,13 +1830,7 @@ fn startup_bootstraps_legacy_registry_through_schema_five_and_repeats_as_a_no_op
 fn startup_uses_declared_private_setup_and_runtime_settings_ignore_it() {
     let runtime = Runtime::new();
     drop(runtime.legacy());
-    let config = private_config(&runtime, |input| {
-        input["registry_setup"] = json!({
-            "car_names": {"vehicle-a": "Car A"},
-            "charger_name": "Charger A",
-            "charger_owner": "charger-owner"
-        });
-    });
+    let config = private_config(&runtime, |_| {});
     startup(&config).unwrap();
     let store = runtime.open();
     let registry = store.registry.as_ref().unwrap();
@@ -1734,6 +1922,7 @@ fn startup_refuses_without_legacy_input_or_with_ambiguous_charger_owner() {
         Err(IngestionError::MigrationInputRequired)
     );
     let two_owners = private_config(&runtime, |input| {
+        input.as_object_mut().unwrap().remove("registry_setup");
         input["mappings"].as_array_mut().unwrap().push(json!({
             "device": "FICTIONAL-VIN-B", "owner": "owner-b", "vehicle": "vehicle-b"
         }));

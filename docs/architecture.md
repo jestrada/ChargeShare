@@ -37,7 +37,8 @@ flowchart LR
     kafka --> live
     runtime_settings["Private RuntimeSettings: Kafka/source + path/port + legacy rate validation"] --> live
     bootstrap["Legacy RegistryBootstrap + names/charger owner (explicit or startup defaults)"] --> migration["Transactional migration: setup command or live startup"] --> registry[("SQLite: cars + chargers + car_chargers + immutable identity/assignment/geofence versions")]
-    commands["chargie car add / rename / remove"] --> registry
+    commands["chargie car add / rename / remove / set-color"] --> registry
+    color_migration["Startup: transactional registry 5 → 6, neutral cars.color"] --> registry
     rate_setup["Stopped-owner explicit charger + active_from + typed rate JSON"] --> rates[("SQLite: immutable rate_model_versions.config_json")]
     rate_setup --> assignments[("SQLite: charger_rate_assignments + chargers.active_rate_version_id")]
     registry --> assignments
@@ -49,8 +50,8 @@ flowchart LR
     kafka --> recovery
     recovery --> sqlite
     subgraph owner["Single Rust owner: serve or live"]
-        normalize["Frozen mapping + normalized location/counters"] --> sqlite[("SQLite: evidence + config versions + progress")]
-        live["Live v2: state + classified location/time + odometer; drop coordinates"] --> sqlite
+        normalize["Frozen mapping + normalized location/counters + optional SOC"] --> sqlite[("SQLite: event_json / signal_json + config versions + progress")]
+        live["Live v2: state + classified location/time + odometer + optional SOC; drop coordinates"] --> sqlite
         preserved["Preserved dataset + original source marker"] --> rebuild["Stopped-owner rebuild: validate retained original offsets"]
         kafka --> rebuild
         rebuild --> live
@@ -58,6 +59,10 @@ flowchart LR
         config["Owner charger config + immutable rate histories"] --> sqlite
         sqlite --> replay["Scoped core replay"]
         replay --> classification["Core: automatic session location classification"]
+        sqlite --> vehicle_status["Rust: latest valid battery + independent charge state by source timestamp"]
+        vehicle_status --> results
+        vehicle_status --> api
+        registry --> api
         classification --> results["Committed energy + eligibility + quotes + monthly history + provenance"]
         classification --> pricing["Core: observed-window coverage + local-time/assignment splits + exact quotes + holds"]
         sqlite --> pricing
@@ -66,7 +71,7 @@ flowchart LR
         pricing --> results
         results --> api["Scoped HTTP: host loopback 8788"]
     end
-    api --> persisted["Persisted browser: 5174, D3 monthly bars + named car/charger selectors + no-active-car state"]
+    api --> persisted["Persisted browser: 5174, colored car cards + battery/state ages + D3 monthly bars + charger selector + no-active-car state"]
     subgraph fixture["Independent fixture preview"]
         demo["Fictional events + sample rates"] --> offline["Core exact offline pricing"]
         offline --> fixture_api["Fixture API: loopback 8787"]
@@ -393,8 +398,8 @@ database; synthetic ingestion retains its schema-three contract. It renames
 `registrations` to `cars`, retargeting retained foreign keys, recovers private
 device identities from the original validated bootstrap, sets explicit car names
 and records migration time as UTC creation time. Optional metadata starts null.
-The setup script explicitly names the current charger and declares its owner;
-ownership is never inferred from car ownership. The current physical charger is
+The setup script requires an explicit current charger name and owner; automatic
+startup uses the unambiguous defaults below. The current physical charger is
 seeded once, preserving every selected immutable rate version and pricing holds
 when no rates were selected. Original evidence, deliveries, source identity,
 partition progress, adapter state, deduplication and historical versions remain.
@@ -405,9 +410,12 @@ startup ignores legacy registry sections and never restores membership from JSON
 `live` startup applies pending migrations before opening the runtime store. When
 the registry is empty and the private config still carries the legacy `mappings`
 and `shared_charger` sections, startup runs the same single migration transaction
-(registry seed, then the schema-five charger-rate migration). Names and charger
-owner come from an optional private `registry_setup` section
-(`car_names`, `charger_name`, `charger_owner`); otherwise each car is named by its
+(registry seed to schema four, charger rates to five, then car colors to six).
+Existing registries run any pending rate and color steps in order under the same
+ownership lock before loading the runtime; an existing schema-five database
+needs no legacy bootstrap config. Names and charger owner come from an optional
+private `registry_setup` section (`car_names`, `charger_name`, `charger_owner`);
+otherwise each car is named by its
 vehicle alias, the charger is `Home charger` and the charger owner is the cars'
 owner only when every legacy car has the same owner. Several owners without a
 declared `charger_owner`, or an empty registry without legacy sections, refuse
@@ -452,12 +460,51 @@ offset gaps, truncated ranges or expiry within the captured range refuse. Earlie
 expired history stays unavailable; no boundaries or completeness are invented.
 Seven-day retention describes availability, not guaranteed complete coverage.
 
+Registry schema six adds validated `cars.color` in `#RRGGBB` form, defaulting to
+neutral gray (`#808080`) for existing and new cars. Startup runs the transactional
+five-to-six migration immediately after the four-to-five rate step under the
+existing ownership lock. Failed migrations roll back. The stopped-owner
+`chargie car set-color --database --vehicle --color` changes only display color;
+identities, recovery, retained evidence and charger rate assignments are preserved.
+
+Normalized synthetic `BatteryLevel.stringValue` and live `Soc.doubleValue` retain
+optional finite SOC from 0 through 100 in existing `event_variants.event_json`
+and `live_records.signal_json`. Invalid or duplicate SOC becomes unknown
+without changing counters or boundaries. Legacy JSON without SOC remains unknown;
+synthetic redelivery and live redelivery/resend preserve that unknown value
+without backfilling.
+SOC is display evidence and never enters core energy or pricing calculations.
+
+Rust derives current battery readings from every retained live signal, including
+SOC-only reports outside sessions, and from synthetic event JSON. Newest valid
+source time wins using seconds and nanoseconds, independently of delivery order,
+replay, session boundaries, month, charger and pricing eligibility. Equal-time
+observations use stable JSON ordering for deterministic selection. Invalid or
+missing SOC does not erase a prior valid reading or refresh its timestamp.
+Explicit charge state is selected independently; Unknown does not replace a known
+state. Synthetic normalization retains optional `charging` in event JSON from
+DetailedChargeState, without inferring charging from session annotations.
+No additional table, column, migration or cached summary is stored.
+
+`/api/poc/scopes` returns each active available car's `color`,
+`battery_reading: {battery_percent: number, observed_at: string}|null` and
+`charging: {active: boolean, observed_at: string}|null`. Scoped results return the
+same unfiltered observations. Source UTC timestamp strings preserve fractional
+precision. TypeScript validates all fields before rendering native button cards
+with selected/focus states. The browser updates relative ages every second and
+keeps known observations across fetch failures or absent readings. A Charging
+badge shows its own source age, never refreshed by an unrelated SOC report.
+Silver-like neutral colors use the CC0 silver photo cutout, dark colors use the
+black cutout and other colors use the traced SVG mask with `var(--car-color)`;
+[credits](../apps/web/public/cars/CREDITS.md) identify the sources. Car selection
+reuses the scope transition, updates the URL and resets to All chargers.
+
 The API provides display names and linked charger choices alongside alias scope
 keys, filters results by an optional charger ID, and retains per-session charger
 and immutable version provenance, including held/ambiguous matches and outside
-classification versions. The dashboard displays names in selectors,
-headings and session/configuration details, supports one or all chargers, and
-shows an empty state with no active cars. Names and selection do not move owner
+classification versions. The dashboard displays names in car cards, the charger
+selector, headings and session/configuration details, supports one or all chargers, and
+shows an empty state with no active cars. Names, colors and selection do not move owner
 ledgers or change the measurement/estimate boundary. Registry values and private
 migration inputs stay outside the checkout; public fixtures and screenshots use
 explicitly synthetic identities, coordinates and public sample tariffs.

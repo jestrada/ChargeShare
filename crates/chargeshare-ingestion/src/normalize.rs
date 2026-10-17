@@ -76,7 +76,7 @@ pub fn normalize(
     let annotation = manifest
         .annotation(device, time)
         .ok_or(RejectionReason::MissingAssociation)?;
-    let (counter, location) = decode_samples(payload.data)?;
+    let samples = decode_samples(payload.data)?;
     let config = manifest.config();
     let evidence = AcceptedEvidence {
         event: NormalizedEvent {
@@ -86,8 +86,10 @@ pub fn normalize(
             time,
             kind: annotation.kind,
             charge_type: annotation.charge_type,
-            counter,
-            location,
+            counter: samples.counter,
+            battery_percent: samples.battery_percent,
+            charging: samples.charging,
+            location: samples.location,
         },
         provenance: EvidenceProvenance {
             device: mapping.device.clone(),
@@ -105,24 +107,42 @@ pub fn normalize(
     Ok(evidence)
 }
 
-fn decode_samples(
-    fields: Vec<ReceiverField>,
-) -> Result<(Option<NormalizedCounter>, Option<NormalizedLocation>), RejectionReason> {
+#[derive(Default)]
+struct Samples {
+    counter: Option<NormalizedCounter>,
+    battery_percent: Option<crate::BatteryPercent>,
+    charging: Option<bool>,
+    location: Option<NormalizedLocation>,
+}
+
+fn decode_samples(fields: Vec<ReceiverField>) -> Result<Samples, RejectionReason> {
     let mut observed_keys = BTreeSet::new();
-    let mut counter = None;
-    let mut location = None;
+    let mut samples = Samples::default();
     for field in fields {
         if !observed_keys.insert(field.key) {
+            if field.key == ReceiverFieldKey::BatteryLevel {
+                samples.battery_percent = None;
+                continue;
+            }
             return Err(RejectionReason::DuplicateSourceField);
         }
         if field.key == ReceiverFieldKey::Location {
-            location = Some(decode_location(&field.value));
+            samples.location = Some(decode_location(&field.value));
+            continue;
+        }
+        if field.key == ReceiverFieldKey::BatteryLevel {
+            samples.battery_percent = serde_json::from_str::<ReceiverValue>(field.value.get())
+                .ok()
+                .filter(|value| value.detailed_charge_state_value.is_none())
+                .and_then(|value| value.string_value)
+                .and_then(|value| value.parse::<f64>().ok())
+                .and_then(|value| crate::BatteryPercent::try_from(value).ok());
             continue;
         }
         let value: ReceiverValue = serde_json::from_str(field.value.get())
             .map_err(|_| RejectionReason::UnsupportedPayload)?;
         match field.key {
-            ReceiverFieldKey::VehicleName | ReceiverFieldKey::BatteryLevel => {
+            ReceiverFieldKey::VehicleName => {
                 if value.string_value.is_none() || value.detailed_charge_state_value.is_some() {
                     return Err(RejectionReason::UnsupportedPayload);
                 }
@@ -131,6 +151,9 @@ fn decode_samples(
                 if value.detailed_charge_state_value.is_none() || value.string_value.is_some() {
                     return Err(RejectionReason::UnsupportedPayload);
                 }
+                samples.charging = value
+                    .detailed_charge_state_value
+                    .map(|state| matches!(state, ReceiverChargeState::Charging));
             }
             ReceiverFieldKey::ACChargingEnergyIn => {
                 let counter_value = value
@@ -139,12 +162,12 @@ fn decode_samples(
                 if value.detailed_charge_state_value.is_some() {
                     return Err(RejectionReason::UnsupportedPayload);
                 }
-                counter = Some(NormalizedCounter::parse_kwh(&counter_value));
+                samples.counter = Some(NormalizedCounter::parse_kwh(&counter_value));
             }
-            ReceiverFieldKey::Location => unreachable!(),
+            ReceiverFieldKey::Location | ReceiverFieldKey::BatteryLevel => unreachable!(),
         }
     }
-    Ok((counter, location))
+    Ok(samples)
 }
 
 #[derive(Deserialize)]

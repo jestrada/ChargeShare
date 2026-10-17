@@ -6,12 +6,12 @@ synthetic telemetry and labeled public sample rates. An
 [opt-in live adapter](docs/architecture.md#live-adapter) is also implemented;
 vehicle and account setup remain separate.
 
-![ChargeShare desktop dashboard showing monthly charging with synthetic data](docs/images/dashboard-desktop.png)
+![ChargeShare desktop dashboard with silver and black car cards and synthetic charging data](docs/images/dashboard-desktop.png)
 
 <details>
 <summary>Mobile preview (synthetic data)</summary>
 
-<img src="docs/images/dashboard-mobile.png" alt="ChargeShare mobile dashboard with synthetic charging data" width="240">
+<img src="docs/images/dashboard-mobile.png" alt="ChargeShare mobile dashboard with colored car cards and synthetic charging data" width="240">
 
 </details>
 
@@ -63,8 +63,18 @@ and check the receiver → Kafka → SQLite → HTTP path:
 nix develop --no-update-lock-file -c bash scripts/dev/poc.sh check
 ```
 
-Choose a named fictional car, then one charger or all chargers. Bars default to
-estimated cost; switch to kWh and hover, tap or select a day for its breakdown.
+Select a fictional car card, then one charger or all chargers. Each card shows
+its configured color, latest valid battery percentage and relative age, including
+reports before a charging session exists. The age updates between refreshes;
+readings remain visible after days without telemetry or a failed fetch.
+“Unavailable” means no valid reading has been reported. A Charging badge shows
+explicit charge-state telemetry with its own age; a newer battery report does
+not refresh that state. Month and charger filters do not affect these readings.
+Silver-like and dark colors use CC0 photo cutouts; other colors use a tinted
+traced silhouette ([artwork credits](apps/web/public/cars/CREDITS.md)).
+Selecting another car resets to All chargers.
+Bars default to estimated cost; switch to kWh and hover, tap or select a day for
+its breakdown.
 Configuration, sample-rate provenance and session quality details are below the chart.
 
 Restart or stop while preserving evidence:
@@ -87,7 +97,8 @@ The independent fixture preview uses local port **5173** while the stack runs.
 ### Screenshot dataset without Docker
 
 [The deterministic generator](dev/fixtures/dashboard.py) creates June–September
-2026 charging history for named fictional Model 3 and Model Y cars and named
+2026 charging history for named fictional Model 3 and Model Y cars, silver and
+black card artwork with distinct current battery values, and named
 driveway and garage chargers, using existing fictional coordinates and labeled
 public sample rates.
 **Synthetic data for demos and screenshots only; not real.**
@@ -96,17 +107,21 @@ With the Rust/Node tools and web dependencies installed, run from the repository
 root. Use a fresh output directory for each export:
 
 ```sh
-mkdir -p .cache
-python3 dev/fixtures/dashboard.py > .cache/dashboard-input.json
-cargo run --locked -p chargeshare-ingestion --example dashboard-fixture -- .cache/dashboard-input.json .cache/dashboard-demo
-python3 dev/fixtures/dashboard.py --serve .cache/dashboard-demo/http
+python3 dev/fixtures/dashboard.py > /tmp/chargeshare-dashboard-input.json
+cargo run --locked -p chargeshare-ingestion --example dashboard-fixture -- /tmp/chargeshare-dashboard-input.json /tmp/chargeshare-dashboard-demo
+python3 dev/fixtures/dashboard.py --serve /tmp/chargeshare-dashboard-demo/http
 ```
 
 In a second terminal, run `npm --prefix apps/web run dev:persisted` and open local
 port **5174**. The Rust example ingests decoded fictional records into SQLite and
 exports the persisted dashboard's usual JSON, with monthly history calculated as
-of September 30, 2026. The HTTP server serves only that snapshot; receiver/Kafka
-transport is not exercised. Generated data and SQLite stay in ignored `.cache/`.
+of September 30, 2026. The default fixture includes a fresh battery reading and
+an independently dated Charging state on the silver car, plus an older reading
+on the black car. Use `--battery-example old` or `--battery-example never` on the
+generator for stale and never-reported examples. Relative ages use the browser
+clock, so this fixed snapshot naturally ages after its fixture date. The HTTP
+server serves only that snapshot; receiver/Kafka transport is not exercised. Generated data and SQLite stay under `/tmp`, outside
+the checkout. The silver/black and battery mappings are fixture-only.
 
 ### Live registry migration and car commands
 
@@ -115,12 +130,15 @@ model definitions. Live cars, display names, charger geofences, charger ownershi
 rate selections and assignments belong to the SQLite registry. The legacy
 `mappings` and `shared_charger` sections are bootstrap input only.
 
-`live` startup performs this migration automatically when the registry is empty
-and the private config still has the legacy sections (see the
-[registry contract](docs/architecture.md#live-registry-and-retained-recovery) for
-default names and charger owner). To name things explicitly instead, while the
-ingestion owner is stopped, preserve a private database/source-marker backup and
-run the setup script against the existing private database:
+`live` startup builds a missing registry automatically from the legacy sections,
+then applies charger-rate and car-color migrations in order through schema six.
+Existing schema-four/five registries upgrade without legacy config. The synthetic
+[example config](dev/live-config.example.json) shows optional `registry_setup`
+names and charger owner; omitted fields use the
+[registry defaults](docs/architecture.md#live-registry-and-retained-recovery).
+To name things explicitly instead, while the ingestion owner is stopped, preserve
+a private database/source-marker backup and run the setup script against the
+existing private database:
 
 ```sh
 python3 scripts/dev/registry_setup.py --database "<private-database>" \
@@ -131,6 +149,7 @@ chargie car add --database "<private-database>" \
   --vin "<vin>" --vehicle vehicle-b --owner owner-b \
   --name "Model Y" --make Tesla --model "Model Y" --charger "<existing-charger-id>"
 chargie car rename --database "<private-database>" --vehicle vehicle-b --name "Neighbor's Model Y"
+chargie car set-color --database "<private-database>" --vehicle vehicle-b --color '#16181C'
 chargie car remove --database "<private-database>" --vehicle vehicle-b
 ```
 
@@ -142,6 +161,10 @@ range for that car. Ordinary progress and previous cars are preserved. Seven-day
 retention does not guarantee seven complete days. The new car becomes selectable
 after recovery and handoff complete. Rename updates only the display name; remove
 hides a car while preserving its history and continuing telemetry ingestion.
+Car colors accept exactly `#RRGGBB`; existing and new cars default to neutral gray
+(`#808080`). Startup automatically migrates registry schema five to six under
+the ownership lock and a transaction, preserving evidence and charger rate
+assignments. Set colors while ingestion is stopped, then restart.
 With no active cars the dashboard shows an empty state. No Pi or live database
 access is required for repository tests; private migration is a separate operator
 action. See the [registry contract](docs/architecture.md#live-registry-and-retained-recovery).
