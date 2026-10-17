@@ -964,6 +964,11 @@ fn runtime_settings_ignore_legacy_membership_and_fixed_contract_changes_still_re
         json!([{"device":"FICTIONAL-UNADMITTED","vehicle":"unadmitted","owner":"owner-b"}]);
     input["shared_charger"] = json!({"invalid":"ignored legacy section"});
     let settings = crate::RuntimeSettings::from_json(&serde_json::to_vec(&input).unwrap()).unwrap();
+    assert!(settings.private_car_images_dir.is_none());
+    input["private_car_images_dir"] =
+        json!(runtime.bootstrap.database.parent().unwrap().join("images"));
+    let settings = crate::RuntimeSettings::from_json(&serde_json::to_vec(&input).unwrap()).unwrap();
+    assert!(settings.private_car_images_dir.is_some());
     let store = Store::open_runtime(&settings, &runtime.source).unwrap();
     assert_eq!(store.registry.as_ref().unwrap().cars.len(), 1);
     drop(store);
@@ -1008,7 +1013,7 @@ fn registry_api_serves_names_charger_filter_empty_active_scopes_and_private_hist
     let stop = Arc::new(AtomicBool::new(false));
     let server_stop = stop.clone();
     let server = std::thread::spawn(move || {
-        crate::viewing::serve_with_driver(listener, store, driver, &server_stop)
+        crate::viewing::serve_with_driver(listener, store, driver, &server_stop, None)
     });
     let request = |path: &str| {
         let mut stream = std::net::TcpStream::connect(address).unwrap();
@@ -1830,7 +1835,10 @@ fn startup_bootstraps_legacy_registry_through_schema_six_and_repeats_as_a_no_op(
 fn startup_uses_declared_private_setup_and_runtime_settings_ignore_it() {
     let runtime = Runtime::new();
     drop(runtime.legacy());
-    let config = private_config(&runtime, |_| {});
+    let config = private_config(&runtime, |input| {
+        input["private_car_images_dir"] =
+            json!(runtime.bootstrap.database.parent().unwrap().join("images"));
+    });
     startup(&config).unwrap();
     let store = runtime.open();
     let registry = store.registry.as_ref().unwrap();
@@ -1841,7 +1849,14 @@ fn startup_uses_declared_private_setup_and_runtime_settings_ignore_it() {
     );
     assert_eq!(registry.cars[0].registration.name, "Car A");
     drop(store);
-    assert!(RegistryBootstrap::from_json(&config).is_ok());
+    let bootstrap = RegistryBootstrap::from_json(&config).unwrap();
+    assert!(bootstrap.private_car_images_dir.is_some());
+    assert!(
+        serde_json::to_value(&bootstrap.settings)
+            .unwrap()
+            .get("private_car_images_dir")
+            .is_none()
+    );
     let unknown_car = private_config(&runtime, |input| {
         input["registry_setup"] = json!({"car_names": {"vehicle-z": "Car Z"}});
     });

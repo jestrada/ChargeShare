@@ -155,8 +155,9 @@ impl Store {
                 |row| row.get(0),
             )
             .map_err(storage_error)?;
-        let retained: crate::RuntimeSettings =
+        let mut retained: crate::RuntimeSettings =
             serde_json::from_str(&stored).map_err(|_| IngestionError::StorageCorrupt)?;
+        retained.private_car_images_dir = settings.private_car_images_dir.clone();
         if retained != *settings
             || store.manifest_json != crate::registry::json(settings.manifest()?.config())?
         {

@@ -134,6 +134,28 @@ def generate_dashboard_fixture(multiple: bool = False, battery_example: str = "o
     }
 
 
+def write_placeholder_images(directory: Path):
+    import struct
+    import zlib
+
+    def chunk(kind, content):
+        return struct.pack(">I", len(content)) + kind + content + struct.pack(">I", zlib.crc32(kind + content))
+
+    directory.mkdir(parents=True, exist_ok=True)
+    width, height = 120, 60
+    for name, color in [("b8bdc3", (184, 189, 195, 255)), ("16181c", (22, 24, 28, 255))]:
+        pixels = bytearray()
+        for y in range(height):
+            pixels.append(0)
+            for x in range(width):
+                wheel = any((x - center) ** 2 + (y - 43) ** 2 <= 7 ** 2 for center in (30, 90))
+                body = 14 <= x < 106 and 25 <= y < 43
+                roof = 35 <= x < 82 and 14 <= y < 25
+                pixels.extend((30, 35, 42, 255) if wheel else color if body or roof else (0, 0, 0, 0))
+        png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(pixels)) + chunk(b"IEND", b"")
+        (directory / f"{name}.png").write_bytes(png)
+
+
 def serve_dashboard(directory):
     from functools import partial
     from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -158,9 +180,12 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=SYNTHETIC_NOTICE)
     parser.add_argument("--serve", type=Path)
+    parser.add_argument("--write-placeholder-images", type=Path)
     parser.add_argument("--battery-example", choices=("fresh", "old", "never"), default="fresh")
     options = parser.parse_args()
-    if options.serve:
+    if options.write_placeholder_images:
+        write_placeholder_images(options.write_placeholder_images)
+    elif options.serve:
         serve_dashboard(options.serve)
     else:
         print(json.dumps(generate_dashboard_fixture(multiple=True, battery_example=options.battery_example), indent=2))

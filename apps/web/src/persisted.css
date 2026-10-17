@@ -38,9 +38,8 @@
 .persisted-coverage { display: grid; gap: 8px; min-width: 0; }
 
 .persisted-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; min-width: 0; }
-.persisted-selector, .charging-day-selector { display: grid; gap: 4px; min-width: 0; font-size: 14px; }
-.persisted-selector select, .charging-day-selector select { min-height: 44px; max-width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--background); color: var(--foreground); font: inherit; }
-.persisted-selector select { width: 210px; }
+.charging-day-selector { display: grid; gap: 4px; min-width: 0; font-size: 14px; }
+.charging-day-selector select { min-height: 44px; max-width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--background); color: var(--foreground); font: inherit; }
 .car-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; }
 .car-card { display: grid; gap: 8px; padding: 20px 24px; border: 2px solid var(--border); color: var(--foreground); font: inherit; text-align: left; cursor: pointer; min-width: 0; border-radius: 16px; }
 .car-card:hover { border-color: var(--muted-foreground); }
@@ -50,7 +49,7 @@
 .car-card-heading strong { font-size: 18px; }
 .car-selection { font-size: 12px; color: var(--muted-foreground); }
 .car-card[aria-pressed="true"] .car-selection { color: var(--primary); font-weight: 600; }
-.car-artwork { display: block; width: 100%; height: 132px; object-fit: contain; }
+.car-artwork { display: block; width: 120px; max-width: 100%; height: 60px; object-fit: contain; }
 .car-silhouette { background: var(--car-color); mask: url("/cars/model-y-traced-cc0.svg") center / contain no-repeat; }
 .car-battery { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .car-age { font-size: 18px; font-weight: 400; color: var(--muted-foreground); }
@@ -90,8 +89,6 @@
 @media (max-width: 700px) {
   .persisted-heading h1 { font-size: 28px; }
   .persisted-controls { width: 100%; }
-  .persisted-selector { flex: 1 1 130px; }
-  .persisted-selector select { width: 100%; }
   .persisted-panel { padding: 16px; }
   .charging-month-row { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .charging-month-total { grid-template-columns: repeat(2, minmax(0, 1fr)); }

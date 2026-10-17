@@ -6,12 +6,12 @@ synthetic telemetry and labeled public sample rates. An
 [opt-in live adapter](docs/architecture.md#live-adapter) is also implemented;
 vehicle and account setup remain separate.
 
-![ChargeShare desktop dashboard with silver and black car cards and synthetic charging data](docs/images/dashboard-desktop.png)
+![ChargeShare desktop dashboard with compact car cards, synthetic plain-shape placeholder images](docs/images/dashboard-desktop.png)
 
 <details>
 <summary>Mobile preview (synthetic data)</summary>
 
-<img src="docs/images/dashboard-mobile.png" alt="ChargeShare mobile dashboard with colored car cards and synthetic charging data" width="240">
+<img src="docs/images/dashboard-mobile.png" alt="ChargeShare mobile dashboard with compact car cards and synthetic charging data" width="240">
 
 </details>
 
@@ -63,16 +63,16 @@ and check the receiver → Kafka → SQLite → HTTP path:
 nix develop --no-update-lock-file -c bash scripts/dev/poc.sh check
 ```
 
-Select a fictional car card, then one charger or all chargers. Each card shows
+Select a fictional car card to see its all-charger results. Each card shows
 its configured color, latest valid battery percentage and relative age, including
 reports before a charging session exists. The age updates between refreshes;
 readings remain visible after days without telemetry or a failed fetch.
 “Unavailable” means no valid reading has been reported. A Charging badge shows
 explicit charge-state telemetry with its own age; a newer battery report does
-not refresh that state. Month and charger filters do not affect these readings.
+not refresh that state. Month selection does not affect these readings.
 Silver-like and dark colors use CC0 photo cutouts; other colors use a tinted
 traced silhouette ([artwork credits](apps/web/public/cars/CREDITS.md)).
-Selecting another car resets to All chargers.
+Artwork fits within 120 × 60 px while preserving its proportions.
 Bars default to estimated cost; switch to kWh and hover, tap or select a day for
 its breakdown.
 Configuration, sample-rate provenance and session quality details are below the chart.
@@ -98,7 +98,7 @@ The independent fixture preview uses local port **5173** while the stack runs.
 
 [The deterministic generator](dev/fixtures/dashboard.py) creates June–September
 2026 charging history for named fictional Model 3 and Model Y cars, silver and
-black card artwork with distinct current battery values, and named
+black card colors with distinct current battery values, and named
 driveway and garage chargers, using existing fictional coordinates and labeled
 public sample rates.
 **Synthetic data for demos and screenshots only; not real.**
@@ -122,6 +122,39 @@ generator for stale and never-reported examples. Relative ages use the browser
 clock, so this fixed snapshot naturally ages after its fixture date. The HTTP
 server serves only that snapshot; receiver/Kafka transport is not exercised. Generated data and SQLite stay under `/tmp`, outside
 the checkout. The silver/black and battery mappings are fixture-only.
+
+To include the plain-shape synthetic private-image examples used in the README
+screenshots, generate both optional images before serving:
+
+```sh
+python3 dev/fixtures/dashboard.py --write-placeholder-images /tmp/chargeshare-dashboard-demo/http/api/poc/car-images
+```
+
+### Optional private car images
+
+Keep runtime settings and image files outside the checkout. Add this optional
+member to the existing private settings JSON, then restart the owning runtime:
+
+```json
+{ "private_car_images_dir": "/tmp/chargeshare-private-images" }
+```
+
+For a synthetic setup example, create that directory with:
+
+```sh
+python3 dev/fixtures/dashboard.py --write-placeholder-images /tmp/chargeshare-private-images
+```
+
+Match the registry paint color exactly: remove `#`, lowercase its six hex digits,
+and append `.png`. For example, `#B8BDC3` uses `b8bdc3.png`. Only PNG is supported,
+up to 2 MiB and 4096 × 4096 pixels. The existing dashboard backend serves these
+images without disclosing filesystem paths. Missing, unreadable, unsupported,
+oversized or browser-undecodable images use the existing CC0 artwork. Symlinks
+in the directory path or image file are refused, and no directory listing is
+provided. Omitting the setting preserves existing behavior; changing it does not
+change the fixed ledger settings or require a database migration. Use only the
+generated plain shapes in tests, documentation and public screenshots. Private
+manufacturer images must stay outside Git, public builds and public evidence.
 
 ### Live registry migration and car commands
 

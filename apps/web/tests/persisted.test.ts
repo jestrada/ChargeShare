@@ -259,6 +259,7 @@ test("registry discovery accepts display names and empty active scope without pr
   const value = { synthetic_only: false, scopes: [{ owner: "owner-b", vehicle: "vehicle-b", name: "Model Y sample", color: "#16181C", battery_reading: { battery_percent: 67, observed_at: "2026-09-01T12:11:00Z" }, charging: null, chargers: [{ id: "driveway", name: "Driveway charger" }, { id: "garage", name: "Garage charger" }] }] }
   assert.deepEqual(parseScopes(value),value)
   assert.deepEqual(parseScopes({ synthetic_only: false, scopes: [] }), { synthetic_only: false, scopes: [] })
+  assert.equal(resultPath(value.scopes[0]),"/api/poc/owners/owner-b/vehicles/vehicle-b/results")
   assert.equal(resultPath(value.scopes[0],"garage"),"/api/poc/owners/owner-b/vehicles/vehicle-b/results?charger=garage")
   for (const change of [
     (value: any) => { value.scopes[0].name = "  " },
