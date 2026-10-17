@@ -83,7 +83,7 @@ def generate_dashboard_fixture(multiple: bool = False, battery_example: str = "o
                     },
                 })
             counter_micro_kwh += energy_micro_kwh
-    display_registry = [{"owner": OWNER, "vehicle": VEHICLE, "name": "Model 3 sample", "color": "#B8BDC3", "chargers": [{"id": manifest["owner_chargers"][0]["charger_id"], "name": "Driveway charger"}]}]
+    display_registry = [{"owner": OWNER, "vehicle": VEHICLE, "name": "Silver Model Y sample", "color": "#B8BDC3", "chargers": [{"id": manifest["owner_chargers"][0]["charger_id"], "name": "Driveway charger"}]}]
     if multiple:
         mapping = {"device": "vehicle-b", "vehicle": "vehicle-b", "owner": "owner-b"}
         manifest["mappings"].append(mapping)
@@ -101,7 +101,7 @@ def generate_dashboard_fixture(multiple: bool = False, battery_example: str = "o
             next(field for field in record["payload"]["data"] if field["key"] == "BatteryLevel")["value"]["stringValue"] = "67" if annotation["kind"] == "end" else "32"
             manifest["annotations"].append(annotation)
             records.append(record)
-        display_registry.append({"owner": "owner-b", "vehicle": "vehicle-b", "name": "Model Y sample", "color": "#16181C", "chargers": [{"id": charger["charger_id"], "name": "Garage charger"}]})
+        display_registry.append({"owner": "owner-b", "vehicle": "vehicle-b", "name": "Black Model Y sample", "color": "#16181C", "chargers": [{"id": charger["charger_id"], "name": "Garage charger"}]})
     as_of = datetime(2026, 9, 30, 23, 59, 59, tzinfo=LOCAL_TIMEZONE)
     if battery_example == "fresh":
         prior = next(record for record in reversed(records) if record["key"] == VEHICLE)

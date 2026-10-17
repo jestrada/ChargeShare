@@ -271,10 +271,10 @@ test("registry discovery accepts display names and empty active scope without pr
 
 test("named registry result retains session charger and immutable version provenance", () => {
   const value: any=quotedResult()
-  value.registry={car_name:"Model 3 sample",chargers:[{id:"driveway",name:"Driveway charger"}],selected_charger:null}
+  value.registry={car_name:"Silver Model Y sample",chargers:[{id:"driveway",name:"Driveway charger"}],selected_charger:null}
   value.pricing.charger_id=null
   value.sessions[0].charger={id:"driveway",name:"Driveway charger",assignment_versions:["assignment-v1"],geofence_versions:["geofence-v1"]}
-  assert.equal(parseResults(value,scopes[0]).registry?.car_name,"Model 3 sample")
+  assert.equal(parseResults(value,scopes[0]).registry?.car_name,"Silver Model Y sample")
   assert.equal(parseResults(value,scopes[0]).sessions[0].charger?.name,"Driveway charger")
   for (const change of [
     (value: any) => { value.registry.car_name = "  " },

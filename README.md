@@ -97,7 +97,7 @@ The independent fixture preview uses local port **5173** while the stack runs.
 ### Screenshot dataset without Docker
 
 [The deterministic generator](dev/fixtures/dashboard.py) creates June–September
-2026 charging history for named fictional Model 3 and Model Y cars, silver and
+2026 charging history for named fictional Model Y cars, silver and
 black card colors with distinct current battery values, and named
 driveway and garage chargers, using existing fictional coordinates and labeled
 public sample rates.

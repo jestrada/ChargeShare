@@ -73,7 +73,7 @@ class DashboardFixtureTests(unittest.TestCase):
 
     def test_named_multiple_car_and_charger_fixture_preserves_isolated_scopes(self):
         fixture = generate_dashboard_fixture(multiple=True)
-        self.assertEqual([scope["name"] for scope in fixture["display_registry"]], ["Model 3 sample", "Model Y sample"])
+        self.assertEqual([scope["name"] for scope in fixture["display_registry"]], ["Silver Model Y sample", "Black Model Y sample"])
         self.assertEqual([scope["chargers"][0]["name"] for scope in fixture["display_registry"]], ["Driveway charger", "Garage charger"])
         self.assertEqual({record["key"] for record in fixture["records"]}, {"vehicle-a", "vehicle-b"})
         self.assertEqual(len(fixture["records"]), 2 * len(self.fixture["records"]))
