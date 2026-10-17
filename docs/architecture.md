@@ -36,7 +36,7 @@ flowchart LR
     kafka --> capture["Harness: curated acceptance evidence"]
     kafka --> live
     runtime_settings["Private RuntimeSettings: Kafka/source + path/port + legacy rate validation"] --> live
-    bootstrap["Legacy RegistryBootstrap + explicit names/charger owner"] --> migration["Stopped-owner transactional migration"] --> registry[("SQLite: cars + chargers + car_chargers + immutable identity/assignment/geofence versions")]
+    bootstrap["Legacy RegistryBootstrap + names/charger owner (explicit or startup defaults)"] --> migration["Transactional migration: setup command or live startup"] --> registry[("SQLite: cars + chargers + car_chargers + immutable identity/assignment/geofence versions")]
     commands["chargie car add / rename / remove"] --> registry
     rate_setup["Stopped-owner explicit charger + active_from + typed rate JSON"] --> rates[("SQLite: immutable rate_model_versions.config_json")]
     rate_setup --> assignments[("SQLite: charger_rate_assignments + chargers.active_rate_version_id")]
@@ -372,8 +372,8 @@ high-water mark are validated. Missing initial location/odometer source history,
 retention gaps, offset gaps, truncated progress, active ownership or an existing
 target database/marker refuse recovery. The replacement marker binds the new
 epoch to those original offsets and its manifest freezes normalization v2.
-This legacy rebuild path still requires explicit registry setup before `live`
-startup; registry migration and car addition do not require a rebuild.
+This legacy rebuild path relies on the registry migration (explicit setup or
+`live` startup); registry migration and car addition do not require a rebuild.
 A failed rebuild leaves the original intact and any partial target separate;
 there is no silent reset, dataset switch or broker-retention change. Live mode
 reuses the single SQLite owner and committed scoped results API; no session or
@@ -401,6 +401,17 @@ partition progress, adapter state, deduplication and historical versions remain.
 A failed or interrupted transaction leaves the original schema intact; a committed
 migration can be repeated safely. Missing or conflicting inputs refuse. Ongoing
 startup ignores legacy registry sections and never restores membership from JSON.
+
+`live` startup applies pending migrations before opening the runtime store. When
+the registry is empty and the private config still carries the legacy `mappings`
+and `shared_charger` sections, startup runs the same single migration transaction
+(registry seed, then the schema-five charger-rate migration). Names and charger
+owner come from an optional private `registry_setup` section
+(`car_names`, `charger_name`, `charger_owner`); otherwise each car is named by its
+vehicle alias, the charger is `Home charger` and the charger owner is the cars'
+owner only when every legacy car has the same owner. Several owners without a
+declared `charger_owner`, or an empty registry without legacy sections, refuse
+with the existing setup-required error and change nothing.
 
 `cars.device` is the unique private primary key; `vehicle` is a stable unique
 alias and `owner` scopes the ledger. Names are required nonblank display values,

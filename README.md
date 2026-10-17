@@ -115,8 +115,12 @@ model definitions. Live cars, display names, charger geofences, charger ownershi
 rate selections and assignments belong to the SQLite registry. The legacy
 `mappings` and `shared_charger` sections are bootstrap input only.
 
-While the ingestion owner is stopped, preserve a private database/source-marker
-backup and run the explicit setup script against the existing private database:
+`live` startup performs this migration automatically when the registry is empty
+and the private config still has the legacy sections (see the
+[registry contract](docs/architecture.md#live-registry-and-retained-recovery) for
+default names and charger owner). To name things explicitly instead, while the
+ingestion owner is stopped, preserve a private database/source-marker backup and
+run the setup script against the existing private database:
 
 ```sh
 python3 scripts/dev/registry_setup.py --database "<private-database>" \
