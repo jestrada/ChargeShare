@@ -328,5 +328,23 @@
         }
       }
     }
-  ]
+  ],
+  "battery_backfill_example": {
+    "headers": {
+      "vin": "FICTIONAL-VIN-A",
+      "txid": "fictional-battery-backfill",
+      "txtype": "V"
+    },
+    "payload": {
+      "createdAt": "2026-10-01T11:00:00.123456789Z",
+      "data": [
+        {
+          "key": "Soc",
+          "value": {
+            "doubleValue": 73.5
+          }
+        }
+      ]
+    }
+  }
 }

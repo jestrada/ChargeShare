@@ -62,6 +62,7 @@ flowchart LR
         sqlite --> vehicle_status["Rust: latest valid battery + independent charge state by source timestamp"]
         vehicle_status --> results
         vehicle_status --> api
+        kafka --> battery_backfill["Startup: enrich legacy SOC; retain completion marker"] --> sqlite
         registry --> api
         classification --> results["Committed energy + eligibility + quotes + monthly history + provenance"]
         classification --> pricing["Core: observed-window coverage + local-time/assignment splits + exact quotes + holds"]
@@ -487,10 +488,30 @@ identities, recovery, retained evidence and charger rate assignments are preserv
 Normalized synthetic `BatteryLevel.stringValue` and live `Soc.doubleValue` retain
 optional finite SOC from 0 through 100 in existing `event_variants.event_json`
 and `live_records.signal_json`. Invalid or duplicate SOC becomes unknown
-without changing counters or boundaries. Legacy JSON without SOC remains unknown;
-synthetic redelivery and live redelivery/resend preserve that unknown value
-without backfilling.
+without changing counters or boundaries. Legacy JSON without SOC remains unknown
+on ordinary redelivery/resend.
 SOC is display evidence and never enters core energy or pricing calculations.
+
+After registry recovery and before serving HTTP, live startup detects legacy
+signals whose battery field is absent and scans each partition's current retained
+low-to-high range. It validates the source marker, broker identity and contiguous
+offsets using the same scanner as registration recovery. For an existing
+car-scoped transaction fingerprint, the original signal must match under the
+existing legacy compatibility rules before only its battery field is enriched.
+Sessionless signals remain retained even when their charging disposition is
+`missing_association`; that disposition does not exclude battery observations.
+The pass never adapts charging state or rewrites event variants, dispositions,
+recovery evidence, energy, pricing or ordinary progress. New cars' pending recovery
+jobs run first, reprocessing retained unknown-identity records against SQLite
+membership. A completed registration recovery is not repeated.
+
+Each battery update commits independently. An interrupted startup safely scans
+again, skipping enriched records. Only a completed, source-verified scan inserts
+the singleton `live_battery_backfill` completion marker, an additive table under
+the existing ownership lock with no schema-version change. Expired records remain
+unknown and the completed pass is not repeated on later startups. Seven-day
+retention is an availability limit, not guaranteed coverage. No Kafka offsets
+are committed and no raw payloads or coordinates are retained.
 
 Rust derives current battery readings from every retained live signal, including
 SOC-only reports outside sessions, and from synthetic event JSON. Newest valid

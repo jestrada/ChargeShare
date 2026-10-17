@@ -166,6 +166,58 @@ pub(crate) fn initialize(connection: &Connection) -> Result<(), IngestionError> 
 }
 
 impl Store {
+    pub(crate) fn needs_battery_backfill(&mut self) -> Result<bool, IngestionError> {
+        self.connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS live_battery_backfill (singleton INTEGER PRIMARY KEY CHECK(singleton = 1)) STRICT;",
+        ).map_err(storage_error)?;
+        self.connection
+            .query_row(
+                "SELECT NOT EXISTS(SELECT 1 FROM live_battery_backfill) AND EXISTS(SELECT 1 FROM live_records WHERE json_type(signal_json, '$.battery_percent') IS NULL)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)
+    }
+
+    pub(crate) fn backfill_live_battery(
+        &mut self,
+        headers: &[(String, Vec<u8>)],
+        payload: &[u8],
+    ) -> Result<(), IngestionError> {
+        let registry = self
+            .registry
+            .as_ref()
+            .ok_or(IngestionError::RegistryIntegrity)?;
+        let Ok((signal, record_id, _)) = decode(registry, headers, payload) else {
+            return Ok(());
+        };
+        let legacy: Option<String> = self.connection.query_row(
+            "SELECT signal_json FROM live_records WHERE vehicle = ?1 AND record_id = ?2 AND json_type(signal_json, '$.battery_percent') IS NULL",
+            params![signal.vehicle, record_id], |row| row.get(0),
+        ).optional().map_err(storage_error)?;
+        if let Some(legacy) = legacy {
+            self.prepare_live(registry, headers, payload)?;
+            let mut retained: Signal =
+                serde_json::from_str(&legacy).map_err(|_| IngestionError::StorageCorrupt)?;
+            retained.battery_percent = signal.battery_percent;
+            self.connection.execute(
+                "UPDATE live_records SET signal_json = ?3 WHERE vehicle = ?1 AND record_id = ?2",
+                params![signal.vehicle, record_id, encode(&retained)?],
+            ).map_err(storage_error)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish_battery_backfill(&mut self) -> Result<(), IngestionError> {
+        self.connection
+            .execute(
+                "INSERT INTO live_battery_backfill VALUES (1) ON CONFLICT DO NOTHING",
+                [],
+            )
+            .map_err(storage_error)?;
+        Ok(())
+    }
+
     pub(crate) fn ingest_live(
         &mut self,
         settings: &crate::RuntimeSettings,

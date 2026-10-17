@@ -900,6 +900,50 @@ fn mocked_kafka_startup_recovers_rejected_and_unconsumed_backlog_before_ordinary
     }
     assert_eq!(Runtime::result(&store, "owner-b", "vehicle-b"), second);
     assert_eq!(Runtime::result(&store, "owner-a", "vehicle-a"), first);
+    drop(driver);
+    store
+        .connection
+        .execute_batch(
+            "UPDATE live_records SET signal_json = json_remove(signal_json, '$.battery_percent');",
+        )
+        .unwrap();
+    assert!(
+        Runtime::result(&store, "owner-a", "vehicle-a")
+            .battery_reading
+            .is_none()
+    );
+    assert!(
+        Runtime::result(&store, "owner-b", "vehicle-b")
+            .battery_reading
+            .is_none()
+    );
+    let statistics = store.statistics().unwrap();
+    let mut retained = retained_rows(&store);
+    retained.as_object_mut().unwrap().remove("live_records");
+    let driver = crate::kafka::LiveIngestion::connect_live(
+        runtime.bootstrap.settings.clone(),
+        runtime.source.clone(),
+        &mut store,
+    )
+    .unwrap();
+    assert_eq!(Runtime::result(&store, "owner-a", "vehicle-a"), first);
+    assert_eq!(Runtime::result(&store, "owner-b", "vehicle-b"), second);
+    assert_eq!(store.statistics().unwrap(), statistics);
+    let mut after = retained_rows(&store);
+    after.as_object_mut().unwrap().remove("live_records");
+    assert_eq!(after, retained);
+    assert!(!store.needs_battery_backfill().unwrap());
+    drop(driver);
+    drop(store);
+    let mut store = runtime.open();
+    let mut driver = crate::kafka::LiveIngestion::connect_live(
+        runtime.bootstrap.settings.clone(),
+        runtime.source.clone(),
+        &mut store,
+    )
+    .unwrap();
+    assert_eq!(Runtime::result(&store, "owner-a", "vehicle-a"), first);
+    assert_eq!(Runtime::result(&store, "owner-b", "vehicle-b"), second);
     let mut changed = runtime.source.clone();
     changed.epoch = "live-changed-marker".to_owned();
     std::fs::write(
