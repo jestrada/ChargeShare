@@ -64,12 +64,15 @@ nix develop --no-update-lock-file -c bash scripts/dev/poc.sh check
 ```
 
 Select a fictional car card, then one charger or all chargers. Each card shows
-its configured color and battery percentage at the last explicit charge end,
-with the end time in the dashboard's configured timezone and a short zone label
-(for example, PDT or PST in `America/Los_Angeles`). Missing terminal SOC shows
-“Unavailable” with that end time; no completed session shows “No completed charge”. Cards use all retained
-sessions, including other chargers and held sessions; an ongoing charge preserves
-the previous completed result. Selecting another car resets to All chargers.
+its configured color, latest valid battery percentage and relative age, including
+reports before a charging session exists. The age updates between refreshes;
+readings remain visible after days without telemetry or a failed fetch.
+“Unavailable” means no valid reading has been reported. A Charging badge shows
+explicit charge-state telemetry with its own age; a newer battery report does
+not refresh that state. Month and charger filters do not affect these readings.
+Silver-like and dark colors use CC0 photo cutouts; other colors use a tinted
+traced silhouette ([artwork credits](apps/web/public/cars/CREDITS.md)).
+Selecting another car resets to All chargers.
 Bars default to estimated cost; switch to kWh and hover, tap or select a day for
 its breakdown.
 Configuration, sample-rate provenance and session quality details are below the chart.
@@ -95,7 +98,7 @@ The independent fixture preview uses local port **5173** while the stack runs.
 
 [The deterministic generator](dev/fixtures/dashboard.py) creates June–September
 2026 charging history for named fictional Model 3 and Model Y cars, silver and
-black card artwork with distinct terminal battery values, and named
+black card artwork with distinct current battery values, and named
 driveway and garage chargers, using existing fictional coordinates and labeled
 public sample rates.
 **Synthetic data for demos and screenshots only; not real.**
@@ -112,8 +115,12 @@ python3 dev/fixtures/dashboard.py --serve /tmp/chargeshare-dashboard-demo/http
 In a second terminal, run `npm --prefix apps/web run dev:persisted` and open local
 port **5174**. The Rust example ingests decoded fictional records into SQLite and
 exports the persisted dashboard's usual JSON, with monthly history calculated as
-of September 30, 2026. The HTTP server serves only that snapshot; receiver/Kafka
-transport is not exercised. Generated data and SQLite stay under `/tmp`, outside
+of September 30, 2026. The default fixture includes a fresh battery reading and
+an independently dated Charging state on the silver car, plus an older reading
+on the black car. Use `--battery-example old` or `--battery-example never` on the
+generator for stale and never-reported examples. Relative ages use the browser
+clock, so this fixed snapshot naturally ages after its fixture date. The HTTP
+server serves only that snapshot; receiver/Kafka transport is not exercised. Generated data and SQLite stay under `/tmp`, outside
 the checkout. The silver/black and battery mappings are fixture-only.
 
 ### Live registry migration and car commands

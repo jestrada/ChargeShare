@@ -116,7 +116,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         {
             return Err("invalid synthetic car color".into());
         }
-        scopes.push(json!({"owner":display.owner,"vehicle":display.vehicle,"name":display.name,"color":color,"last_charge":result.last_charge,"chargers":display.chargers.iter().map(|charger| json!({"id":charger.id,"name":charger.name})).collect::<Vec<_>>()}));
+        scopes.push(json!({"owner":display.owner,"vehicle":display.vehicle,"name":display.name,"color":color,"battery_reading":result.battery_reading,"charging":result.charging,"chargers":display.chargers.iter().map(|charger| json!({"id":charger.id,"name":charger.name})).collect::<Vec<_>>()}));
         result.registry = Some(chargeshare_ingestion::ResultRegistry {
             car_name: display.name.clone(),
             chargers: display

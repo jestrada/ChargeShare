@@ -11,7 +11,8 @@ use crate::{IngestionError, Store};
 pub struct ScopedResults {
     pub owner: String,
     pub vehicle: String,
-    pub last_charge: Option<crate::LastCharge>,
+    pub battery_reading: Option<crate::BatteryReading>,
+    pub charging: Option<crate::ChargingObservation>,
     pub state: &'static str,
     pub evidence_boundary: &'static str,
     pub observed_ac_kwh: String,
@@ -566,18 +567,15 @@ fn results_for_view(
         .count();
     let ineligible_session_count = sessions.len() - quoted_session_count - rate_held_session_count;
     let config = manifest.config();
+    let vehicle_status = match store {
+        Some(store) => store.vehicle_status(vehicle)?,
+        None => Default::default(),
+    };
     let mut result = ScopedResults {
         owner: owner.as_str().to_owned(),
         vehicle: vehicle.as_str().to_owned(),
-        last_charge: match store {
-            Some(store) => store.last_charge(
-                vehicle,
-                &ledger
-                    .sessions(vehicle)
-                    .map_err(|_| IngestionError::DomainReplay)?,
-            )?,
-            None => None,
-        },
+        battery_reading: vehicle_status.battery_reading,
+        charging: vehicle_status.charging,
         state: if sessions.is_empty() {
             "empty"
         } else if all_eligible {

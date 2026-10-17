@@ -45,12 +45,14 @@ def scoped_results(owner, vehicle):
 def assert_scoped_result(result, owner, vehicle, energy):
     shared = True
     eligible = energy if shared else "0.000000"
-    allowed = {"owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "provenance", "revision", "pricing", "monthly", "last_charge"}
+    allowed = {"owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "provenance", "revision", "pricing", "monthly", "battery_reading", "charging"}
     if set(result) != allowed or result["owner"] != owner or result["vehicle"] != vehicle or result["state"] != ("eligible" if shared else "held") or result["observed_ac_kwh"] != energy or result["eligible_shared_charger_kwh"] != eligible or result["evidence_boundary"] != "Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated":
         raise RuntimeFailure("Scoped persisted energy assertion failed.")
-    expected_last_charge = {"battery_percent": 82 if vehicle == "vehicle-a" else 67, "end_utc_seconds": "1788264600"}
-    if result["last_charge"] != expected_last_charge:
-        raise RuntimeFailure("Scoped terminal battery assertion failed.")
+    if result["charging"] != {"active": False, "observed_at": "2026-09-01T12:10:00Z"}:
+        raise RuntimeFailure("Scoped charging observation assertion failed.")
+    expected_battery_reading = {"battery_percent": 82 if vehicle == "vehicle-a" else 67, "observed_at": "2026-09-01T12:10:00Z"}
+    if result["battery_reading"] != expected_battery_reading:
+        raise RuntimeFailure("Scoped battery reading assertion failed.")
     expected = {"vehicle": vehicle, "connection": "connection-1", "start_utc_seconds": "1788264000", "end_utc_seconds": "1788264600", "classification": "SharedCharger" if shared else "OtherCharger", "classification_reason": "InsideGeofence" if shared else "OutsideGeofence", "evidence_state": "complete", "observed_ac_kwh": energy, "eligible_shared_charger_kwh": eligible, "quality_flags": [], "exclusion_reasons": [] if shared else ["OtherCharger"]}
     if len(result["sessions"]) != 1 or {key: value for key, value in result["sessions"][0].items() if key != "pricing"} != expected:
         raise RuntimeFailure("Scoped session identity, quality or hold assertion failed.")

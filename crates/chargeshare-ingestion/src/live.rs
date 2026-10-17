@@ -18,7 +18,7 @@ pub(crate) const LIVE_INPUT_CONTRACT: &str = "tesla-decoded-live-v1";
 pub(crate) const LIVE_NORMALIZER_VERSION: &str = "chargeshare-live-adapter-v2";
 
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
-enum ChargeState {
+pub(crate) enum ChargeState {
     #[serde(rename = "DetailedChargeStateUnknown")]
     Unknown,
     #[serde(rename = "DetailedChargeStateDisconnected")]
@@ -166,38 +166,6 @@ pub(crate) fn initialize(connection: &Connection) -> Result<(), IngestionError> 
 }
 
 impl Store {
-    pub(crate) fn terminal_soc_agrees(
-        &self,
-        vehicle: &str,
-        created_at: &str,
-        battery: Option<crate::BatteryPercent>,
-    ) -> Result<bool, IngestionError> {
-        let timestamp =
-            parse_utc_timestamp(created_at).map_err(|_| IngestionError::StorageCorrupt)?;
-        let mut statement = self.connection.prepare(
-            "SELECT signal_json FROM live_records WHERE vehicle = ?1 AND json_extract(signal_json, '$.time') = ?2",
-        ).map_err(storage_error)?;
-        let rows = statement
-            .query_map(params![vehicle, timestamp.0], |row| row.get::<_, String>(0))
-            .map_err(storage_error)?;
-        for row in rows {
-            let signal: Signal = serde_json::from_str(&row.map_err(storage_error)?)
-                .map_err(|_| IngestionError::StorageCorrupt)?;
-            if parse_utc_timestamp(&signal.created_at)
-                .map_err(|_| IngestionError::StorageCorrupt)?
-                == timestamp
-                && matches!(
-                    signal.state,
-                    Some(ChargeState::Complete | ChargeState::Stopped | ChargeState::Disconnected)
-                )
-                && signal.battery_percent != battery
-            {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
     pub(crate) fn ingest_live(
         &mut self,
         settings: &crate::RuntimeSettings,
@@ -318,9 +286,9 @@ impl Store {
             }
             return Ok((disposition, None));
         }
-        let repeated: Option<String> = self.connection.query_row(
-            "SELECT disposition_json FROM live_records WHERE vehicle = ?1 AND (signal_json = ?2 OR signal_json = ?3 OR signal_json = ?4 OR signal_json = ?5) LIMIT 1",
-            params![signal.vehicle, signal_json, legacy_signal_json, old_signal_json, old_legacy_signal_json], |row| row.get(0),
+        let repeated: Option<(String, String)> = self.connection.query_row(
+            "SELECT signal_json, disposition_json FROM live_records WHERE vehicle = ?1 AND (signal_json = ?2 OR signal_json = ?3 OR signal_json = ?4 OR signal_json = ?5) LIMIT 1",
+            params![signal.vehicle, signal_json, legacy_signal_json, old_signal_json, old_legacy_signal_json], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional().map_err(storage_error)?;
         let state_json: Option<String> = self
             .connection
@@ -335,10 +303,16 @@ impl Store {
             .map(|json| serde_json::from_str(&json).map_err(|_| IngestionError::StorageCorrupt))
             .transpose()?
             .unwrap_or_default();
-        let disposition = if let Some(repeated) = repeated {
-            serde_json::from_str(&repeated).map_err(|_| IngestionError::StorageCorrupt)?
+        let (disposition, signal_json) = if let Some((retained_signal, repeated)) = repeated {
+            (
+                serde_json::from_str(&repeated).map_err(|_| IngestionError::StorageCorrupt)?,
+                retained_signal,
+            )
         } else {
-            adapt(&self.manifest, &mut state, &signal, is_resend)?
+            (
+                adapt(&self.manifest, &mut state, &signal, is_resend)?,
+                signal_json,
+            )
         };
         let checkpoint = LiveCheckpoint {
             vehicle: signal.vehicle,
@@ -450,6 +424,7 @@ fn adapt(
             },
             counter: signal.counter.clone(),
             battery_percent: signal.battery_percent,
+            charging: None,
             location: if late {
                 Some(NormalizedLocation::Invalid)
             } else {

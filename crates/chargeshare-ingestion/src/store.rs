@@ -357,15 +357,22 @@ impl Store {
         }
         let disposition = match normalize(manifest, key, payload) {
             Ok(mut evidence) => {
-                if evidence.event.battery_percent.is_some() {
-                    let retained: Option<String> = self.connection.query_row(
-                        "SELECT v.event_json FROM deliveries d JOIN event_variants v ON v.id = d.variant_id WHERE d.partition = ?1 AND d.offset = ?2",
-                        params![coordinate.partition, coordinate.offset], |row| row.get(0),
-                    ).optional().map_err(storage_error)?;
-                    let mut unknown_soc = evidence.event.clone();
-                    unknown_soc.battery_percent = None;
-                    if retained == Some(crate::registry::json(&unknown_soc)?) {
-                        evidence.event = unknown_soc;
+                let retained: Option<String> = self.connection.query_row(
+                    "SELECT v.event_json FROM deliveries d JOIN event_variants v ON v.id = d.variant_id WHERE d.partition = ?1 AND d.offset = ?2",
+                    params![coordinate.partition, coordinate.offset], |row| row.get(0),
+                ).optional().map_err(storage_error)?;
+                if let Some(retained) = retained {
+                    let fields: serde_json::Value = serde_json::from_str(&retained)
+                        .map_err(|_| IngestionError::StorageCorrupt)?;
+                    let mut legacy_event = evidence.event.clone();
+                    if fields.get("battery_percent").is_none() {
+                        legacy_event.battery_percent = None;
+                    }
+                    if fields.get("charging").is_none() {
+                        legacy_event.charging = None;
+                    }
+                    if retained == crate::registry::json(&legacy_event)? {
+                        evidence.event = legacy_event;
                     }
                 }
                 RecordDisposition::Accepted(Box::new(evidence))

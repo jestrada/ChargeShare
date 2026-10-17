@@ -88,6 +88,7 @@ pub fn normalize(
             charge_type: annotation.charge_type,
             counter: samples.counter,
             battery_percent: samples.battery_percent,
+            charging: samples.charging,
             location: samples.location,
         },
         provenance: EvidenceProvenance {
@@ -110,6 +111,7 @@ pub fn normalize(
 struct Samples {
     counter: Option<NormalizedCounter>,
     battery_percent: Option<crate::BatteryPercent>,
+    charging: Option<bool>,
     location: Option<NormalizedLocation>,
 }
 
@@ -149,6 +151,9 @@ fn decode_samples(fields: Vec<ReceiverField>) -> Result<Samples, RejectionReason
                 if value.detailed_charge_state_value.is_none() || value.string_value.is_some() {
                     return Err(RejectionReason::UnsupportedPayload);
                 }
+                samples.charging = value
+                    .detailed_charge_state_value
+                    .map(|state| matches!(state, ReceiverChargeState::Charging));
             }
             ReceiverFieldKey::ACChargingEnergyIn => {
                 let counter_value = value

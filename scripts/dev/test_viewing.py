@@ -20,7 +20,8 @@ def complete_results(owner="owner-a", vehicle="vehicle-a", energy="0.500000"):
         "observed_ac_kwh": energy, "eligible_shared_charger_kwh": eligible, "revision": "results-v2-0123456789abcdef",
         "provenance": {"source": "synthetic-receiver-kafka", "source_epoch": "synthetic-epoch", "input_contract": "tesla-v-bd076fe-v1", "mapping_version": "fictional-mapping-v1", "manifest_version": "fictional-manifest-v1", "normalizer_version": "chargeshare-normalizer-v1", "calculation_version": "scoped-core-replay-v3", "geofence_version": "fictional-geofence-v1"},
         "monthly": {},
-        "last_charge": {"battery_percent":82 if vehicle == "vehicle-a" else 67,"end_utc_seconds":"1788264600"},
+        "charging": {"active":False,"observed_at":"2026-09-01T12:10:00Z"},
+        "battery_reading": {"battery_percent":82 if vehicle == "vehicle-a" else 67,"observed_at":"2026-09-01T12:10:00Z"},
         "sessions": [{"vehicle": vehicle, "connection": "connection-1", "start_utc_seconds": "1788264000", "end_utc_seconds": "1788264600", "classification": "SharedCharger" if shared else "OtherCharger", "classification_reason": "InsideGeofence" if shared else "OutsideGeofence", "evidence_state": "complete", "observed_ac_kwh": energy, "eligible_shared_charger_kwh": eligible, "quality_flags": [], "exclusion_reasons": [] if shared else ["OtherCharger"]}],
     }
     index = 0 if owner == "owner-a" else 1
@@ -35,7 +36,7 @@ class HttpAcceptanceTests(unittest.TestCase):
     def test_scope_assertion_rejects_wrong_energy_leakage_quality_and_extra_payload(self):
         result = complete_results()
         viewing.assert_scoped_result(result, "owner-a", "vehicle-a", "0.500000")
-        changes = [lambda value: value.update(last_charge=None), lambda value: value["last_charge"].update(battery_percent=99), lambda value: value["last_charge"].update(end_utc_seconds="0"), lambda value: value.update(observed_ac_kwh="0.600000"), lambda value: value.update(owner="owner-b"), lambda value: value.update(eligible_shared_charger_kwh="0.000000"), lambda value: value.update(raw_payload="fictional-private"), lambda value: value["sessions"][0].update(vehicle="vehicle-b"), lambda value: value["sessions"][0].update(quality_flags=["MissingBaseline"]), lambda value: value["sessions"][0].update(classification_reason="LocationUnavailable"), lambda value: value["provenance"].update(raw="fictional-private"), lambda value: value["pricing"].update(exact_subtotal="0.1997000000000000 USD"), lambda value: value["sessions"][0]["pricing"]["quote"]["slices"][0].update(period="peak")]
+        changes = [lambda value: value.update(charging=None), lambda value: value["charging"].update(active=True), lambda value: value["charging"].update(observed_at="invalid"), lambda value: value.update(battery_reading=None), lambda value: value["battery_reading"].update(battery_percent=99), lambda value: value["battery_reading"].update(observed_at="invalid"), lambda value: value.update(observed_ac_kwh="0.600000"), lambda value: value.update(owner="owner-b"), lambda value: value.update(eligible_shared_charger_kwh="0.000000"), lambda value: value.update(raw_payload="fictional-private"), lambda value: value["sessions"][0].update(vehicle="vehicle-b"), lambda value: value["sessions"][0].update(quality_flags=["MissingBaseline"]), lambda value: value["sessions"][0].update(classification_reason="LocationUnavailable"), lambda value: value["provenance"].update(raw="fictional-private"), lambda value: value["pricing"].update(exact_subtotal="0.1997000000000000 USD"), lambda value: value["sessions"][0]["pricing"]["quote"]["slices"][0].update(period="peak")]
         for change in changes:
             changed = copy.deepcopy(result)
             change(changed)

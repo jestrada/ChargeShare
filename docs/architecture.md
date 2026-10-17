@@ -59,9 +59,9 @@ flowchart LR
         config["Owner charger config + immutable rate histories"] --> sqlite
         sqlite --> replay["Scoped core replay"]
         replay --> classification["Core: automatic session location classification"]
-        replay --> last_charge["Rust: latest session End + terminal SOC across retained sessions"]
-        sqlite --> last_charge
-        last_charge --> results
+        sqlite --> vehicle_status["Rust: latest valid battery + independent charge state by source timestamp"]
+        vehicle_status --> results
+        vehicle_status --> api
         registry --> api
         classification --> results["Committed energy + eligibility + quotes + monthly history + provenance"]
         classification --> pricing["Core: observed-window coverage + local-time/assignment splits + exact quotes + holds"]
@@ -71,7 +71,7 @@ flowchart LR
         pricing --> results
         results --> api["Scoped HTTP: host loopback 8788"]
     end
-    api --> persisted["Persisted browser: 5174, colored car cards + last charge + D3 monthly bars + charger selector + no-active-car state"]
+    api --> persisted["Persisted browser: 5174, colored car cards + battery/state ages + D3 monthly bars + charger selector + no-active-car state"]
     subgraph fixture["Independent fixture preview"]
         demo["Fictional events + sample rates"] --> offline["Core exact offline pricing"]
         offline --> fixture_api["Fixture API: loopback 8787"]
@@ -461,25 +461,29 @@ synthetic redelivery and live redelivery/resend preserve that unknown value
 without backfilling.
 SOC is display evidence and never enters core energy or pricing calculations.
 
-Rust derives last charge from the latest retained `Session.end_time` backed by
-an explicit End, including live Complete, Stopped or Disconnected. Terminal SOC
-must agree across matching vehicle/connection evidence and live source timestamps.
-Missing, invalid or conflicting terminal SOC stays unavailable with that end time;
-earlier readings are never substituted. A new in-progress session preserves the
-previous completed result. This summary includes all retained sessions regardless
-of month, charger selection, energy quality or pricing eligibility. No summary
-column or cache is stored on cars.
+Rust derives current battery readings from every retained live signal, including
+SOC-only reports outside sessions, and from synthetic event JSON. Newest valid
+source time wins using seconds and nanoseconds, independently of delivery order,
+replay, session boundaries, month, charger and pricing eligibility. Equal-time
+observations use stable JSON ordering for deterministic selection. Invalid or
+missing SOC does not erase a prior valid reading or refresh its timestamp.
+Explicit charge state is selected independently; Unknown does not replace a known
+state. Synthetic normalization retains optional `charging` in event JSON from
+DetailedChargeState, without inferring charging from session annotations.
+No additional table, column, migration or cached summary is stored.
 
-`/api/poc/scopes` returns every active available car's `color` and
-`last_charge: {battery_percent: number|null, end_utc_seconds: string}|null`
-together. Null means no explicit completed session. Scoped results return the
-same unfiltered `last_charge`. TypeScript validates colors, bounded SOC and end
-timestamps before rendering native button cards with selected/focus states,
-original tinted SVG fastback crossover artwork and end times formatted in the
-returned monthly dashboard timezone with a short zone label. UTC epochs remain
-the API evidence boundary; browser timezone settings do not select the display
-zone. The configured timezone persists while switching cars. Car selection reuses the
-scope transition, updates the URL and resets to All chargers.
+`/api/poc/scopes` returns each active available car's `color`,
+`battery_reading: {battery_percent: number, observed_at: string}|null` and
+`charging: {active: boolean, observed_at: string}|null`. Scoped results return the
+same unfiltered observations. Source UTC timestamp strings preserve fractional
+precision. TypeScript validates all fields before rendering native button cards
+with selected/focus states. The browser updates relative ages every second and
+keeps known observations across fetch failures or absent readings. A Charging
+badge shows its own source age, never refreshed by an unrelated SOC report.
+Silver-like neutral colors use the CC0 silver photo cutout, dark colors use the
+black cutout and other colors use the traced SVG mask with `var(--car-color)`;
+[credits](../apps/web/public/cars/CREDITS.md) identify the sources. Car selection
+reuses the scope transition, updates the URL and resets to All chargers.
 
 The API provides display names and linked charger choices alongside alias scope
 keys, filters results by an optional charger ID, and retains per-session charger

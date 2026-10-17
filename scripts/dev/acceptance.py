@@ -44,9 +44,11 @@ def assert_coordinate_privacy(text, checkout):
 
 
 def assert_location_sessions(result, expected, eligible):
-    if set(result) != {"owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "provenance", "revision", "pricing", "monthly", "last_charge"} or result["owner"] != "owner-a" or result["vehicle"] != "vehicle-a" or result["state"] != "held" or result["observed_ac_kwh"] != "3.500000" or result["eligible_shared_charger_kwh"] != eligible or len(result["sessions"]) != len(expected):
+    if set(result) != {"owner", "vehicle", "state", "evidence_boundary", "observed_ac_kwh", "eligible_shared_charger_kwh", "sessions", "provenance", "revision", "pricing", "monthly", "battery_reading", "charging"} or result["owner"] != "owner-a" or result["vehicle"] != "vehicle-a" or result["state"] != "held" or result["observed_ac_kwh"] != "3.500000" or result["eligible_shared_charger_kwh"] != eligible or len(result["sessions"]) != len(expected):
         raise AcceptanceFailure("location-classification")
-    if result["last_charge"] != {"battery_percent":52,"end_utc_seconds":"1788286200"}:
+    if result["charging"] != {"active":False,"observed_at":"2026-09-01T18:10:00Z"}:
+        raise AcceptanceFailure("location-classification")
+    if result["battery_reading"] != {"battery_percent":52,"observed_at":"2026-09-01T18:10:00Z"}:
         raise AcceptanceFailure("location-classification")
     bounds = {
         "connection-1": ("1788264000", "1788264600"),

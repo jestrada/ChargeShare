@@ -166,7 +166,7 @@ fn candidate_golden_records_equal_direct_core_events_with_separate_provenance() 
 }
 
 #[test]
-fn receiver_replays_preserve_terminal_soc_and_duplicate_event_identity() {
+fn receiver_replays_preserve_battery_state_and_duplicate_event_identity() {
     let manifest = manifest();
     let complete: Value =
         serde_json::from_slice(include_bytes!("../../../dev/fixtures/complete.json")).unwrap();
@@ -199,6 +199,7 @@ fn receiver_replays_preserve_terminal_soc_and_duplicate_event_identity() {
                 })
                 .unwrap();
             assert_eq!(event.battery_percent, original.battery_percent);
+            assert_eq!(event.charging, original.charging);
             if event.counter.is_some() {
                 assert_eq!(&event, original);
             }

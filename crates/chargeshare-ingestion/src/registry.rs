@@ -861,26 +861,22 @@ impl Store {
                 let registration = &car.registration;
                 let vehicle = VehicleId::new(&registration.vehicle)
                     .map_err(|_| IngestionError::RegistryIntegrity)?;
-                let owner = OwnerId::new(&registration.owner)
-                    .map_err(|_| IngestionError::RegistryIntegrity)?;
-                let last_charge = self.last_charge(&vehicle, &self.sessions(&owner, &vehicle)?)?;
+                let status = self.vehicle_status(&vehicle)?;
                 let chargers: Vec<_> = registration
                     .chargers
                     .iter()
                     .filter_map(|id| registry.chargers.get(id))
                     .map(|charger| serde_json::json!({"id":charger.id,"name":charger.name}))
                     .collect();
-                scopes.push(serde_json::json!({"owner":registration.owner,"vehicle":registration.vehicle,"name":registration.name,"chargers":chargers,"color":car.color,"last_charge":last_charge}));
+                scopes.push(serde_json::json!({"owner":registration.owner,"vehicle":registration.vehicle,"name":registration.name,"chargers":chargers,"color":car.color,"battery_reading":status.battery_reading,"charging":status.charging}));
             }
         } else {
             for (index, mapping) in self.manifest.config().mappings.iter().enumerate() {
                 let vehicle =
                     VehicleId::new(&mapping.vehicle).map_err(|_| IngestionError::StorageCorrupt)?;
-                let owner =
-                    OwnerId::new(&mapping.owner).map_err(|_| IngestionError::StorageCorrupt)?;
-                let last_charge = self.last_charge(&vehicle, &self.sessions(&owner, &vehicle)?)?;
+                let status = self.vehicle_status(&vehicle)?;
                 let chargers: Vec<_> = self.manifest.config().owner_chargers.iter().filter(|charger| charger.owner_id == mapping.owner).map(|charger| serde_json::json!({"id":charger.charger_id,"name":"Sample charger"})).collect();
-                scopes.push(serde_json::json!({"owner":mapping.owner,"vehicle":mapping.vehicle,"name":format!("Sample car {}",index + 1),"chargers":chargers,"color":DEFAULT_CAR_COLOR,"last_charge":last_charge}));
+                scopes.push(serde_json::json!({"owner":mapping.owner,"vehicle":mapping.vehicle,"name":format!("Sample car {}",index + 1),"chargers":chargers,"color":DEFAULT_CAR_COLOR,"battery_reading":status.battery_reading,"charging":status.charging}));
             }
         }
         Ok(scopes)

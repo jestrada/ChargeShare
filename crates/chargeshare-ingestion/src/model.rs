@@ -304,6 +304,8 @@ pub struct NormalizedEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battery_percent: Option<BatteryPercent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charging: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<NormalizedLocation>,
 }
 

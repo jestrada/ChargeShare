@@ -32,9 +32,9 @@ pub use model::{
     SafeCounterProblem, TIMESTAMP_VERSION,
 };
 pub use normalize::normalize;
-mod last_charge;
 mod replay;
-pub use last_charge::LastCharge;
+mod vehicle_status;
+pub use vehicle_status::{BatteryReading, ChargingObservation};
 mod schema;
 mod store;
 

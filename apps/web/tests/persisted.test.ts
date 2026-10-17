@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { classificationLabel, reasonLabel, evidenceLabel, observationTime, chargeEndTime, parseResults, parseScopes, resultPath, scopes, pricingBoundary, livePricingBoundary, liveQuantization, pricingHoldLabel, dayLabel, chargingPeriods } from "../src/persisted.ts"
+import { classificationLabel, reasonLabel, evidenceLabel, observationTime, readingAge, retainCarReadings, carArtwork, parseResults, parseScopes, resultPath, scopes, pricingBoundary, livePricingBoundary, liveQuantization, pricingHoldLabel, dayLabel, chargingPeriods } from "../src/persisted.ts"
 
 const zeroTotal = { ac_kwh: "0.000000", exact_cost: "0.0000000000000000 USD", display_cost: "$0.00" }
 const emptyEvidence = { quoted_sessions: 0, held_sessions: 0, other_sessions: 0, partial_sessions: 0, complete_zero_sessions: 0, quality_flags: [] as string[] }
@@ -12,7 +12,7 @@ function emptyMonth() {
 }
 function result() {
   return {
-    ...scopes[0], last_charge: null as any, state: "held", evidence_boundary: "Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated",
+    ...scopes[0], battery_reading: null as any, charging: null as any, state: "held", evidence_boundary: "Synthetic review: vehicle-reported AC energy; physical accuracy unvalidated",
     observed_ac_kwh: "0.500000", eligible_shared_charger_kwh: "0.000000", revision: "results-v2-0123456789abcdef",
     provenance: { source: "synthetic-receiver-kafka", source_epoch: "synthetic-epoch", input_contract: "input-v1", mapping_version: "mapping-v1", manifest_version: "manifest-v1", normalizer_version: "normalizer-v1", calculation_version: "scoped-core-replay-v3", geofence_version: "fictional-geofence-v1" },
     pricing: { state: "held", charger_id: null, rate_models: [], calculation_version: "tou-linear-micro-kwh-v1", estimate_boundary: pricingBoundary, priced_ac_kwh: "0.000000", exact_subtotal: null, display_subtotal: null, quoted_session_count: 0, rate_held_session_count: 0, ineligible_session_count: 1 },
@@ -26,7 +26,7 @@ test("persisted client only constructs an explicitly scoped persisted route", ()
   assert.equal(resultPath({ owner: "a/b", vehicle: "v?" }), "/api/poc/owners/a%2Fb/vehicles/v%3F/results")
 })
 test("configured scope discovery accepts live aliases and refuses private or malformed fields", () => {
-  const value = { synthetic_only: false, scopes: [{ owner: "fictional-owner", vehicle: "fictional-vehicle", name: "Car sample", chargers: [], color: "#808080", last_charge: null }] }
+  const value = { synthetic_only: false, scopes: [{ owner: "fictional-owner", vehicle: "fictional-vehicle", name: "Car sample", chargers: [], color: "#808080", battery_reading: null, charging: null }] }
   assert.deepEqual(parseScopes({ synthetic_only: false, scopes: [] }), { synthetic_only: false, scopes: [] })
   assert.deepEqual(parseScopes(value), value)
   assert.deepEqual(parseScopes({ ...value, synthetic_only: true }), { ...value, synthetic_only: true })
@@ -256,7 +256,7 @@ test("monthly history rejects unsafe fields, malformed calendars and invented he
 })
 
 test("registry discovery accepts display names and empty active scope without private fields", () => {
-  const value = { synthetic_only: false, scopes: [{ owner: "owner-b", vehicle: "vehicle-b", name: "Model Y sample", color: "#16181C", last_charge: { battery_percent: 67, end_utc_seconds: "1788264660" }, chargers: [{ id: "driveway", name: "Driveway charger" }, { id: "garage", name: "Garage charger" }] }] }
+  const value = { synthetic_only: false, scopes: [{ owner: "owner-b", vehicle: "vehicle-b", name: "Model Y sample", color: "#16181C", battery_reading: { battery_percent: 67, observed_at: "2026-09-01T12:11:00Z" }, charging: null, chargers: [{ id: "driveway", name: "Driveway charger" }, { id: "garage", name: "Garage charger" }] }] }
   assert.deepEqual(parseScopes(value),value)
   assert.deepEqual(parseScopes({ synthetic_only: false, scopes: [] }), { synthetic_only: false, scopes: [] })
   assert.equal(resultPath(value.scopes[0],"garage"),"/api/poc/owners/owner-b/vehicles/vehicle-b/results?charger=garage")
@@ -300,36 +300,47 @@ test("CleanPowerSF public provenance accepts only the approved source URL", () =
   assert.match(livePricingBoundary, /UNVERIFIED/)
 })
 
-test("car discovery and results validate bounded terminal SOC, colors and explicit unknown values", () => {
-  const car = { owner: "owner-a", vehicle: "vehicle-a", name: "Silver sample", chargers: [], color: "#B8BDC3", last_charge: { battery_percent: 82.5, end_utc_seconds: "1788264600" } }
-  for (const battery_percent of [0, 100, 82.5, null]) {
-    const value = { ...car, last_charge: { ...car.last_charge, battery_percent } }
+test("car discovery and results validate bounded current readings, independent state and source timestamps", () => {
+  const car = { owner: "owner-a", vehicle: "vehicle-a", name: "Silver sample", chargers: [], color: "#B8BDC3", battery_reading: { battery_percent: 82.5, observed_at: "2026-09-01T12:10:00.123456789Z" }, charging: { active: true, observed_at: "2026-09-01T12:00:00Z" } }
+  for (const battery_percent of [0, 100, 82.5]) {
+    const value = { ...car, battery_reading: { ...car.battery_reading, battery_percent } }
     assert.deepEqual(parseScopes({ synthetic_only: true, scopes: [value] }).scopes[0], value)
-    const scoped = { ...result(), last_charge: value.last_charge }
-    assert.deepEqual(parseResults(scoped, scopes[0]).last_charge, value.last_charge)
+    assert.deepEqual(parseResults({ ...result(), battery_reading: value.battery_reading, charging: car.charging }, scopes[0]).battery_reading, value.battery_reading)
   }
-  assert.equal(parseScopes({ synthetic_only: true, scopes: [{ ...car, last_charge: null }] }).scopes[0].last_charge, null)
-  for (const color of ["silver", "#fff", "#1234567", "#12GG56", null, 42]) {
-    assert.throws(() => parseScopes({ synthetic_only: true, scopes: [{ ...car, color }] }))
+  assert.equal(parseScopes({ synthetic_only: true, scopes: [{ ...car, battery_reading: null, charging: null }] }).scopes[0].battery_reading, null)
+  for (const color of ["silver", "#fff", "#1234567", "#12GG56", null, 42]) assert.throws(() => parseScopes({ synthetic_only: true, scopes: [{ ...car, color }] }))
+  for (const battery_reading of [undefined, {}, ...[-1, 101, NaN, Infinity, "82", null].map(battery_percent => ({ ...car.battery_reading, battery_percent })), ...[null, "1788264600", "2026-09-01", "2026-02-30T00:00:00Z", "2026-09-01T00:00:00-07:00", "2026-09-01T00:00:00.1234567890Z"].map(observed_at => ({ ...car.battery_reading, observed_at })), { ...car.battery_reading, latitude: 1 }]) {
+    assert.throws(() => parseScopes({ synthetic_only: true, scopes: [{ ...car, battery_reading }] }))
+    assert.throws(() => parseResults({ ...result(), battery_reading }, scopes[0]))
   }
-  for (const last_charge of [undefined, {}, { ...car.last_charge, battery_percent: -1 }, { ...car.last_charge, battery_percent: 101 }, { ...car.last_charge, battery_percent: NaN }, { ...car.last_charge, battery_percent: Infinity }, { ...car.last_charge, battery_percent: "82" }, { ...car.last_charge, end_utc_seconds: null }, { ...car.last_charge, end_utc_seconds: "2026-09-01" }, { ...car.last_charge, latitude: 1 }]) {
-    assert.throws(() => parseScopes({ synthetic_only: true, scopes: [{ ...car, last_charge }] }))
-    assert.throws(() => parseResults({ ...result(), last_charge }, scopes[0]))
+  for (const charging of [undefined, {}, { ...car.charging, active: "true" }, { ...car.charging, observed_at: "invalid" }, { ...car.charging, plugged_in: true }]) {
+    assert.throws(() => parseScopes({ synthetic_only: true, scopes: [{ ...car, charging }] }))
+    assert.throws(() => parseResults({ ...result(), charging }, scopes[0]))
   }
 })
 
+test("clock-controlled ages keep stale battery and charging observations independently dated", () => {
+  const now = Date.parse("2026-10-01T12:00:00Z")
+  const battery = "2026-10-01T11:52:00Z"
+  const charging = "2026-10-01T11:40:00Z"
+  assert.equal(readingAge(battery, now), "8 min ago")
+  assert.equal(readingAge(charging, now), "20 min ago")
+  assert.equal(readingAge(battery, now + 60_000), "9 min ago")
+  assert.equal(readingAge(charging, now + 60_000), "21 min ago")
+  assert.equal(readingAge(battery, now + 3 * 86400_000), "3 days ago")
+  assert.equal(readingAge(battery, now + 3600_000), "1 hr ago")
+  assert.equal(readingAge(battery, now + 86400_000), "1 day ago")
+  assert.equal(readingAge(battery, Date.parse(battery) - 1), "just now")
+  const car = { owner: "owner-a", vehicle: "vehicle-a", name: "Car A", chargers: [], color: "#B8BDC3", battery_reading: { battery_percent: 0, observed_at: battery }, charging: { active: true, observed_at: charging } }
+  assert.deepEqual(retainCarReadings([car], [{ ...car, battery_reading: null, charging: null }]), [car])
+  const next = { ...car, battery_reading: { battery_percent: 100, observed_at: "2026-10-01T12:00:00Z" }, charging: { active: false, observed_at: "2026-10-01T12:00:00Z" } }
+  assert.deepEqual(retainCarReadings([car], [next]), [next])
+  assert.deepEqual(retainCarReadings([car], []), [])
+  assert.equal(retainCarReadings([car], [{ ...car, vehicle: "vehicle-b", battery_reading: null, charging: null }])[0].battery_reading, null)
+})
 
-test("car charge ends use the configured timezone across DST and local date boundaries", () => {
-  const epoch = (time: string) => String(Date.parse(time) / 1000)
-  const timezone = "America/Los_Angeles"
-  assert.equal(chargeEndTime(epoch("2026-09-29T11:40:00Z"), timezone), "Sep 29, 2026, 4:40 AM PDT")
-  assert.equal(chargeEndTime(epoch("2026-01-01T07:30:00Z"), timezone), "Dec 31, 2025, 11:30 PM PST")
-  assert.equal(chargeEndTime(epoch("2026-11-01T08:30:00Z"), timezone), "Nov 1, 2026, 1:30 AM PDT")
-  assert.equal(chargeEndTime(epoch("2026-11-01T09:30:00Z"), timezone), "Nov 1, 2026, 1:30 AM PST")
-  assert.equal(chargeEndTime(epoch("2026-09-29T11:40:00Z"), "America/New_York"), "Sep 29, 2026, 7:40 AM EDT")
-  assert.equal(chargeEndTime(null, timezone), "Unavailable")
-  assert.equal(chargeEndTime("1788264600", null), "Unavailable")
-  assert.equal(chargeEndTime("invalid", timezone), "Unavailable")
-  assert.equal(chargeEndTime("99999999999999999999999", timezone), "Unavailable")
-  assert.equal(chargeEndTime("1788264600", "invalid-timezone"), "Unavailable")
+test("artwork follows silver-like, dark and custom car colors", () => {
+  for (const color of ["#B8BDC3", "#C0C0C0", "#ffffff", "#808080"]) assert.equal(carArtwork(color), "silver")
+  for (const color of ["#16181C", "#000000", "#303030"]) assert.equal(carArtwork(color), "black")
+  for (const color of ["#ff0000", "#0000FF", "#556677"]) assert.equal(carArtwork(color), "silhouette")
 })

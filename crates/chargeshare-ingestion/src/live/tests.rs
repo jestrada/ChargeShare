@@ -794,47 +794,100 @@ fn reused_transaction_with_changed_signals_refuses_without_mutating_progress() {
     drop(store);
 }
 
-#[test]
-fn terminal_soc_accepts_complete_stopped_disconnected_zero_full_and_fractional_percentages() {
-    for terminal in [
-        "DetailedChargeStateComplete",
-        "DetailedChargeStateStopped",
-        "DetailedChargeStateDisconnected",
-    ] {
-        for percent in [0.0, 100.0, 82.5] {
-            let mut runtime = Runtime::new();
-            field_mut(&mut runtime.records[3], "DetailedChargeState")["detailedChargeStateValue"] =
-                json!(terminal);
-            *field_mut(&mut runtime.records[3], "Soc") = json!({"doubleValue":percent});
-            let mut store = runtime.open();
-            assert!(runtime.results(&store).last_charge.is_none());
-            for (offset, record) in runtime.records.iter().enumerate() {
-                runtime.ingest(&mut store, offset as i64, record).unwrap();
-            }
-            let result = runtime.results(&store);
-            let charge = result.last_charge.as_ref().unwrap();
-            assert_eq!(charge.battery_percent.map(f64::from), Some(percent));
-            assert_eq!(charge.end_utc_seconds, "1788264600");
-            assert_eq!(
-                store.active_scopes().unwrap()[0]["last_charge"],
-                serde_json::to_value(charge).unwrap()
-            );
-            assert_eq!(result.observed_ac_kwh, "0.500000");
-            assert_eq!(result.pricing.display_subtotal.as_deref(), Some("$0.11"));
-            runtime.ingest(&mut store, 3, &runtime.records[3]).unwrap();
-            let mut duplicate = runtime.records[3].clone();
-            duplicate["headers"]["txid"] = json!("fictional-terminal-resend");
-            duplicate["payload"]["isResend"] = json!(true);
-            runtime.ingest(&mut store, 4, &duplicate).unwrap();
-            assert_eq!(runtime.results(&store), result);
-            drop(store);
-            assert_eq!(runtime.results(&runtime.open()), result);
-        }
+fn battery_record(runtime: &Runtime, time: &str, percent: Value, state: Option<&str>) -> Value {
+    let mut record = runtime.records[0].clone();
+    record["headers"]["txid"] = json!(format!("fictional-{time}-{percent}-{state:?}"));
+    record["payload"]["createdAt"] = json!(time);
+    record["payload"]["data"] = json!([{"key":"Soc","value":percent}]);
+    if let Some(state) = state {
+        record["payload"]["data"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"key":"DetailedChargeState","value":{"detailedChargeStateValue":state}}));
     }
+    record
 }
 
 #[test]
-fn missing_invalid_and_duplicate_terminal_soc_keep_end_time_without_earlier_readings() {
+fn current_battery_orders_fractional_source_times_outside_sessions_and_survives_replay_restart() {
+    let runtime = Runtime::new();
+    let mut store = runtime.open();
+    assert!(runtime.results(&store).battery_reading.is_none());
+    assert!(runtime.results(&store).charging.is_none());
+    let idle = battery_record(
+        &runtime,
+        "2026-09-01T10:00:00Z",
+        json!({"doubleValue":100}),
+        None,
+    );
+    runtime.ingest(&mut store, 0, &idle).unwrap();
+    assert!(runtime.results(&store).sessions.is_empty());
+    assert_eq!(
+        f64::from(
+            runtime
+                .results(&store)
+                .battery_reading
+                .unwrap()
+                .battery_percent
+        ),
+        100.0
+    );
+    let observations = [
+        (
+            "2026-09-01T11:00:00.9Z",
+            100.0,
+            Some("DetailedChargeStateCharging"),
+        ),
+        ("2026-09-01T11:00:00.900000001Z", 62.5, None),
+        (
+            "2026-09-01T11:00:00.89Z",
+            99.0,
+            Some("DetailedChargeStateComplete"),
+        ),
+    ];
+    for (offset, (time, percent, state)) in observations.into_iter().enumerate() {
+        let record = battery_record(&runtime, time, json!({"doubleValue":percent}), state);
+        runtime
+            .ingest(&mut store, offset as i64 + 1, &record)
+            .unwrap();
+    }
+    let result = runtime.results(&store);
+    let battery = result.battery_reading.as_ref().unwrap();
+    assert_eq!(f64::from(battery.battery_percent), 62.5);
+    assert_eq!(battery.observed_at, "2026-09-01T11:00:00.900000001Z");
+    let charging = result.charging.as_ref().unwrap();
+    assert!(charging.active);
+    assert_eq!(charging.observed_at, "2026-09-01T11:00:00.9Z");
+    let mut duplicate = battery_record(
+        &runtime,
+        observations[1].0,
+        json!({"doubleValue":62.5}),
+        None,
+    );
+    runtime.ingest(&mut store, 2, &duplicate).unwrap();
+    duplicate["headers"]["txid"] = json!("fictional-battery-resend");
+    duplicate["payload"]["isResend"] = json!(true);
+    runtime.ingest(&mut store, 4, &duplicate).unwrap();
+    assert_eq!(runtime.results(&store), result);
+    assert_eq!(
+        store.active_scopes().unwrap()[0]["battery_reading"],
+        serde_json::to_value(battery).unwrap()
+    );
+    let filtered = store
+        .results_for_charger(
+            &OwnerId::new("owner-a").unwrap(),
+            &VehicleId::new("vehicle-a").unwrap(),
+            "fictional-shared-charger",
+        )
+        .unwrap();
+    assert_eq!(filtered.battery_reading, result.battery_reading);
+    assert_eq!(filtered.charging, result.charging);
+    drop(store);
+    assert_eq!(runtime.results(&runtime.open()), result);
+}
+
+#[test]
+fn missing_invalid_duplicate_soc_never_erases_or_refreshes_a_known_reading() {
     for value in [
         None,
         Some(json!({"doubleValue":-1})),
@@ -845,101 +898,77 @@ fn missing_invalid_and_duplicate_terminal_soc_keep_end_time_without_earlier_read
         Some(json!({"doubleValue":82,"extra":true})),
         Some(json!({"duplicate":true})),
     ] {
-        let mut runtime = Runtime::new();
-        match value {
-            None => remove_field(&mut runtime.records[3], "Soc"),
-            Some(value) if value.get("duplicate").is_some() => {
-                runtime.records[3]["payload"]["data"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(json!({"key":"Soc","value":{"doubleValue":99}}));
-            }
-            Some(value) => *field_mut(&mut runtime.records[3], "Soc") = value,
-        }
+        let runtime = Runtime::new();
         let mut store = runtime.open();
-        for (offset, record) in runtime.records.iter().enumerate() {
-            runtime.ingest(&mut store, offset as i64, record).unwrap();
-        }
-        let result = runtime.results(&store);
-        assert_eq!(
-            result.last_charge,
-            Some(crate::LastCharge {
-                battery_percent: None,
-                end_utc_seconds: "1788264600".to_owned()
-            })
+        let initial = battery_record(
+            &runtime,
+            "2026-09-01T11:00:00Z",
+            json!({"doubleValue":0}),
+            None,
         );
-        assert_eq!(result.observed_ac_kwh, "0.500000");
-        assert_eq!(result.pricing.display_subtotal.as_deref(), Some("$0.11"));
+        runtime.ingest(&mut store, 0, &initial).unwrap();
+        let before = runtime.results(&store).battery_reading;
+        let mut invalid = battery_record(
+            &runtime,
+            "2026-09-10T11:00:00Z",
+            json!({"doubleValue":99}),
+            Some("DetailedChargeStateCharging"),
+        );
+        match value {
+            None => remove_field(&mut invalid, "Soc"),
+            Some(value) if value.get("duplicate").is_some() => invalid["payload"]["data"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"key":"Soc","value":{"doubleValue":20}})),
+            Some(value) => *field_mut(&mut invalid, "Soc") = value,
+        }
+        runtime.ingest(&mut store, 1, &invalid).unwrap();
+        let result = runtime.results(&store);
+        assert_eq!(result.battery_reading, before);
+        assert_eq!(
+            f64::from(result.battery_reading.unwrap().battery_percent),
+            0.0
+        );
+        assert_eq!(result.charging.unwrap().observed_at, "2026-09-10T11:00:00Z");
+        assert!(
+            result
+                .sessions
+                .iter()
+                .all(|session| session.observed_ac_kwh == "0.000000")
+        );
     }
 }
 
 #[test]
-fn latest_retained_terminal_wins_across_months_and_charger_filters_while_in_progress_preserves_it()
-{
+fn charging_and_idle_battery_updates_preserve_session_energy_rates_and_independent_state() {
     let runtime = Runtime::new();
     let mut store = runtime.open();
     for (offset, record) in runtime.records.iter().enumerate() {
         runtime.ingest(&mut store, offset as i64, record).unwrap();
-    }
-    let before = runtime.results(&store).last_charge;
-    let mut start = runtime.records[1].clone();
-    start["headers"]["txid"] = json!("fictional-next-start");
-    start["payload"]["createdAt"] = json!("2026-10-01T12:00:00Z");
-    *field_mut(&mut start, "Soc") = json!({"doubleValue":10});
-    runtime.ingest(&mut store, 4, &start).unwrap();
-    assert_eq!(runtime.results(&store).last_charge, before);
-    let mut end = runtime.records[3].clone();
-    end["headers"]["txid"] = json!("fictional-next-end");
-    end["payload"]["createdAt"] = json!("2026-10-01T12:10:00Z");
-    *field_mut(&mut end, "Soc") = json!({"doubleValue":67});
-    end["payload"]["data"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({"key":"FastChargerPresent","value":{"booleanValue":true}}));
-    runtime.ingest(&mut store, 5, &end).unwrap();
-    let latest = runtime.results(&store).last_charge.unwrap();
-    assert_eq!(latest.battery_percent.map(f64::from), Some(67.0));
-    assert_eq!(latest.end_utc_seconds, "1790856600");
-    let filtered = store
-        .results_for_charger(
-            &OwnerId::new("owner-a").unwrap(),
-            &VehicleId::new("vehicle-a").unwrap(),
-            "fictional-shared-charger",
-        )
-        .unwrap();
-    assert_eq!(filtered.last_charge, Some(latest.clone()));
-    assert_eq!(
-        store.active_scopes().unwrap()[0]["last_charge"],
-        serde_json::to_value(latest).unwrap()
-    );
-}
-
-#[test]
-fn conflicting_soc_at_the_terminal_source_timestamp_is_unavailable_without_changing_energy() {
-    let runtime = Runtime::new();
-    let mut store = runtime.open();
-    for (offset, record) in runtime.records.iter().enumerate() {
-        runtime.ingest(&mut store, offset as i64, record).unwrap();
+        assert!(runtime.results(&store).battery_reading.is_some());
     }
     let before = runtime.results(&store);
-    let mut conflict = runtime.records[3].clone();
-    *field_mut(&mut conflict, "Soc") = json!({"doubleValue":99});
-    assert_eq!(
-        runtime.ingest(&mut store, 4, &conflict),
-        Err(IngestionError::DeliveryConflict)
-    );
-    conflict["headers"]["txid"] = json!("fictional-conflicting-terminal");
-    runtime.ingest(&mut store, 4, &conflict).unwrap();
-    let after = runtime.results(&store);
-    assert_eq!(after.last_charge.as_ref().unwrap().battery_percent, None);
-    assert_eq!(
-        after.last_charge.as_ref().unwrap().end_utc_seconds,
-        before.last_charge.unwrap().end_utc_seconds
-    );
-    assert_eq!(after.sessions, before.sessions);
-    assert_eq!(after.pricing, before.pricing);
-    drop(store);
-    assert_eq!(runtime.results(&runtime.open()), after);
+    for (offset, percent) in [100.0, 0.0].into_iter().enumerate() {
+        let record = battery_record(
+            &runtime,
+            &format!("2026-10-0{}T11:00:00Z", offset + 1),
+            json!({"doubleValue":percent}),
+            None,
+        );
+        runtime
+            .ingest(&mut store, offset as i64 + 4, &record)
+            .unwrap();
+        let result = runtime.results(&store);
+        assert_eq!(
+            f64::from(result.battery_reading.unwrap().battery_percent),
+            percent
+        );
+        assert_eq!(result.charging, before.charging);
+        assert_eq!(result.sessions, before.sessions);
+        assert_eq!(result.pricing, before.pricing);
+    }
+    assert_eq!(before.observed_ac_kwh, "0.500000");
+    assert_eq!(before.pricing.display_subtotal.as_deref(), Some("$0.11"));
 }
 
 #[test]
@@ -952,7 +981,7 @@ fn legacy_records_keep_unknown_soc_on_restart_original_redelivery_and_resend() {
     store.connection.execute_batch("UPDATE event_variants SET event_json = json_remove(event_json, '$.battery_percent');
         UPDATE live_records SET signal_json = json_remove(signal_json, '$.battery_percent'), disposition_json = json_remove(disposition_json, '$.Accepted.event.battery_percent');").unwrap();
     let before = runtime.results(&store);
-    assert_eq!(before.last_charge.as_ref().unwrap().battery_percent, None);
+    assert_eq!(before.battery_reading, None);
     drop(store);
     let mut store = runtime.open();
     for (offset, record) in runtime.records.iter().enumerate() {
@@ -963,4 +992,33 @@ fn legacy_records_keep_unknown_soc_on_restart_original_redelivery_and_resend() {
     resend["payload"]["isResend"] = json!(true);
     runtime.ingest(&mut store, 4, &resend).unwrap();
     assert_eq!(runtime.results(&store), before);
+}
+
+#[test]
+fn live_fixture_covers_never_old_fresh_and_independently_dated_charging() {
+    let runtime = Runtime::new();
+    let mut store = runtime.open();
+    let fixture: Value =
+        serde_json::from_slice(include_bytes!("../../../../dev/fixtures/live.json")).unwrap();
+    let examples = fixture["battery_examples"].as_array().unwrap();
+    runtime
+        .ingest(&mut store, 0, &examples[3]["record"])
+        .unwrap();
+    assert!(runtime.results(&store).battery_reading.is_none());
+    for (offset, example) in examples[..3].iter().enumerate() {
+        runtime
+            .ingest(&mut store, offset as i64 + 1, &example["record"])
+            .unwrap();
+    }
+    let result = runtime.results(&store);
+    assert_eq!(
+        f64::from(result.battery_reading.as_ref().unwrap().battery_percent),
+        62.0
+    );
+    assert_eq!(
+        result.battery_reading.unwrap().observed_at,
+        "2026-09-10T11:52:00Z"
+    );
+    assert!(result.charging.as_ref().unwrap().active);
+    assert_eq!(result.charging.unwrap().observed_at, "2026-09-10T11:48:00Z");
 }
