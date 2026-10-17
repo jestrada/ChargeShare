@@ -23,7 +23,7 @@ export function CarCards({ cars, selected, chooseScope }: { cars: CarScope[]; se
       return <button type="button" className="car-card glass" key={car.vehicle} aria-pressed={active} onClick={() => chooseScope(car)}>
         <span className="car-card-heading"><strong>{car.name}</strong><span className="car-selection">{active ? "Selected" : "Select car"}</span></span>
         <CarArtwork color={car.color} />
-        <span className="car-battery">{car.battery_reading ? <>{car.battery_reading.battery_percent}% <span className="car-age">· {readingAge(car.battery_reading.observed_at, now)}</span></> : "Unavailable"}</span>
+        <span className="car-battery">{car.battery_reading ? <>{Math.round(car.battery_reading.battery_percent)}% <span className="car-age">· {readingAge(car.battery_reading.observed_at, now)}</span></> : "Unavailable"}</span>
         <span className="car-status">{car.charging?.active && <span className="car-charging">Charging <span>· {readingAge(car.charging.observed_at, now)}</span></span>}</span>
       </button>
     })}
