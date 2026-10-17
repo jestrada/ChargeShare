@@ -208,7 +208,7 @@ fn utc_timestamps_accept_optional_fractional_seconds_and_truncate_event_time() {
 }
 
 #[test]
-fn nanosecond_soc_only_resend_outside_a_session_rejects_only_for_missing_association() {
+fn nanosecond_soc_only_resend_keeps_battery_without_a_charging_association() {
     let runtime = Runtime::new();
     let mut record = runtime.records[0].clone();
     record["payload"] = json!({
@@ -235,6 +235,14 @@ fn nanosecond_soc_only_resend_outside_a_session_rejects_only_for_missing_associa
         Ok(crate::RecordDisposition::Rejected(
             crate::RejectionReason::MissingAssociation
         ))
+    );
+    let mut store = runtime.open();
+    runtime.ingest(&mut store, 0, &record).unwrap();
+    let result = runtime.results(&store);
+    assert!(result.sessions.is_empty());
+    assert_eq!(
+        result.battery_reading.unwrap().battery_percent,
+        crate::BatteryPercent::try_from(99.9).unwrap()
     );
 }
 
@@ -992,6 +1000,110 @@ fn legacy_records_keep_unknown_soc_on_restart_original_redelivery_and_resend() {
     resend["payload"]["isResend"] = json!(true);
     runtime.ingest(&mut store, 4, &resend).unwrap();
     assert_eq!(runtime.results(&store), before);
+}
+
+#[test]
+fn battery_backfill_resumes_without_readapting_sessions_and_preserves_redelivery() {
+    let runtime = Runtime::new();
+    let mut records = runtime.records.clone();
+    let fixture: Value =
+        serde_json::from_slice(include_bytes!("../../../../dev/fixtures/live.json")).unwrap();
+    records.push(fixture["battery_backfill_example"].clone());
+    let mut store = runtime.open();
+    for (offset, record) in records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record).unwrap();
+    }
+    let expected = runtime.results(&store);
+    store.connection.execute_batch("UPDATE event_variants SET event_json = json_remove(event_json, '$.battery_percent');
+        UPDATE live_records SET signal_json = json_remove(signal_json, '$.battery_percent'), disposition_json = json_remove(disposition_json, '$.Accepted.event.battery_percent');").unwrap();
+    let before = runtime.results(&store);
+    let state: String = store
+        .connection
+        .query_row("SELECT state_json FROM live_adapter_state", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let statistics = store.statistics().unwrap();
+    let positions = store.positions().unwrap();
+    assert!(store.needs_battery_backfill().unwrap());
+    for record in &records[..2] {
+        store
+            .backfill_live_battery(
+                &headers(record),
+                &serde_json::to_vec(&record["payload"]).unwrap(),
+            )
+            .unwrap();
+    }
+    drop(store);
+    let mut store = runtime.open();
+    assert!(store.needs_battery_backfill().unwrap());
+    let mut conflict = records[2].clone();
+    conflict["payload"]["createdAt"] = json!("2026-09-20T12:00:00Z");
+    assert_eq!(
+        store.backfill_live_battery(
+            &headers(&conflict),
+            &serde_json::to_vec(&conflict["payload"]).unwrap()
+        ),
+        Err(IngestionError::DeliveryConflict)
+    );
+    for record in &records {
+        store
+            .backfill_live_battery(
+                &headers(record),
+                &serde_json::to_vec(&record["payload"]).unwrap(),
+            )
+            .unwrap();
+    }
+    store.finish_battery_backfill().unwrap();
+    assert!(!store.needs_battery_backfill().unwrap());
+    assert_eq!(store.statistics().unwrap(), statistics);
+    assert_eq!(store.positions().unwrap(), positions);
+    assert_eq!(
+        store
+            .connection
+            .query_row::<String, _, _>("SELECT state_json FROM live_adapter_state", [], |row| row
+                .get(0))
+            .unwrap(),
+        state
+    );
+    let after = runtime.results(&store);
+    assert_eq!(after.battery_reading, expected.battery_reading);
+    assert_eq!(after.sessions, before.sessions);
+    assert_eq!(after.pricing, before.pricing);
+    assert_eq!(after.charging, before.charging);
+    for (offset, record) in records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record).unwrap();
+    }
+    let mut resend = records[4].clone();
+    resend["headers"]["txid"] = json!("fictional-backfilled-resend");
+    resend["payload"]["isResend"] = json!(true);
+    runtime.ingest(&mut store, 5, &resend).unwrap();
+    assert_eq!(runtime.results(&store), after);
+    drop(store);
+    let mut store = runtime.open();
+    assert!(!store.needs_battery_backfill().unwrap());
+    assert_eq!(runtime.results(&store), after);
+}
+
+#[test]
+fn battery_backfill_leaves_expired_history_unknown_and_does_not_repeat_completed_scans() {
+    let runtime = Runtime::new();
+    let mut store = runtime.open();
+    runtime.ingest(&mut store, 0, &runtime.records[0]).unwrap();
+    store
+        .connection
+        .execute_batch(
+            "UPDATE live_records SET signal_json = json_remove(signal_json, '$.battery_percent');",
+        )
+        .unwrap();
+    assert!(store.needs_battery_backfill().unwrap());
+    store.finish_battery_backfill().unwrap();
+    assert!(runtime.results(&store).battery_reading.is_none());
+    drop(store);
+    let mut store = runtime.open();
+    assert!(!store.needs_battery_backfill().unwrap());
+    store.finish_battery_backfill().unwrap();
+    assert!(runtime.results(&store).battery_reading.is_none());
 }
 
 #[test]

@@ -731,6 +731,7 @@ impl LiveIngestion {
             Instant::now() + config.deadline,
         )?;
         recover_registry(&consumer, &config, &source, store)?;
+        backfill_live_batteries(&consumer, &config, &source, store)?;
         let mut assignment = TopicPartitionList::new();
         for position in store.positions()? {
             assignment
@@ -979,64 +980,18 @@ fn recover_registry(
         )?;
         let positions = store.capture_recovery(&vehicle, source, &bounds)?;
         for position in positions {
-            if position.next_offset == position.high {
-                continue;
-            }
-            let mut assignment = TopicPartitionList::new();
-            assignment
-                .add_partition_offset(
-                    &source.topic,
-                    position.partition,
-                    Offset::Offset(position.next_offset),
-                )
-                .map_err(|_| IngestionError::KafkaUnavailable)?;
-            consumer
-                .assign(&assignment)
-                .map_err(|_| IngestionError::KafkaUnavailable)?;
-            let mut next = position.next_offset;
-            let mut deadline = Instant::now() + config.deadline;
-            while next < position.high {
-                store.validate_live_storage()?;
-                verify_source_marker(&config.source_epoch_path, source)?;
-                let Some(delivery) =
-                    consumer.poll(remaining(deadline)?.min(Duration::from_millis(100)))
-                else {
-                    continue;
-                };
-                let delivery = delivery.map_err(consumer_error)?;
-                if delivery.topic() != source.topic
-                    || delivery.partition() != position.partition
-                    || delivery.offset() != next
-                {
-                    return Err(IngestionError::RecoveryGap);
-                }
-                let headers: Vec<_> = delivery
-                    .headers()
-                    .map(|headers| {
-                        headers
-                            .iter()
-                            .map(|header| {
-                                (
-                                    header.key.to_owned(),
-                                    header.value.unwrap_or_default().to_vec(),
-                                )
-                            })
-                            .collect()
+            scan_live_range(
+                consumer,
+                config,
+                source,
+                store,
+                &position,
+                &mut |store, coordinate, headers, payload| {
+                    store.recover_live_observed(&vehicle, coordinate, headers, payload, &mut |_| {
+                        Ok(())
                     })
-                    .unwrap_or_default();
-                store.recover_live_observed(
-                    &vehicle,
-                    DeliveryCoordinate {
-                        partition: position.partition,
-                        offset: next,
-                    },
-                    &headers,
-                    delivery.payload().unwrap_or_default(),
-                    &mut |_| Ok(()),
-                )?;
-                next += 1;
-                deadline = Instant::now() + config.deadline;
-            }
+                },
+            )?;
         }
         verify_broker_source(
             consumer,
@@ -1050,6 +1005,122 @@ fn recover_registry(
     consumer
         .unassign()
         .map_err(|_| IngestionError::KafkaUnavailable)
+}
+
+fn backfill_live_batteries(
+    consumer: &BaseConsumer<SilentSyntheticContext>,
+    config: &KafkaConfig,
+    source: &SourceBinding,
+    store: &mut Store,
+) -> Result<(), IngestionError> {
+    if !store.needs_battery_backfill()? {
+        return Ok(());
+    }
+    let bounds = verify_broker_source(
+        consumer,
+        config,
+        source,
+        store,
+        Instant::now() + config.deadline,
+    )?;
+    for bound in bounds {
+        let position = crate::registry_recovery::RecoveryPosition {
+            partition: bound.partition,
+            next_offset: bound.low,
+            high: bound.high,
+        };
+        scan_live_range(
+            consumer,
+            config,
+            source,
+            store,
+            &position,
+            &mut |store, _, headers, payload| store.backfill_live_battery(headers, payload),
+        )?;
+    }
+    verify_broker_source(
+        consumer,
+        config,
+        source,
+        store,
+        Instant::now() + config.deadline,
+    )?;
+    store.finish_battery_backfill()?;
+    consumer
+        .unassign()
+        .map_err(|_| IngestionError::KafkaUnavailable)
+}
+
+fn scan_live_range(
+    consumer: &BaseConsumer<SilentSyntheticContext>,
+    config: &KafkaConfig,
+    source: &SourceBinding,
+    store: &mut Store,
+    position: &crate::registry_recovery::RecoveryPosition,
+    retain: &mut impl FnMut(
+        &mut Store,
+        DeliveryCoordinate,
+        &[(String, Vec<u8>)],
+        &[u8],
+    ) -> Result<(), IngestionError>,
+) -> Result<(), IngestionError> {
+    if position.next_offset == position.high {
+        return Ok(());
+    }
+    let mut assignment = TopicPartitionList::new();
+    assignment
+        .add_partition_offset(
+            &source.topic,
+            position.partition,
+            Offset::Offset(position.next_offset),
+        )
+        .map_err(|_| IngestionError::KafkaUnavailable)?;
+    consumer
+        .assign(&assignment)
+        .map_err(|_| IngestionError::KafkaUnavailable)?;
+    let mut next = position.next_offset;
+    let mut deadline = Instant::now() + config.deadline;
+    while next < position.high {
+        store.validate_live_storage()?;
+        verify_source_marker(&config.source_epoch_path, source)?;
+        let Some(delivery) = consumer.poll(remaining(deadline)?.min(Duration::from_millis(100)))
+        else {
+            continue;
+        };
+        let delivery = delivery.map_err(consumer_error)?;
+        if delivery.topic() != source.topic
+            || delivery.partition() != position.partition
+            || delivery.offset() != next
+        {
+            return Err(IngestionError::RecoveryGap);
+        }
+        let headers: Vec<_> = delivery
+            .headers()
+            .map(|headers| {
+                headers
+                    .iter()
+                    .map(|header| {
+                        (
+                            header.key.to_owned(),
+                            header.value.unwrap_or_default().to_vec(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        retain(
+            store,
+            DeliveryCoordinate {
+                partition: position.partition,
+                offset: next,
+            },
+            &headers,
+            delivery.payload().unwrap_or_default(),
+        )?;
+        next += 1;
+        deadline = Instant::now() + config.deadline;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

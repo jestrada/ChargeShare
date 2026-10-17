@@ -70,6 +70,11 @@ readings remain visible after days without telemetry or a failed fetch.
 “Unavailable” means no valid reading has been reported. A Charging badge shows
 explicit charge-state telemetry with its own age; a newer battery report does
 not refresh that state. Month and charger filters do not affect these readings.
+On live startup, legacy signals missing their battery field are enriched from
+retained Kafka records before the API starts, including recovered cars and
+SOC-only reports outside sessions. Interrupted passes safely retry without
+changing sessions, energy, pricing or ordinary offsets. Expired readings remain
+unknown; completed passes are skipped on later startups.
 Silver-like and dark colors use CC0 photo cutouts; other colors use a tinted
 traced silhouette ([artwork credits](apps/web/public/cars/CREDITS.md)).
 Selecting another car resets to All chargers.
