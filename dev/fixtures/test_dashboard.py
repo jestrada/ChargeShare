@@ -1,11 +1,13 @@
 import json
 import random
+import tempfile
 import unittest
 from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 
-from dev.fixtures.dashboard import FIXTURES, LOCAL_TIMEZONE, SYNTHETIC_NOTICE, generate_dashboard_fixture
+from dev.fixtures.dashboard import FIXTURES, LOCAL_TIMEZONE, SYNTHETIC_NOTICE, generate_dashboard_fixture, write_placeholder_images
 
 
 class DashboardFixtureTests(unittest.TestCase):
@@ -71,7 +73,7 @@ class DashboardFixtureTests(unittest.TestCase):
 
     def test_named_multiple_car_and_charger_fixture_preserves_isolated_scopes(self):
         fixture = generate_dashboard_fixture(multiple=True)
-        self.assertEqual([scope["name"] for scope in fixture["display_registry"]], ["Model 3 sample", "Model Y sample"])
+        self.assertEqual([scope["name"] for scope in fixture["display_registry"]], ["Silver Model Y sample", "Black Model Y sample"])
         self.assertEqual([scope["chargers"][0]["name"] for scope in fixture["display_registry"]], ["Driveway charger", "Garage charger"])
         self.assertEqual({record["key"] for record in fixture["records"]}, {"vehicle-a", "vehicle-b"})
         self.assertEqual(len(fixture["records"]), 2 * len(self.fixture["records"]))
@@ -81,6 +83,19 @@ class DashboardFixtureTests(unittest.TestCase):
             self.assertEqual(next(field["value"]["stringValue"] for field in end["payload"]["data"] if field["key"] == "BatteryLevel"), expected)
         for mapping in fixture["manifest"]["mappings"]:
             self.assertTrue(all(record["payload"]["vin"] == mapping["vehicle"] for record in fixture["records"] if record["key"] == mapping["vehicle"]))
+
+    def test_placeholder_images_are_repeatable_small_pngs_for_the_sample_colors(self):
+        with tempfile.TemporaryDirectory(prefix="chargeshare-placeholder-", dir="/tmp") as directory:
+            images = Path(directory)
+            write_placeholder_images(images)
+            png = (images / "b8bdc3.png").read_bytes()
+            self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertEqual(int.from_bytes(png[16:20], "big"), 120)
+            self.assertEqual(int.from_bytes(png[20:24], "big"), 60)
+            self.assertLess(len(png), 1024)
+            self.assertEqual(sorted(path.name for path in images.iterdir()), ["16181c.png", "b8bdc3.png"])
+            write_placeholder_images(images)
+            self.assertEqual((images / "b8bdc3.png").read_bytes(), png)
 
     def test_current_old_and_never_reported_examples_keep_independent_source_ages(self):
         fresh = generate_dashboard_fixture(multiple=True, battery_example="fresh")

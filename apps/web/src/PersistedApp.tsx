@@ -17,12 +17,11 @@ function initialScope(): Scope | null {
 
 export function PersistedApp() {
   const [scope, setScope] = useState(initialScope)
-  const [charger, setCharger] = useState<string>("")
   const [scopesAvailable, setScopesAvailable] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [configured, setConfigured] = useState<{ synthetic_only: boolean; scopes: CarScope[] } | null>(null)
   const scopeKey = scope ? `${scope.owner}/${scope.vehicle}` : ""
-  const key = `${scopeKey}/${charger}`
+  const key = scopeKey
   const [view, setView] = useState<View>({ scope: key, state: "loading" })
   useEffect(() => {
     const controller = new AbortController()
@@ -49,7 +48,7 @@ export function PersistedApp() {
     let active = true
     setView(previous => previous.scope === key && previous.state === "available" ? previous : { scope: key, state: "loading" })
     const timeout = window.setTimeout(() => controller.abort(), 5000)
-    fetch(resultPath(scope, charger), { signal: controller.signal, cache: "no-store" })
+    fetch(resultPath(scope), { signal: controller.signal, cache: "no-store" })
       .then(async response => {
         if (!response.ok) {
           if (active) setView({ scope: key, state: response.status === 400 || response.status === 404 ? "refused" : "unavailable" })
@@ -63,12 +62,11 @@ export function PersistedApp() {
       .catch(() => { if (active) setView({ scope: key, state: "unavailable" }) })
       .finally(() => window.clearTimeout(timeout))
     return () => { active = false; controller.abort(); window.clearTimeout(timeout); window.clearTimeout(poll) }
-  }, [scope, key, charger, refresh, scopesAvailable])
+  }, [scope, key, refresh, scopesAvailable])
   const current: View = !scopesAvailable && view.state === "available" ? { scope: key, state: "unavailable" } :
     view.scope === key ? view : { scope: key, state: "loading" }
   function chooseScope(next: Scope) {
     setScope(next)
-    setCharger("")
     const params = new URLSearchParams({ owner: next.owner, vehicle: next.vehicle })
     window.history.replaceState(null, "", `/?${params}`)
   }
@@ -77,12 +75,6 @@ export function PersistedApp() {
     <header className="persisted-heading">
       <div><p className="persisted-label">{configured?.synthetic_only ? "Synthetic evidence" : "Charging history"}</p><h1>ChargeShare</h1></div>
       <div className="persisted-controls">
-        <label className="persisted-selector">Charger
-          <select aria-label="Charger" value={charger} disabled={!scope || !configured?.scopes.length} onChange={event => setCharger(event.target.value)}>
-            <option value="">All chargers</option>
-            {(scope?.chargers ?? []).map(option => <option key={option.id} value={option.id}>{option.name}</option>)}
-          </select>
-        </label>
         <Button className="control" variant="outline" onClick={() => setRefresh(value => value + 1)}>Refresh</Button>
       </div>
     </header>
@@ -92,15 +84,15 @@ export function PersistedApp() {
       {current.state === "loading" && <section className="glass persisted-panel"><h2>Reading committed evidence…</h2></section>}
       {current.state === "unavailable" && <section className="glass persisted-panel" role="alert"><h2>Persisted API unavailable</h2><p>Committed results could not be read. Refresh when the owning runtime is ready.</p></section>}
       {current.state === "refused" && <section className="glass persisted-panel" role="alert"><h2>Scope refused</h2><p>Select a configured owner and vehicle pair to read its evidence.</p></section>}
-      {current.state === "available" && <Results key={key} results={current.results} carName={scope?.name ?? "Charging history"} chargerName={scope?.chargers?.find(option => option.id === charger)?.name ?? "All chargers"} chargers={scope?.chargers ?? []} />}
+      {current.state === "available" && <Results key={key} results={current.results} carName={scope?.name ?? "Charging history"} chargers={scope?.chargers ?? []} />}
       </>}
     </main>
   </div>
 }
 
-function Results({ results, carName, chargerName, chargers }: { results: ScopedResults; carName: string; chargerName: string; chargers: { id: string; name: string }[] }) {
+function Results({ results, carName, chargers }: { results: ScopedResults; carName: string; chargers: { id: string; name: string }[] }) {
   return <section className="glass persisted-panel">
-    <h2>{results.registry?.car_name ?? carName} · {chargerName}</h2>
+    <h2>{results.registry?.car_name ?? carName} · All chargers</h2>
     <MonthlyCharging history={results.monthly} />
     {results.state === "empty" && <div><h2>No committed sessions</h2><p>This vehicle has no retained session evidence yet.</p></div>}
     <p className="muted">Vehicle-reported AC input counter energy; physical accuracy unvalidated. Quoted energy is allocated by elapsed UTC time.</p>

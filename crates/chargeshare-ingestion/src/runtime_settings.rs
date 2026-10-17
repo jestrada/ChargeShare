@@ -20,6 +20,8 @@ pub struct RuntimeSettings {
     pub(crate) database: PathBuf,
     #[serde(default = "default_api_port")]
     pub(crate) api_port: u16,
+    #[serde(default, skip_serializing)]
+    pub(crate) private_car_images_dir: Option<PathBuf>,
     pub(crate) rate_models: Vec<RateModelConfig>,
 }
 
@@ -124,5 +126,11 @@ pub fn run_live(bytes: &[u8]) -> Result<(), IngestionError> {
     let driver = crate::kafka::LiveIngestion::connect_live(settings.clone(), source, &mut store)?;
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, settings.api_port))
         .map_err(|_| IngestionError::StorageUnavailable)?;
-    crate::viewing::serve_with_driver(listener, store, driver, &AtomicBool::new(false))
+    crate::viewing::serve_with_driver(
+        listener,
+        store,
+        driver,
+        &AtomicBool::new(false),
+        settings.private_car_images_dir.as_deref(),
+    )
 }

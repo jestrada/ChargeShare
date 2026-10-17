@@ -2,7 +2,10 @@ import { useEffect, useState, type CSSProperties } from "react"
 import { carArtwork, readingAge, type CarScope } from "../persisted"
 
 function CarArtwork({ color }: { color: string }) {
+  const [unavailable, setUnavailable] = useState<string | null>(null)
+  const privateImage = `/api/poc/car-images/${color.slice(1).toLowerCase()}.png`
   const artwork = carArtwork(color)
+  if (unavailable !== privateImage) return <img className="car-artwork" src={privateImage} alt="" onError={() => setUnavailable(privateImage)} />
   if (artwork === "silhouette") return <span className="car-artwork car-silhouette" style={{ "--car-color": color } as CSSProperties} aria-hidden="true" />
   return <img className="car-artwork" src={`/cars/${artwork}.webp`} alt="" />
 }

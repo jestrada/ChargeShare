@@ -71,7 +71,8 @@ flowchart LR
         pricing --> results
         results --> api["Scoped HTTP: host loopback 8788"]
     end
-    api --> persisted["Persisted browser: 5174, colored car cards + battery/state ages + D3 monthly bars + charger selector + no-active-car state"]
+    private_images["Optional external PNG directory: paint-hex filenames, bounded reads, no symlinks"] --> api
+    api --> persisted["Persisted browser: 5174, compact car cards + battery/state ages + D3 monthly bars + all-charger results + no-active-car state"]
     subgraph fixture["Independent fixture preview"]
         demo["Fictional events + sample rates"] --> offline["Core exact offline pricing"]
         offline --> fixture_api["Fixture API: loopback 8787"]
@@ -115,6 +116,22 @@ linked charger IDs/names with a `synthetic_only` flag. Historical scoped reads
 remain available for inactive cars. The browser discovers these choices before requesting
 results; failed discovery clears the available view and retries on refresh.
 There are no aggregate, mutation or pricing endpoints in this API.
+
+Optional `RuntimeSettings.private_car_images_dir` is display configuration, excluded
+from the stored fixed-settings contract; existing registries need no migration.
+The viewing adapter pins an external absolute directory with descriptor-relative
+opens, refusing symlinks in every component and image filename. It serves only
+`GET /api/poc/car-images/{six-lowercase-hex-digits}.png`, matching registry paint
+`#RRGGBB` without `#`. Files must be regular readable PNGs no larger than 2 MiB,
+with bounded dimensions of 4096 × 4096 and PNG header/end markers. Reads remain
+bounded if files grow. Nonblocking opens refuse special files without waiting.
+Responses use `image/png`, `nosniff` and `no-store`; unavailable images return a
+fixed path-free error. Directory listings, arbitrary paths and image metadata
+endpoints are absent. The browser falls back on missing or undecodable images to
+the existing color-selected CC0 artwork. Thumbnails fit 120 × 60 px using
+`object-fit: contain`; battery and independent charge-state freshness retain
+their existing semantics. The selected car always requests all-charger results;
+backend charger-filter compatibility and Rust pricing remain unchanged.
 
 Responses contain aliases, exact six-decimal observed/eligible/priced kWh, sessions,
 exact quotes and once-rounded scoped subtotals, quality/exclusion and rate-hold
@@ -497,13 +514,13 @@ badge shows its own source age, never refreshed by an unrelated SOC report.
 Silver-like neutral colors use the CC0 silver photo cutout, dark colors use the
 black cutout and other colors use the traced SVG mask with `var(--car-color)`;
 [credits](../apps/web/public/cars/CREDITS.md) identify the sources. Car selection
-reuses the scope transition, updates the URL and resets to All chargers.
+reuses the scope transition and updates the URL; results cover all linked chargers.
 
 The API provides display names and linked charger choices alongside alias scope
 keys, filters results by an optional charger ID, and retains per-session charger
 and immutable version provenance, including held/ambiguous matches and outside
-classification versions. The dashboard displays names in car cards, the charger
-selector, headings and session/configuration details, supports one or all chargers, and
+classification versions. The dashboard displays names in compact car cards, headings and
+session/configuration details, requests all-charger results for the selected car, and
 shows an empty state with no active cars. Names, colors and selection do not move owner
 ledgers or change the measurement/estimate boundary. Registry values and private
 migration inputs stay outside the checkout; public fixtures and screenshots use
