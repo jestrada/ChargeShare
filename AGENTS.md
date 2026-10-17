@@ -30,7 +30,8 @@ the owning GitHub issue and [architecture](docs/architecture.md).
 - For each PR, update `docs/architecture.md` and its Mermaid diagram only when
   components, data flow, boundaries or architectural decisions actually change.
   Otherwise state **"no architecture change"** in the issue summary. Fix affected
-  README/contributor guidance when needed; do not create new documentation files
+  README/contributor guidance when needed (customer-visible or setup changes also
+  refresh synthetic sample data; see [workflow](docs/workflow.md) step 6); do not create new documentation files
   without Joseph's approval. [`docs/workflow.md`](docs/workflow.md) is the one
   approved process doc beyond architecture and code design. Repository-local skills follow this restriction too.
 - Test evidence and run results go only in the owning GitHub issue or PR, never

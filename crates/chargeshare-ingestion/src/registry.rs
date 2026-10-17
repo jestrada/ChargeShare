@@ -409,15 +409,7 @@ pub fn migrate_registry(
     bootstrap: &RegistryBootstrap,
     setup: &RegistrySetup,
 ) -> Result<(), IngestionError> {
-    if database != bootstrap.settings.database
-        || !text_valid(&setup.charger_name)
-        || OwnerId::new(&setup.charger_owner).is_err()
-        || setup.car_names.len() != bootstrap.mappings.len()
-        || setup.car_names.values().any(|name| !text_valid(name))
-    {
-        return Err(IngestionError::RegistryConflict);
-    }
-    bootstrap.settings.validate_database_location()?;
+    validate_setup(database, bootstrap, setup)?;
     if database.exists() {
         let mut store = Store::open_registry_database(database)?;
         if store.registry.is_some() {
@@ -429,6 +421,42 @@ pub fn migrate_registry(
         let mut store = Store::open(database, &bootstrap.legacy_manifest()?, &source)?;
         migrate(&mut store, bootstrap, setup, &mut |_| Ok(()))
     }
+}
+
+fn validate_setup(
+    database: &Path,
+    bootstrap: &RegistryBootstrap,
+    setup: &RegistrySetup,
+) -> Result<(), IngestionError> {
+    if database != bootstrap.settings.database
+        || !text_valid(&setup.charger_name)
+        || OwnerId::new(&setup.charger_owner).is_err()
+        || setup.car_names.len() != bootstrap.mappings.len()
+        || setup.car_names.values().any(|name| !text_valid(name))
+    {
+        return Err(IngestionError::RegistryConflict);
+    }
+    bootstrap.settings.validate_database_location()
+}
+
+pub(crate) fn migrate_on_startup(
+    private_config: &[u8],
+    settings: &crate::RuntimeSettings,
+    observer: &mut dyn FnMut(crate::CommitBoundary) -> Result<(), IngestionError>,
+) -> Result<(), IngestionError> {
+    if !settings.database.is_file() {
+        let (bootstrap, setup) = RegistryBootstrap::startup_input(private_config)?
+            .ok_or(IngestionError::MigrationInputRequired)?;
+        return migrate_registry(&settings.database, &bootstrap, &setup);
+    }
+    let mut store = Store::open_registry_database(&settings.database)?;
+    if store.registry.is_some() {
+        return Ok(());
+    }
+    let (bootstrap, setup) = RegistryBootstrap::startup_input(private_config)?
+        .ok_or(IngestionError::MigrationInputRequired)?;
+    validate_setup(&settings.database, &bootstrap, &setup)?;
+    migrate(&mut store, &bootstrap, &setup, observer)
 }
 
 pub(crate) fn migrate(

@@ -39,6 +39,7 @@ impl RuntimeSettings {
             .ok_or(IngestionError::InvalidConfiguration)?;
         object.remove("mappings");
         object.remove("shared_charger");
+        object.remove(crate::registry_bootstrap::STARTUP_SETUP_SECTION);
         let mut settings: Self =
             serde_json::from_value(value).map_err(|_| IngestionError::InvalidConfiguration)?;
         settings.normalize_rates()?;
@@ -117,9 +118,7 @@ impl RuntimeSettings {
 pub fn run_live(bytes: &[u8]) -> Result<(), IngestionError> {
     let settings = RuntimeSettings::from_json(bytes)?;
     settings.validate_database_location()?;
-    if !settings.database.is_file() {
-        return Err(IngestionError::MigrationInputRequired);
-    }
+    crate::registry::migrate_on_startup(bytes, &settings, &mut |_| Ok(()))?;
     let source = crate::kafka::live_source(&settings)?;
     let mut store = Store::open_runtime(&settings, &source)?;
     let driver = crate::kafka::LiveIngestion::connect_live(settings.clone(), source, &mut store)?;

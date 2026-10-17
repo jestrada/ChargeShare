@@ -26,6 +26,60 @@ pub(crate) struct SharedCharger {
     pub(crate) rate_model_versions: Vec<String>,
 }
 
+pub(crate) const STARTUP_SETUP_SECTION: &str = "registry_setup";
+const DEFAULT_CHARGER_NAME: &str = "Home charger";
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartupSetup {
+    #[serde(default)]
+    car_names: std::collections::BTreeMap<String, String>,
+    charger_name: Option<String>,
+    charger_owner: Option<String>,
+}
+
+impl StartupSetup {
+    fn resolve(self, mappings: &[DeviceMapping]) -> Result<crate::RegistrySetup, IngestionError> {
+        if self
+            .car_names
+            .keys()
+            .any(|vehicle| !mappings.iter().any(|mapping| &mapping.vehicle == vehicle))
+        {
+            return Err(IngestionError::RegistryConflict);
+        }
+        let car_names = mappings
+            .iter()
+            .map(|mapping| {
+                let name = self
+                    .car_names
+                    .get(&mapping.vehicle)
+                    .cloned()
+                    .unwrap_or_else(|| mapping.vehicle.clone());
+                (mapping.vehicle.clone(), name)
+            })
+            .collect();
+        let charger_owner = match self.charger_owner {
+            Some(owner) => owner,
+            None => sole_car_owner(mappings)?,
+        };
+        Ok(crate::RegistrySetup {
+            car_names,
+            charger_name: self
+                .charger_name
+                .unwrap_or_else(|| DEFAULT_CHARGER_NAME.to_owned()),
+            charger_owner,
+        })
+    }
+}
+
+fn sole_car_owner(mappings: &[DeviceMapping]) -> Result<String, IngestionError> {
+    let owners: BTreeSet<_> = mappings.iter().map(|mapping| &mapping.owner).collect();
+    match owners.into_iter().collect::<Vec<_>>().as_slice() {
+        [owner] => Ok((*owner).clone()),
+        _ => Err(IngestionError::MigrationInputRequired),
+    }
+}
+
 impl std::ops::Deref for RegistryBootstrap {
     type Target = crate::runtime_settings::RuntimeSettings;
 
@@ -39,8 +93,14 @@ impl RegistryBootstrap {
         if bytes.len() > crate::MAX_MANIFEST_BYTES {
             return Err(IngestionError::InvalidConfiguration);
         }
-        let mut config: Self =
+        let mut value: serde_json::Value =
             serde_json::from_slice(bytes).map_err(|_| IngestionError::InvalidConfiguration)?;
+        value
+            .as_object_mut()
+            .ok_or(IngestionError::InvalidConfiguration)?
+            .remove(STARTUP_SETUP_SECTION);
+        let mut config: Self =
+            serde_json::from_value(value).map_err(|_| IngestionError::InvalidConfiguration)?;
         config.settings.normalize_rates()?;
         config.settings.validate()?;
         let mut devices = BTreeSet::new();
@@ -56,6 +116,30 @@ impl RegistryBootstrap {
         config.geofence()?;
         config.legacy_manifest()?;
         Ok(config)
+    }
+
+    pub(crate) fn startup_input(
+        private_config: &[u8],
+    ) -> Result<Option<(Self, crate::RegistrySetup)>, IngestionError> {
+        if private_config.len() > crate::MAX_MANIFEST_BYTES {
+            return Err(IngestionError::InvalidConfiguration);
+        }
+        let value: serde_json::Value = serde_json::from_slice(private_config)
+            .map_err(|_| IngestionError::InvalidConfiguration)?;
+        let object = value
+            .as_object()
+            .ok_or(IngestionError::InvalidConfiguration)?;
+        if !object.contains_key("mappings") || !object.contains_key("shared_charger") {
+            return Ok(None);
+        }
+        let declared: StartupSetup = match object.get(STARTUP_SETUP_SECTION) {
+            Some(section) => serde_json::from_value(section.clone())
+                .map_err(|_| IngestionError::InvalidConfiguration)?,
+            None => StartupSetup::default(),
+        };
+        let bootstrap = Self::from_json(private_config)?;
+        let setup = declared.resolve(&bootstrap.mappings)?;
+        Ok(Some((bootstrap, setup)))
     }
 
     pub(crate) fn decoder_registry(

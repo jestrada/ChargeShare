@@ -10,6 +10,13 @@
       "vehicle": "vehicle-a"
     }
   ],
+  "registry_setup": {
+    "car_names": {
+      "vehicle-a": "Car A"
+    },
+    "charger_name": "Charger A",
+    "charger_owner": "charger-owner"
+  },
   "shared_charger": {
     "charger_id": "fictional-shared-charger",
     "geofence": {
