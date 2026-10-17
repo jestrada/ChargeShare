@@ -259,6 +259,7 @@ test("registry discovery accepts display names and empty active scope without pr
   const value = { synthetic_only: false, scopes: [{ owner: "owner-b", vehicle: "vehicle-b", name: "Model Y sample", color: "#16181C", battery_reading: { battery_percent: 67, observed_at: "2026-09-01T12:11:00Z" }, charging: null, chargers: [{ id: "driveway", name: "Driveway charger" }, { id: "garage", name: "Garage charger" }] }] }
   assert.deepEqual(parseScopes(value),value)
   assert.deepEqual(parseScopes({ synthetic_only: false, scopes: [] }), { synthetic_only: false, scopes: [] })
+  assert.equal(resultPath(value.scopes[0]),"/api/poc/owners/owner-b/vehicles/vehicle-b/results")
   assert.equal(resultPath(value.scopes[0],"garage"),"/api/poc/owners/owner-b/vehicles/vehicle-b/results?charger=garage")
   for (const change of [
     (value: any) => { value.scopes[0].name = "  " },
@@ -270,10 +271,10 @@ test("registry discovery accepts display names and empty active scope without pr
 
 test("named registry result retains session charger and immutable version provenance", () => {
   const value: any=quotedResult()
-  value.registry={car_name:"Model 3 sample",chargers:[{id:"driveway",name:"Driveway charger"}],selected_charger:null}
+  value.registry={car_name:"Silver Model Y sample",chargers:[{id:"driveway",name:"Driveway charger"}],selected_charger:null}
   value.pricing.charger_id=null
   value.sessions[0].charger={id:"driveway",name:"Driveway charger",assignment_versions:["assignment-v1"],geofence_versions:["geofence-v1"]}
-  assert.equal(parseResults(value,scopes[0]).registry?.car_name,"Model 3 sample")
+  assert.equal(parseResults(value,scopes[0]).registry?.car_name,"Silver Model Y sample")
   assert.equal(parseResults(value,scopes[0]).sessions[0].charger?.name,"Driveway charger")
   for (const change of [
     (value: any) => { value.registry.car_name = "  " },
