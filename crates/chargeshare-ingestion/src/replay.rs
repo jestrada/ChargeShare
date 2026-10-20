@@ -20,6 +20,9 @@ impl Store {
             ledger
                 .use_observed_counter_window(vehicle)
                 .map_err(|_| IngestionError::DomainReplay)?;
+            ledger
+                .retain_counter_observations(vehicle, self.counter_observations(vehicle)?)
+                .map_err(|_| IngestionError::DomainReplay)?;
         }
         if let Some(geofence) = self
             .manifest

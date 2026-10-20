@@ -1,3 +1,4 @@
+mod counter_window;
 mod energy;
 mod error;
 mod event;
@@ -11,6 +12,7 @@ mod session;
 mod tariff;
 mod time_of_use;
 
+pub use counter_window::{CounterLocation, CounterObservation};
 pub use energy::{CounterProblem, Energy};
 pub use error::LedgerError;
 pub use event::{ChargeType, CounterReading, Event, EventKind};

@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chargeshare_core::{Energy, Ledger, OwnerId, QualityFlag, VehicleId};
 use serde_json::{Value, json};
 
+use super::ChargeState::{self, Charging, Complete, Starting, Stopped};
 use crate::registry_bootstrap::RegistryBootstrap;
 use crate::{
     CommitBoundary, DeliveryCoordinate, IngestionError, PartitionStart, SourceBinding, Store,
@@ -67,7 +68,22 @@ impl Runtime {
         )
         .unwrap();
         let setup = crate::RegistrySetup {
-            car_names: [("vehicle-a".to_owned(), "Car A".to_owned())].into(),
+            car_names: self
+                .config
+                .mappings
+                .iter()
+                .map(|mapping| {
+                    (
+                        mapping.vehicle.clone(),
+                        if mapping.vehicle == "vehicle-a" {
+                            "Car A"
+                        } else {
+                            "Car B"
+                        }
+                        .to_owned(),
+                    )
+                })
+                .collect(),
             charger_name: "Charger A".to_owned(),
             charger_owner: "owner-a".to_owned(),
         };
@@ -133,6 +149,421 @@ fn field_mut<'a>(record: &'a mut Value, key: &str) -> &'a mut Value {
         .iter_mut()
         .find(|field| field["key"] == key)
         .unwrap()["value"]
+}
+
+fn window_record(
+    runtime: &Runtime,
+    id: usize,
+    time: &str,
+    state: ChargeState,
+    counter: Option<&str>,
+) -> Value {
+    let mut record = runtime.records[1].clone();
+    record["headers"]["txid"] = json!(format!("fictional-window-{id}"));
+    record["payload"]["createdAt"] = json!(time);
+    field_mut(&mut record, "DetailedChargeState")["detailedChargeStateValue"] = json!(state);
+    match counter {
+        Some(counter) => {
+            *field_mut(&mut record, "ACChargingEnergyIn") = json!({"stringValue": counter});
+        }
+        None => remove_field(&mut record, "ACChargingEnergyIn"),
+    }
+    record
+}
+
+#[test]
+fn retained_outer_counters_recover_the_whole_window_without_moving_state_boundaries() {
+    let runtime = Runtime::new();
+    let records = [
+        window_record(&runtime, 0, "2026-09-01T11:59:00Z", Starting, Some("0.02")),
+        window_record(&runtime, 1, "2026-09-01T12:00:00Z", Charging, Some("0.20")),
+        window_record(&runtime, 2, "2026-09-01T12:05:00Z", Charging, Some("1.10")),
+        window_record(&runtime, 3, "2026-09-01T12:10:00Z", Complete, None),
+        window_record(&runtime, 4, "2026-09-01T12:10:30Z", Complete, Some("1.42")),
+    ];
+    let mut store = runtime.open();
+    for (offset, record) in records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record).unwrap();
+    }
+    let result = runtime.results(&store);
+    assert_eq!(result.observed_ac_kwh, "1.400000");
+    assert_eq!(result.eligible_shared_charger_kwh, "1.400000");
+    let session = &result.sessions[0];
+    assert_eq!(session.evidence_state, "complete");
+    assert!(session.quality_flags.is_empty());
+    let coverage = session.coverage.as_ref().unwrap();
+    assert_eq!(
+        coverage.connection_start_utc_seconds.as_deref(),
+        Some("1788264000")
+    );
+    assert_eq!(
+        coverage.connection_end_utc_seconds.as_deref(),
+        Some("1788264600")
+    );
+    assert_eq!(
+        coverage.first_counter_utc_seconds.as_deref(),
+        Some("1788263940")
+    );
+    assert_eq!(
+        coverage.last_counter_utc_seconds.as_deref(),
+        Some("1788264630")
+    );
+    assert_eq!(coverage.usable_readings, 4);
+    assert!(!coverage.partial_start);
+    assert!(!coverage.partial_end);
+}
+
+#[test]
+fn outer_counter_window_is_bounded_to_ninety_source_seconds_on_each_side() {
+    for (before, after, expected, partial) in [
+        (
+            "2026-09-01T11:58:30Z",
+            "2026-09-01T12:11:30Z",
+            "1.400000",
+            false,
+        ),
+        (
+            "2026-09-01T11:58:29.999999999Z",
+            "2026-09-01T12:11:30.000000001Z",
+            "0.900000",
+            true,
+        ),
+        (
+            "2026-09-01T11:58:29Z",
+            "2026-09-01T12:11:31Z",
+            "0.900000",
+            true,
+        ),
+    ] {
+        let runtime = Runtime::new();
+        let records = [
+            window_record(&runtime, 0, before, Starting, Some("0.02")),
+            window_record(&runtime, 1, "2026-09-01T12:00:00Z", Charging, None),
+            window_record(&runtime, 2, "2026-09-01T12:01:00Z", Charging, Some("0.20")),
+            window_record(&runtime, 3, "2026-09-01T12:05:00Z", Charging, Some("1.10")),
+            window_record(&runtime, 4, "2026-09-01T12:10:00Z", Complete, None),
+            window_record(&runtime, 5, after, Complete, Some("1.42")),
+        ];
+        let mut store = runtime.open();
+        for (offset, record) in records.iter().enumerate() {
+            runtime.ingest(&mut store, offset as i64, record).unwrap();
+        }
+        let result = runtime.results(&store);
+        assert_eq!(result.observed_ac_kwh, expected);
+        let coverage = result.sessions[0].coverage.as_ref().unwrap();
+        assert_eq!(coverage.partial_start, partial);
+        assert_eq!(coverage.partial_end, partial);
+    }
+}
+
+#[test]
+fn outer_counter_recovery_does_not_bridge_retained_continuity_barriers() {
+    for barrier in [
+        "outside",
+        "invalid_location",
+        "movement",
+        "disconnect",
+        "restart",
+        "dc",
+        "unknown",
+        "invalid_counter",
+        "rollback",
+        "conflict",
+    ] {
+        let runtime = Runtime::new();
+        let mut records = vec![
+            window_record(&runtime, 0, "2026-09-01T11:59:00Z", Starting, Some("0.02")),
+            window_record(&runtime, 1, "2026-09-01T11:59:30Z", Starting, None),
+            window_record(&runtime, 2, "2026-09-01T12:00:00Z", Charging, None),
+            window_record(&runtime, 3, "2026-09-01T12:01:00Z", Charging, Some("0.20")),
+            window_record(&runtime, 4, "2026-09-01T12:05:00Z", Charging, Some("1.10")),
+            window_record(&runtime, 5, "2026-09-01T12:10:00Z", Complete, None),
+        ];
+        remove_field(&mut records[1], "DetailedChargeState");
+        if barrier == "restart" {
+            field_mut(&mut records[0], "DetailedChargeState")["detailedChargeStateValue"] =
+                json!("DetailedChargeStateStopped");
+        }
+        match barrier {
+            "outside" => {
+                field_mut(&mut records[1], "Location")["locationValue"]["latitude"] = json!(0)
+            }
+            "invalid_location" => *field_mut(&mut records[1], "Location") = json!({}),
+            "movement" => field_mut(&mut records[1], "Odometer")["doubleValue"] = json!(1001),
+            "disconnect" | "restart" | "unknown" => records[1]["payload"]["data"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "key": "DetailedChargeState",
+                    "value": {"detailedChargeStateValue": match barrier {
+                        "disconnect" => "DetailedChargeStateDisconnected",
+                        "restart" => "DetailedChargeStateStarting",
+                        _ => "DetailedChargeStateUnknown",
+                    }}
+                })),
+            "dc" => records[1]["payload"]["data"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"key": "FastChargerPresent", "value": {"booleanValue": true}})),
+            "invalid_counter" | "rollback" | "conflict" => records[1]["payload"]["data"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "key": "ACChargingEnergyIn", "value": {"stringValue": match barrier {
+                        "invalid_counter" => "invalid", "rollback" => "2.0", _ => "0.03"
+                    }}
+                })),
+            _ => unreachable!(),
+        }
+        if barrier == "conflict" {
+            let mut conflict = records[1].clone();
+            conflict["headers"]["txid"] = json!("fictional-window-conflict");
+            *field_mut(&mut conflict, "ACChargingEnergyIn") = json!({"stringValue": "0.04"});
+            records.insert(2, conflict);
+        }
+        let mut store = runtime.open();
+        for (offset, record) in records.iter().enumerate() {
+            runtime.ingest(&mut store, offset as i64, record).unwrap();
+        }
+        let result = runtime.results(&store);
+        assert_eq!(result.observed_ac_kwh, "0.900000", "{barrier}");
+        let coverage = result.sessions[0].coverage.as_ref().unwrap();
+        assert!(coverage.partial_start, "{barrier}");
+        assert!(coverage.partial_end, "{barrier}");
+    }
+}
+
+#[test]
+fn missing_location_does_not_erase_retained_location_uncertainty_before_a_baseline() {
+    let runtime = Runtime::new();
+    let mut records = [
+        window_record(&runtime, 0, "2026-09-01T11:58:45Z", Stopped, None),
+        window_record(&runtime, 1, "2026-09-01T11:59:00Z", Stopped, Some("0.02")),
+        window_record(&runtime, 2, "2026-09-01T12:00:00Z", Charging, None),
+        window_record(&runtime, 3, "2026-09-01T12:01:00Z", Charging, Some("0.20")),
+        window_record(&runtime, 4, "2026-09-01T12:05:00Z", Charging, Some("1.10")),
+        window_record(&runtime, 5, "2026-09-01T12:10:00Z", Complete, None),
+    ];
+    *field_mut(&mut records[0], "Location") = json!({});
+    remove_field(&mut records[1], "Location");
+    let mut store = runtime.open();
+    for (offset, record) in records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record).unwrap();
+    }
+    let result = runtime.results(&store);
+    assert_eq!(result.observed_ac_kwh, "0.900000");
+    assert!(result.sessions[0].coverage.as_ref().unwrap().partial_start);
+}
+
+#[test]
+fn adjacent_tiny_session_and_shared_stale_counter_preserve_uncertainty_without_reusing_energy() {
+    for (baseline, expected_session, expected_total, partial) in [
+        ("0.05", "1.360000", "1.410000", true),
+        ("0.01", "1.410000", "1.460000", false),
+    ] {
+        let runtime = Runtime::new();
+        let records = [
+            window_record(&runtime, 0, "2026-09-01T11:58:00Z", Starting, None),
+            window_record(&runtime, 1, "2026-09-01T11:58:10Z", Charging, Some("0")),
+            window_record(&runtime, 2, "2026-09-01T11:59:00Z", Stopped, Some("0.05")),
+            window_record(&runtime, 3, "2026-09-01T11:59:20Z", Stopped, Some(baseline)),
+            window_record(&runtime, 4, "2026-09-01T12:00:00Z", Charging, Some("0.06")),
+            window_record(&runtime, 5, "2026-09-01T12:05:00Z", Charging, Some("1.10")),
+            window_record(&runtime, 6, "2026-09-01T12:10:00Z", Complete, None),
+            window_record(&runtime, 7, "2026-09-01T12:10:30Z", Complete, Some("1.42")),
+        ];
+        let mut store = runtime.open();
+        for (offset, record) in records.iter().enumerate() {
+            runtime.ingest(&mut store, offset as i64, record).unwrap();
+        }
+        let result = runtime.results(&store);
+        assert_eq!(result.sessions.len(), 2);
+        assert_eq!(result.sessions[0].observed_ac_kwh, "0.050000");
+        assert_eq!(result.sessions[1].observed_ac_kwh, expected_session);
+        assert_eq!(
+            result.sessions[1].coverage.as_ref().unwrap().partial_start,
+            partial
+        );
+        assert!(!result.sessions[1].coverage.as_ref().unwrap().partial_end);
+        assert_eq!(result.observed_ac_kwh, expected_total);
+    }
+}
+
+#[test]
+fn nearby_counters_from_another_vehicle_cannot_complete_a_session_window() {
+    let mut runtime = Runtime::new();
+    let mut mapping = runtime.config.mappings[0].clone();
+    mapping.device.push_str("-second");
+    mapping.vehicle = "vehicle-b".to_owned();
+    mapping.owner = "owner-b".to_owned();
+    runtime.config.mappings.push(mapping.clone());
+    let mut records = [
+        window_record(&runtime, 0, "2026-09-01T11:59:00Z", Starting, None),
+        window_record(&runtime, 1, "2026-09-01T11:59:20Z", Stopped, Some("0.02")),
+        window_record(&runtime, 2, "2026-09-01T12:00:00Z", Charging, None),
+        window_record(&runtime, 3, "2026-09-01T12:01:00Z", Charging, Some("0.20")),
+        window_record(&runtime, 4, "2026-09-01T12:05:00Z", Charging, Some("1.10")),
+        window_record(&runtime, 5, "2026-09-01T12:10:00Z", Complete, None),
+        window_record(&runtime, 6, "2026-09-01T12:10:30Z", Complete, Some("1.42")),
+    ];
+    for index in [1, 6] {
+        records[index]["headers"]["vin"] = json!(mapping.device);
+        records[index]["payload"]["vin"] = json!(mapping.device);
+    }
+    let mut store = runtime.open();
+    for (offset, record) in records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record).unwrap();
+    }
+    let result = runtime.results(&store);
+    assert_eq!(result.observed_ac_kwh, "0.900000");
+    let coverage = result.sessions[0].coverage.as_ref().unwrap();
+    assert!(coverage.partial_start);
+    assert!(coverage.partial_end);
+    assert!(
+        store
+            .sessions(
+                &OwnerId::new("owner-b").unwrap(),
+                &VehicleId::new("vehicle-b").unwrap()
+            )
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn sqlite_only_history_replays_idempotently_and_keeps_delivery_verification() {
+    let runtime = Runtime::new();
+    let records = [
+        window_record(&runtime, 0, "2026-09-01T11:59:00Z", Starting, Some("0.02")),
+        window_record(&runtime, 1, "2026-09-01T12:00:00Z", Charging, Some("0.20")),
+        window_record(&runtime, 2, "2026-09-01T12:05:00Z", Charging, Some("1.10")),
+        window_record(&runtime, 3, "2026-09-01T12:10:00Z", Complete, None),
+        window_record(&runtime, 4, "2026-09-01T12:10:30Z", Complete, Some("1.42")),
+    ];
+    let owner = OwnerId::new("owner-a").unwrap();
+    let vehicle = VehicleId::new("vehicle-a").unwrap();
+    let mut store = runtime.open();
+    for (offset, record) in records[..4].iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record).unwrap();
+    }
+    let partial = runtime.results(&store);
+    assert!(partial.sessions[0].coverage.as_ref().unwrap().partial_end);
+    runtime.ingest(&mut store, 4, &records[4]).unwrap();
+    let ongoing = runtime.results(&store);
+    assert_eq!(ongoing.observed_ac_kwh, "1.400000");
+    assert_ne!(ongoing.revision, partial.revision);
+    let positions = store.positions().unwrap();
+    drop(store);
+    let unchanged_sqlite_fixture = fs::read(&runtime.config.database).unwrap();
+    let mut store = runtime.open();
+    let replay = store.replay(&owner, &vehicle).unwrap();
+    assert_eq!(
+        store.sessions(&owner, &vehicle).unwrap(),
+        replay.sessions(&vehicle).unwrap()
+    );
+    for _ in 0..3 {
+        assert_eq!(runtime.results(&store), ongoing);
+    }
+    assert_eq!(store.positions().unwrap(), positions);
+    drop(store);
+    assert_eq!(
+        fs::read(&runtime.config.database).unwrap(),
+        unchanged_sqlite_fixture
+    );
+    store = runtime.open();
+    for (offset, record) in records.iter().enumerate() {
+        assert!(
+            runtime
+                .ingest(&mut store, offset as i64, record)
+                .unwrap()
+                .duplicate_delivery
+        );
+    }
+    let mut resend = records[0].clone();
+    resend["headers"]["txid"] = json!("fictional-window-resend");
+    resend["payload"]["isResend"] = json!(true);
+    runtime.ingest(&mut store, 5, &resend).unwrap();
+    assert_eq!(runtime.results(&store), ongoing);
+    *field_mut(&mut resend, "ACChargingEnergyIn") = json!({"stringValue": "0.03"});
+    assert_eq!(
+        runtime.ingest(&mut store, 5, &resend),
+        Err(IngestionError::DeliveryConflict)
+    );
+    assert_eq!(runtime.results(&store), ongoing);
+}
+
+#[test]
+fn whole_window_uses_all_monotonic_outer_samples_instead_of_nearest_samples() {
+    let runtime = Runtime::new();
+    let mut records = [
+        window_record(&runtime, 0, "2026-09-01T11:58:30Z", Starting, Some("0.01")),
+        window_record(&runtime, 1, "2026-09-01T11:59:00Z", Starting, Some("0.02")),
+        window_record(&runtime, 2, "2026-09-01T12:00:00Z", Charging, Some("0.20")),
+        window_record(&runtime, 3, "2026-09-01T12:05:00Z", Charging, Some("1.10")),
+        window_record(&runtime, 4, "2026-09-01T12:10:00Z", Complete, None),
+        window_record(&runtime, 5, "2026-09-01T12:10:30Z", Complete, Some("1.42")),
+        window_record(&runtime, 6, "2026-09-01T12:11:30Z", Complete, Some("1.61")),
+    ];
+    for index in [1, 5, 6] {
+        remove_field(&mut records[index], "Location");
+        remove_field(&mut records[index], "Odometer");
+    }
+    let mut store = runtime.open();
+    for (offset, record) in records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record).unwrap();
+    }
+    let result = runtime.results(&store);
+    assert_eq!(result.observed_ac_kwh, "1.600000");
+    let coverage = result.sessions[0].coverage.as_ref().unwrap();
+    assert_eq!(
+        coverage.first_counter_utc_seconds.as_deref(),
+        Some("1788263910")
+    );
+    assert_eq!(
+        coverage.last_counter_utc_seconds.as_deref(),
+        Some("1788264690")
+    );
+    assert_eq!(coverage.usable_readings, 6);
+    assert!(!coverage.partial_start);
+    assert!(!coverage.partial_end);
+}
+
+#[test]
+fn recovered_counter_intervals_use_source_timestamps_across_time_of_use_boundaries() {
+    let runtime = Runtime::new();
+    let records = [
+        window_record(&runtime, 0, "2026-09-01T21:59:30Z", Starting, Some("0.01")),
+        window_record(&runtime, 1, "2026-09-01T22:00:00Z", Charging, None),
+        window_record(&runtime, 2, "2026-09-01T22:00:30Z", Charging, Some("0.61")),
+        window_record(&runtime, 3, "2026-09-01T22:01:00Z", Charging, Some("0.91")),
+        window_record(&runtime, 4, "2026-09-01T22:01:10Z", Complete, None),
+        window_record(&runtime, 5, "2026-09-01T22:01:30Z", Complete, Some("1.21")),
+    ];
+    let mut store = runtime.open();
+    for (offset, record) in records.iter().enumerate() {
+        runtime.ingest(&mut store, offset as i64, record).unwrap();
+    }
+    let result = runtime.results(&store);
+    assert_eq!(result.pricing.priced_ac_kwh, "1.200000");
+    let quote = result.sessions[0].pricing.quote.as_ref().unwrap();
+    assert_eq!(quote.slices.len(), 4);
+    assert_eq!(quote.slices[0].period, "off_peak");
+    assert_eq!(quote.slices[0].allocated_ac_kwh, "0.300000");
+    assert_eq!(quote.slices[0].start_utc_seconds, "1788299970");
+    assert_eq!(quote.slices[0].end_utc_seconds, "1788300000");
+    assert_eq!(quote.slices[1].period, "part_peak");
+    assert_eq!(quote.slices[1].allocated_ac_kwh, "0.300000");
+    assert_eq!(quote.slices[2].allocated_ac_kwh, "0.300000");
+    assert_eq!(quote.slices[3].allocated_ac_kwh, "0.300000");
+    assert_eq!(quote.exact_cost, "0.4525140000000000 USD");
+    let month = result
+        .monthly
+        .months
+        .iter()
+        .find(|month| month.month == "2026-09")
+        .unwrap();
+    assert_eq!(month.total.as_ref().unwrap().ac_kwh, "1.200000");
+    assert_eq!(month.days[0].total.as_ref().unwrap().ac_kwh, "1.200000");
 }
 
 #[test]

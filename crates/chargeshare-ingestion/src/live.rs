@@ -11,6 +11,7 @@ use crate::{
     NormalizedEventKind, NormalizedLocation, RecordDisposition, RejectionReason, Store,
 };
 
+mod counter_window;
 mod decimal;
 use decimal::{DecimalValue, normalize_counter};
 
