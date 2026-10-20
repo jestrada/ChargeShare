@@ -662,9 +662,17 @@ fn results_for_view(
             registry.car(vehicle.as_str())?.identity_version.clone();
     }
     let canonical = serde_json::to_vec(&result).map_err(|_| IngestionError::DomainReplay)?;
-    let hash = canonical.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
-    });
+    let counter_window_version: &[u8] = if manifest.is_live() {
+        b"live-counter-window-v1"
+    } else {
+        b""
+    };
+    let hash = counter_window_version
+        .iter()
+        .chain(canonical.iter())
+        .fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        });
     result.revision = format!("results-v2-{hash:016x}");
     Ok(result)
 }

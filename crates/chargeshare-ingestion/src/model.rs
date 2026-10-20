@@ -264,7 +264,7 @@ impl NormalizedCounter {
         }
     }
 
-    fn to_core(&self) -> Result<CounterReading, RejectionReason> {
+    pub(crate) fn to_core(&self) -> Result<CounterReading, RejectionReason> {
         match self {
             Self::Valid { kwh } => match CounterReading::parse_kwh(kwh) {
                 CounterReading::Valid(energy)

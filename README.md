@@ -6,12 +6,12 @@ synthetic telemetry and labeled public sample rates. An
 [opt-in live adapter](docs/architecture.md#live-adapter) is also implemented;
 vehicle and account setup remain separate.
 
-![ChargeShare desktop dashboard with compact car cards, synthetic plain-shape placeholder images](docs/images/dashboard-desktop.png)
+![ChargeShare desktop dashboard with compact Model Y car cards and synthetic charging data](docs/images/dashboard-desktop.png)
 
 <details>
 <summary>Mobile preview (synthetic data)</summary>
 
-<img src="docs/images/dashboard-mobile.png" alt="ChargeShare mobile dashboard with compact car cards and synthetic charging data" width="240">
+<img src="docs/images/dashboard-mobile.png" alt="ChargeShare mobile dashboard with compact Model Y car cards and synthetic charging data" width="240">
 
 </details>
 

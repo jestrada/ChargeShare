@@ -137,7 +137,10 @@ validation/sync/archive steps, including through skills or delegation.
 
 Bundled Matt Pocock skills come from the public
 [pinned source](https://github.com/mattpocock/skills/tree/49dd158d1076134a641b33efb035946536778336);
-installation used `gh api`. Review deliberate upstream updates with the skill
+installation used `gh api`. Bundled: `wayfinder`, `research`, `prototype`,
+`grilling`, `domain-modeling`, `to-spec`, `implement`, `implement-spec`, and the
+skills those two invoke: `tdd`, `code-review`, `codebase-design`, `to-tickets`,
+`setup-matt-pocock-skills`. Review deliberate upstream updates with the skill
 files and this provenance. Preserve the [MIT notice](docs/licenses/matt-pocock-skills-MIT.txt).
 
 ## PR evidence check

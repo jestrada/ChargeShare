@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::counter_window::{CounterObservation, counter_window};
 use crate::energy::Energy;
 use crate::error::LedgerError;
 use crate::event::Event;
@@ -7,8 +8,8 @@ use crate::identity::{ConnectionId, OwnerId, SessionId, VehicleId};
 use crate::location::{ChargerGeofence, LocationSample};
 use crate::pricing::{PricingError, PricingSummary, summarize_pricing};
 use crate::session::{
-    ConnectionEvidence, EVIDENCE_LABEL, ExclusionReason, QualityFlag, ReconstructedSession,
-    Session, classify_location, reconstruct_session,
+    ChargerClassification, ConnectionEvidence, EVIDENCE_LABEL, ExclusionReason, QualityFlag,
+    ReconstructedSession, Session, classify_location, reconstruct_session,
 };
 use crate::tariff::RateSchedule;
 use crate::time_of_use::{RateModelHistory, TimeOfUsePricing, summarize_time_of_use};
@@ -36,6 +37,7 @@ pub struct Ledger {
     events: BTreeMap<VehicleId, BTreeMap<u64, BTreeSet<Event>>>,
     geofences: BTreeMap<OwnerId, ChargerGeofence>,
     observed_window_vehicles: BTreeSet<VehicleId>,
+    counter_observations: BTreeMap<VehicleId, Vec<CounterObservation>>,
 }
 
 impl Ledger {
@@ -70,6 +72,23 @@ impl Ledger {
     pub fn use_observed_counter_window(&mut self, vehicle: &VehicleId) -> Result<(), LedgerError> {
         self.owner(vehicle)?;
         self.observed_window_vehicles.insert(vehicle.clone());
+        Ok(())
+    }
+
+    pub fn retain_counter_observations(
+        &mut self,
+        vehicle: &VehicleId,
+        mut observations: Vec<CounterObservation>,
+    ) -> Result<(), LedgerError> {
+        self.owner(vehicle)?;
+        observations.sort_by(|left, right| {
+            left.timestamp()
+                .cmp(&right.timestamp())
+                .then_with(|| left.cmp(right))
+        });
+        observations.dedup();
+        self.counter_observations
+            .insert(vehicle.clone(), observations);
         Ok(())
     }
 
@@ -138,6 +157,16 @@ impl Ledger {
                 measurement.location = LocationSample::Missing;
                 measurements.insert(measurement)
             });
+            let window = if classification == ChargerClassification::SharedCharger {
+                counter_window(
+                    &id.connection,
+                    self.counter_observations
+                        .get(scope)
+                        .map_or(&[], Vec::as_slice),
+                )
+            } else {
+                Default::default()
+            };
             sessions.push(reconstruct_session(
                 id,
                 owner.clone(),
@@ -145,6 +174,7 @@ impl Ledger {
                 classification,
                 reason,
                 self.observed_window_vehicles.contains(scope),
+                &window,
             )?);
         }
         Ok(sessions)

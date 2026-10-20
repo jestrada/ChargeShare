@@ -57,7 +57,8 @@ flowchart LR
         rebuild --> live
         runtime_settings --> fixed_contract["Fixed live manifest + runtime settings"] --> sqlite
         config["Owner charger config + immutable rate histories"] --> sqlite
-        sqlite --> replay["Scoped core replay"]
+        sqlite -- "Accepted event variants" --> replay["Scoped core replay + guarded live 90-second counter windows"]
+        sqlite -- "Typed retained live signals + original associations" --> replay
         replay --> classification["Core: automatic session location classification"]
         sqlite --> vehicle_status["Rust: latest valid battery + independent charge state by source timestamp"]
         vehicle_status --> results
@@ -164,6 +165,8 @@ responses expose available UTC start/end bounds in both modes. Counts represent
 unique sessions within each day/month, so a crossing session can appear in
 multiple calendar summaries. `results-v2` revisions include these additions and
 advance on a local calendar rollover; replay provenance is `scoped-core-replay-v3`.
+Live semantic revisions additionally include the `live-counter-window-v1`
+calculation contract, preserving the existing response format and offline revisions.
 
 D3's `d3-scale` and `d3-shape` position the browser's daily stacks using returned
 exact totals converted to numbers only for geometry. Bars toggle between
@@ -335,9 +338,37 @@ boolean-string value: true vetoes AC pricing, false alone establishes no AC
 evidence. Power and elapsed time never supply kWh. No subscription change is
 required.
 
-Live reconstruction keeps explicit Start/End but prices only supported deltas
-between the first and last usable in-session counters at their observed UTC
-seconds. Missing edge counters remain visible `MissingBaseline` and
+Live reconstruction keeps reported Start/End and stable `(vehicle, connection)`
+identity while deriving a wider counter window on every scoped read. The adapter
+translates retained SQLite `live_records` into typed source-time counter, state,
+charger and movement evidence; the core associates unassigned observations up to
+90 seconds before Start and after End, inclusive at source timestamp precision.
+All qualifying outer samples extend the continuous chain, so supported energy is
+terminal minus baseline, including a positive baseline subtraction. Counter
+timestamps remain unchanged and supply TOU/rate-assignment splits and day/month
+placement; state timestamps never substitute for counter timestamps.
+
+Only connections already classified at the shared charger may widen. Adjacent
+observations must match that charger or omit location without contradictory
+retained context or movement. Disconnects, a new Starting transition, another
+connection, invalid/conflicting counters, ambiguous/DC evidence and decreases
+stop extension; repeated Starting reports alone do not imply a new connection.
+An observed lower baseline may establish a new counter chain after a previous
+session. A stale value shared with a previous session establishes neither
+freshness nor a zero reset. Competing edge windows decline the shared observation;
+the later session retains start uncertainty and counts only its supported chain.
+No interval is donated by an adjacent session or counted in two sessions.
+
+Accepted events supply their counters once; matching retained signals supply
+association context and only previously unassociated outer counters extend the
+window. Reads recompute energy, eligibility, prices and aggregates from SQLite,
+including evidence older than Kafka retention. Later terminal evidence can widen
+a recent session on a subsequent read. No migration, completion marker, Kafka
+fetch or accumulated recovery delta is required. Original signals, dispositions,
+event variants, delivery verification, offsets and adapter progress are unchanged.
+Missing historical evidence and unresolved continuity remain partial.
+
+Missing edge counters remain visible `MissingBaseline` and
 `MissingTerminalSample` caveats and produce partial coverage rather than an
 eligibility hold. Missing Start/End, fewer than two usable readings, resets,
 invalid counters, conflicts, ambiguous type or DC still hold. No energy is

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::counter_window::{CounterObservation, CounterWindow};
 use crate::energy::{CounterProblem, Energy};
 use crate::error::LedgerError;
 use crate::event::{ChargeType, CounterReading, Event, EventKind};
@@ -163,6 +164,7 @@ pub(crate) fn reconstruct_session(
     classification: ChargerClassification,
     classification_reason: ClassificationReason,
     observed_window: bool,
+    counter_window: &CounterWindow<'_>,
 ) -> Result<ReconstructedSession, LedgerError> {
     let mut session = Session {
         evidence_label: EVIDENCE_LABEL,
@@ -195,8 +197,11 @@ pub(crate) fn reconstruct_session(
     }
     let mut has_baseline = false;
     let mut has_terminal_sample = false;
-    let mut previous_counter: Option<(Energy, i64)> = None;
-    let mut segments = Vec::new();
+    let mut chain = CounterChain::default();
+    for observation in &counter_window.before {
+        chain.observe_boundary(&mut session, observation)?;
+        has_baseline = true;
+    }
     let resolved_ac = observed_window
         && evidence
             .iter()
@@ -230,7 +235,7 @@ pub(crate) fn reconstruct_session(
                     .quality_flags
                     .insert(QualityFlag::InvalidCounter(problem));
             }
-            previous_counter = None;
+            chain.previous = None;
             continue;
         }
         if event.kind == EventKind::Start {
@@ -251,50 +256,13 @@ pub(crate) fn reconstruct_session(
             session.end_time.get_or_insert(event.time);
             has_terminal_sample |= matches!(event.counter, Some(CounterReading::Valid(_)));
         }
-        match event.counter {
-            Some(CounterReading::Rejected(problem)) => {
-                session
-                    .quality_flags
-                    .insert(QualityFlag::InvalidCounter(problem));
-                previous_counter = None;
-            }
-            Some(CounterReading::Valid(current)) => {
-                if charge_type == ChargeType::Ac {
-                    if let Some(window) = &mut session.observed_window {
-                        window.first_time.get_or_insert(event.time);
-                        window.last_time = Some(event.time);
-                        window.usable_readings += 1;
-                    }
-                    if let Some((prior, start_time)) = previous_counter {
-                        match current.checked_delta_from(prior) {
-                            Some(delta) => {
-                                session.observed_ac = session
-                                    .observed_ac
-                                    .checked_add(delta)
-                                    .map_err(|_| LedgerError::EnergyOverflow)?;
-                                segments.push(CounterSegment {
-                                    start_time,
-                                    end_time: event.time,
-                                    energy: delta,
-                                });
-                            }
-                            None => {
-                                session.quality_flags.insert(QualityFlag::CounterRollback);
-                            }
-                        }
-                    }
-                    previous_counter = Some((current, event.time));
-                } else {
-                    previous_counter = None;
-                }
-            }
-            None => {
-                if charge_type != ChargeType::Ac {
-                    previous_counter = None;
-                }
-            }
-        }
+        chain.observe(&mut session, event.time, event.counter, charge_type)?;
     }
+    for observation in &counter_window.after {
+        chain.observe_boundary(&mut session, observation)?;
+        has_terminal_sample = true;
+    }
+
     if session.start_time.is_none() {
         session
             .quality_flags
@@ -305,10 +273,10 @@ pub(crate) fn reconstruct_session(
             .quality_flags
             .insert(QualityFlag::MissingConnectionEnd);
     }
-    if !has_baseline {
+    if !has_baseline || counter_window.uncertain_start {
         session.quality_flags.insert(QualityFlag::MissingBaseline);
     }
-    if !has_terminal_sample {
+    if !has_terminal_sample || counter_window.uncertain_end {
         session
             .quality_flags
             .insert(QualityFlag::MissingTerminalSample);
@@ -322,5 +290,82 @@ pub(crate) fn reconstruct_session(
             .quality_flags
             .insert(QualityFlag::InsufficientCounterReadings);
     }
-    Ok(ReconstructedSession { session, segments })
+    Ok(ReconstructedSession {
+        session,
+        segments: chain.segments,
+    })
+}
+
+#[derive(Default)]
+struct CounterChain {
+    previous: Option<(Energy, i64)>,
+    segments: Vec<CounterSegment>,
+}
+
+impl CounterChain {
+    fn observe_boundary(
+        &mut self,
+        session: &mut Session,
+        observation: &CounterObservation,
+    ) -> Result<(), LedgerError> {
+        self.observe(
+            session,
+            observation.time,
+            observation.counter,
+            ChargeType::Ac,
+        )
+    }
+
+    fn observe(
+        &mut self,
+        session: &mut Session,
+        time: i64,
+        counter: Option<CounterReading>,
+        charge_type: ChargeType,
+    ) -> Result<(), LedgerError> {
+        match counter {
+            Some(CounterReading::Rejected(problem)) => {
+                session
+                    .quality_flags
+                    .insert(QualityFlag::InvalidCounter(problem));
+                self.previous = None;
+            }
+            Some(CounterReading::Valid(current)) => {
+                if charge_type == ChargeType::Ac {
+                    if let Some(window) = &mut session.observed_window {
+                        window.first_time.get_or_insert(time);
+                        window.last_time = Some(time);
+                        window.usable_readings += 1;
+                    }
+                    if let Some((prior, start_time)) = self.previous {
+                        match current.checked_delta_from(prior) {
+                            Some(delta) => {
+                                session.observed_ac = session
+                                    .observed_ac
+                                    .checked_add(delta)
+                                    .map_err(|_| LedgerError::EnergyOverflow)?;
+                                self.segments.push(CounterSegment {
+                                    start_time,
+                                    end_time: time,
+                                    energy: delta,
+                                });
+                            }
+                            None => {
+                                session.quality_flags.insert(QualityFlag::CounterRollback);
+                            }
+                        }
+                    }
+                    self.previous = Some((current, time));
+                } else {
+                    self.previous = None;
+                }
+            }
+            None => {
+                if charge_type != ChargeType::Ac {
+                    self.previous = None;
+                }
+            }
+        }
+        Ok(())
+    }
 }
